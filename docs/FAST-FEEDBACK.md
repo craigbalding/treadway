@@ -15,10 +15,13 @@ node --test tests/test_widget_guards.js
 python -m pytest -q tests/test_browsers.py tests/test_sessions.py
 node --test tests/test_actor_contracts.js tests/test_target_sessions.js
 python -m pytest -q tests/test_credentials.py tests/test_credentials_robot.py
+npm run test:entra
+python -m pytest -q tests/test_entra_robot.py tests/test_entra_cookies.py
 
 # Broader local mechanics and both real framework smoke cases.
 npm test
 CHROME_BIN=/absolute/path/to/chromium npm run test:browser:fast
+CHROME_BIN=/absolute/path/to/chromium npm run test:entra:browser
 ```
 
 The framework smoke cases launch isolated local React/Vue fixtures. They hold a
@@ -28,6 +31,12 @@ query request and rejection of a changed native form target. Missing Chromium
 is reported as a skip by the browser test; that is not successful calibration.
 The same fast command also checks real origin-state clearing and worker request
 capture through the shared sandboxed browser launcher.
+
+The separate Entra browser check uses intercepted synthetic HTTPS responses in
+an isolated sandboxed browser. It exercises the shared authentication flow and
+native Robot entry point without contacting a real identity provider or using
+real accounts. Local flow contracts run first; a real-account login is not a
+diagnostic substitute for those checks.
 
 Use the complete browser/Robot suite when changing those boundaries:
 

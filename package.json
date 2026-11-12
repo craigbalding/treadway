@@ -1,13 +1,15 @@
 {
   "name": "treadway",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Reliable workflow execution for agents",
   "main": "src/treadway/browser/form-assessor.js",
   "scripts": {
-    "test": "node --test tests/test_cdp_deadlines.js tests/test_cdp_proxy.js tests/test_browser_readiness.js tests/test_interactions.js tests/test_widget_guards.js tests/test_request_observer.js tests/test_transfers.js tests/test_actor_contracts.js tests/test_target_sessions.js",
-    "test:browser": "node --test --test-concurrency=1 tests/test_form_assessor_browser.js tests/test_form_frames_browser.js tests/test_form_choices_browser.js tests/test_widgets_browser.js tests/test_widgets_fast_browser.js tests/test_sessions_browser.js",
-    "test:browser:fast": "node --test --test-concurrency=1 tests/test_widgets_fast_browser.js tests/test_sessions_browser.js"
+    "test": "node --test tests/test_cdp_deadlines.js tests/test_cdp_proxy.js tests/test_browser_readiness.js tests/test_fixture_navigation.js tests/test_interactions.js tests/test_widget_guards.js tests/test_request_observer.js tests/test_transfers.js tests/test_actor_contracts.js tests/test_target_sessions.js tests/test_entra_contracts.js tests/test_entra_flow.js tests/test_entra_cookies.js",
+    "test:browser": "node --test --test-concurrency=1 tests/test_form_assessor_browser.js tests/test_form_frames_browser.js tests/test_form_choices_browser.js tests/test_widgets_browser.js tests/test_widgets_fast_browser.js tests/test_sessions_browser.js tests/test_entra_browser.js",
+    "test:browser:fast": "node --test --test-concurrency=1 tests/test_widgets_fast_browser.js tests/test_sessions_browser.js",
+    "test:entra": "node --test tests/test_entra_contracts.js tests/test_entra_flow.js tests/test_entra_cookies.js",
+    "test:entra:browser": "node --test tests/test_entra_browser.js"
   },
   "dependencies": {
     "ws": "8.22.1"

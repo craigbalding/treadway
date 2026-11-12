@@ -87,6 +87,8 @@ explains focused checks and the browser acceptance steps.
 | Hand work between users; test self-approval and private-resource access | [Guided examples](docs/EXAMPLES.md) |
 | Reuse a persistent profile or isolate identities | [Browser and actor sessions](docs/BROWSER-SESSIONS.md) |
 | Supply credentials from environment variables, 1Password or optional vaults | [Credentials](docs/CREDENTIALS.md) |
+| Sign in with Entra, including TOTP and first-login setup | [Entra flow](docs/ENTRA.md) |
+| Inspect step screenshots, retained attempts and native Robot results | [Execution evidence](docs/OBSERVABILITY.md) |
 | Map forms, autocomplete, dates and editors | [Forms](docs/forms.md) · [React/Vue widgets](docs/REUSABLE-WIDGETS.md) |
 | Call Python or JavaScript directly | [API index](docs/API.md) |
 | Install a wheel and its locked Node dependency | [Installation](docs/INSTALLING.md) |
@@ -94,7 +96,7 @@ explains focused checks and the browser acceptance steps.
 
 Credential providers include an optional
 [SafeYolo](https://github.com/craigbalding/safeyolo) gateway adapter. Applications
-remain responsible for login and permission rules.
+bind the shared login flow to their own principal checks and permission rules.
 
 Read [the library boundary](BOUNDARY.md) and [validated capabilities and limits](docs/VALIDATION.md)
 for scope, or the optional [Browser backend comparison](docs/BROWSER-COMPARISON.md)

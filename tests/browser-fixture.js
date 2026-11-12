@@ -42,14 +42,32 @@ async function widgetFixture(framework,{launchBrowser=true,extraAssets={},extraS
     res.end(`<!doctype html><html><head>${extraStyles.map(url=>`<link rel="stylesheet" href="${url}">`).join('')}<style>body{font:16px sans-serif;margin:20px}section,form{margin:12px 0}input,button,a{margin:5px}#brief{border:1px solid;min-height:38px;width:400px}[role=option]{padding:8px;border:1px solid}#choice-portal,#multi-portal{position:fixed;top:5px;right:5px;z-index:10;background:white}</style></head><body><div id="root"></div><div id="choice-portal"></div><div id="multi-portal"></div>${framework==='react'?'<script src="/react.js"></script><script src="/react-dom.js"></script>':'<script src="/vue.js"></script>'}${extraScripts.map(url=>`<script src="${url}"></script>`).join('')}<script src="/app.js"></script></body></html>`);
   });
   server.listen(0,'127.0.0.1');await once(server,'listening');
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'treadway-widgets-'));
+  const root=fs.mkdtempSync(path.join(process.env.RUNNER_TEMP||os.tmpdir(),'treadway-widgets-'));
+  fs.chmodSync(root,0o700);
   let session,browser;
-  async function close(){
+  async function close({preserveEvidence=false}={}){
+    try{
+    if(preserveEvidence&&session){
+      const observed={complete:false};
+      try{
+        const state=await session.cdp.send('Runtime.evaluate',{expression:'({url:location.href,title:document.title,ready:document.readyState})',returnByValue:true},{timeoutMs:1000});
+        if(!state.exceptionDetails&&state.result?.value){observed.screen=state.result.value;observed.complete=true;}
+        const image=await session.cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false},{timeoutMs:1000});
+        if(typeof image.data==='string')fs.writeFileSync(path.join(root,'failure.png'),Buffer.from(image.data,'base64'),{flag:'wx',mode:0o600});
+      }catch(error){observed.error={name:error.name,code:error.code||'observation_incomplete'};}
+      fs.writeFileSync(path.join(root,'failure.json'),JSON.stringify(observed),{flag:'wx',mode:0o600});
+    }
+    }finally{
     if(session)session.close();
-    if(browser)await browser.stop();
-    for(const timer of timers)clearTimeout(timer);
-    server.closeAllConnections();await new Promise(resolve=>server.close(resolve));
-    fs.rmSync(root,{recursive:true,force:true});
+    let cleanupComplete=false;
+    try{if(browser)await browser.stop();cleanupComplete=true;}
+    catch(error){error.evidenceDirectory=root;throw error;}
+    finally{
+      for(const timer of timers)clearTimeout(timer);
+      server.closeAllConnections();await new Promise(resolve=>server.close(resolve));
+      if(!preserveEvidence&&cleanupComplete)fs.rmSync(root,{recursive:true,force:true});
+    }
+    }
   }
   try{
     if(launchBrowser){
@@ -57,6 +75,10 @@ async function widgetFixture(framework,{launchBrowser=true,extraAssets={},extraS
       session=await connect(createCdpProxy(browser.connection),browser.connection.targetId,{commandTimeoutMs:5000});
     }
     return {session,browserSession:browser?.session,root,posts,uploads,download,searches,releaseQuery,origin:'http://127.0.0.1:'+server.address().port,cdpPort:browser?.connection.cdpPort,targetId:browser?.connection.targetId,close};
-  }catch(error){await close();throw error;}
+  }catch(error){
+    try{await close({preserveEvidence:true});}catch{error.cleanup='incomplete';}
+    error.evidenceDirectory=root;
+    throw error;
+  }
 }
 module.exports={widgetFixture,browserRoot};

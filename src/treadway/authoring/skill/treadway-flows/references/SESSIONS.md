@@ -25,6 +25,12 @@ finally:
 Use it around the entire dependent operation, including identity checks and action.
 Attach verifies the owned process, browser generation and exact page target.
 A closed page requires explicit recovery; another tab is never substituted.
+Owned endpoint verification has a two-second total budget. Set
+`BrowserManager(root, verification_seconds=5)` explicitly when the environment
+needs a longer bounded check; values must be finite, positive and at most 60
+seconds. Startup verification also stays within the remaining startup budget.
+An endpoint timeout retains its phase and generation and does not relax any
+ownership or target check.
 Stop asks Chrome to close gracefully and flush profile data, allowing three
 seconds before forcibly stopping remaining owned processes. A forced stop can
 lose unflushed state. Stop preserves profiles/logs. Delete an artifact directory only after its sessions
@@ -56,6 +62,22 @@ The default Chromium switches are `--no-first-run`, `--no-default-browser-check`
 page. The OS chooses the debugging port. Explicit options can omit headless mode,
 add `--no-sandbox` or `--disable-features=...`; configured proxy settings add
 `--proxy-server=...` and, when present, `--proxy-bypass-list=...`.
+
+## HTTPS through a trusted inspection proxy
+
+Chrome must trust the proxy's supplied CA in its own certificate store. Preserving
+Python and Node CA environment variables does not establish Chrome's trust. A
+working loopback fixture or Python HTTPS request does not establish it either.
+If Chrome reports `net::ERR_CERT_AUTHORITY_INVALID`, retain the failed observation
+and configure the supplied CA using the environment's documented trust setup.
+Keep certificate verification enabled.
+
+On Linux, consult Chromium's [certificate management guide](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/cert_management.md).
+Since Chromium 146, the default NSS database is `$HOME/.local/share/pki/nssdb`;
+an existing `$HOME/.pki/nssdb` takes precedence. Inspect the selected database
+before changing trust. Trust is environment setup, separate from the named
+workflow profiles. Verify it with an actual HTTPS application observation before
+attempting login or another consequential action.
 
 ## Chromium sandbox in gVisor
 

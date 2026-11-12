@@ -28,8 +28,8 @@ To release a version:
 3. Tag that commit with the exact version, for example:
 
    ```sh
-   git tag -a v0.1.0 -m 'Treadway 0.1.0'
-   git push origin v0.1.0
+   git tag -a v0.2.0 -m 'Treadway 0.2.0'
+   git push origin v0.2.0
    ```
 
 The tag run repeats the release checks and publishes a GitHub Release with

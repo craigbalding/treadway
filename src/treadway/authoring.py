@@ -38,13 +38,13 @@ def main(argv=None):
     skill.add_argument("destination", type=Path,
                        help="New skill folder, e.g. ~/.codex/skills/treadway-flows")
     guide = commands.add_parser("guide", help="Print an installed authoring reference")
-    guide.add_argument("topic", nargs="?", choices=["start", "recipes", "walkthrough", "sessions", "credentials"], default="start")
+    guide.add_argument("topic", nargs="?", choices=["start", "recipes", "walkthrough", "sessions", "credentials", "entra"], default="start")
     args = parser.parse_args(argv)
     try:
         if args.command == "guide":
             filename = {"start": "AUTHORING.md", "recipes": "RECIPES.md",
                         "walkthrough": "WALKTHROUGH.md", "sessions": "SESSIONS.md",
-                        "credentials": "CREDENTIALS.md"}[args.topic]
+                        "credentials": "CREDENTIALS.md", "entra": "ENTRA.md"}[args.topic]
             print((ASSETS / "skill/treadway-flows/references" / filename).read_text())
         elif args.command == "skill":
             print(copy_new(ASSETS / "skill/treadway-flows", args.destination))

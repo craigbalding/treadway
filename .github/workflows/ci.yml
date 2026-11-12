@@ -74,6 +74,24 @@ jobs:
           "$CHROME_BIN" --version
           python .github/scripts/check_browser.py
       - run: npm run test:browser:fast
+      - name: Entra flow against synthetic HTTPS screens
+        run: npm run test:entra:browser
+      - name: Retain synthetic Entra failure evidence
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: entra-browser-failure-diagnostics
+          path: |
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/events.jsonl
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/receipt.json
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/step-*.png
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/output.json
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/log.html
+            ${{ runner.temp }}/treadway-widgets-*/failure.json
+            ${{ runner.temp }}/treadway-widgets-*/failure.png
+            ${{ runner.temp }}/treadway-widgets-*/**/chrome-*.log
+          if-no-files-found: warn
+          retention-days: 7
 
   distribution:
     name: Distribution and installed walkthroughs
@@ -130,6 +148,14 @@ jobs:
             ${{ runner.temp }}/treadway-installed.*/**/DevToolsActivePort
             ${{ runner.temp }}/treadway-installed.*/**/summary.json
             ${{ runner.temp }}/treadway-installed.*/**/browser-cleanup.json
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/events.jsonl
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/receipt.json
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/step-*.png
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/output.json
+            ${{ runner.temp }}/treadway-entra-acceptance-*/**/log.html
+            ${{ runner.temp }}/treadway-widgets-*/failure.json
+            ${{ runner.temp }}/treadway-widgets-*/failure.png
+            ${{ runner.temp }}/treadway-widgets-*/**/chrome-*.log
           if-no-files-found: warn
           retention-days: 7
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

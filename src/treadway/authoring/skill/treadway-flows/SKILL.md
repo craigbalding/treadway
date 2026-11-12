@@ -40,6 +40,18 @@ configuration; resolve explicitly and unwrap only inside a credential-consuming
 helper. Resolution does not authenticate or renew a session. Vault authorization
 and expected identity labels do not establish the application's actual principal.
 
+For Microsoft Entra sign-in, use the [shared login flow](references/ENTRA.md).
+Configure application and identity bindings; one entry point detects session
+reuse, password, TOTP and first-login setup. Preserve complete required state
+and first-attempt evidence. Do not force a fresh login to trigger state export.
+
+Establish and verify the normal application flow before deriving testing
+variations. Keep reusable execution mechanics in the shared flow and put the
+application's selectors, routes, identity expectations and fixtures in bindings.
+When a testing task has a frontier author/reviewer and a consuming agent, the
+consumer supplies bindings and uses the proven flow; implementation failures
+return to the flow owner with retained evidence.
+
 Keep these boundaries when authoring:
 
 - Observe the actual actor, target, fields and actions. Labels and framework names
@@ -57,6 +69,9 @@ Keep these boundaries when authoring:
 - Imports, constructors, `new` and offline checks are passive. Execution and fixture
   mutations are explicit. Keep raw captures private, retain actual created IDs
   immediately, and observe scoped cleanup separately from workflow success.
+- Shared fixtures use generic app names, invented identities and reserved example
+  domains. Keep real organisation and private-platform identifiers in private
+  consumer bindings; provider/framework names may identify the actual integration.
 
 Develop with `python run.py check` first: a 15-second overall budget, no browser
 or app startup. Then `CHROME_BIN=/path/to/chromium python run.py test`: offline

@@ -97,8 +97,11 @@ async function browserRequest({origin,probe,expected,path,method,body,verify,tim
     const response=await fetch(path,{...options,method,
       ...(body===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
     return {...await read(response),dispatched,principal};
-  } catch {
-    return {complete:false,dispatched,principal,error:'request_observation_incomplete',applicationOutcome:'unknown'};
+  } catch (error) {
+    return {complete:false,dispatched,principal,
+      error:abort.signal.aborted?'request_deadline':'request_observation_incomplete',
+      errorType:['TypeError','AbortError','TimeoutError'].includes(error?.name)?error.name:'Error',
+      applicationOutcome:'unknown'};
   } finally {clearTimeout(timer);}
 }
 

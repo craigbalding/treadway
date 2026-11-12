@@ -9,7 +9,9 @@ import argparse
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import fcntl
+from http.client import HTTPConnection
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -18,8 +20,10 @@ import signal
 import subprocess
 import tempfile
 import time
-from urllib.request import ProxyHandler, build_opener
+from urllib.request import HTTPHandler, ProxyHandler, build_opener
 import uuid
+
+from .sessions import DeadlineResponse
 
 
 def private_json(path: Path, value):
@@ -68,9 +72,23 @@ class BrowserSession:
         return {"cdpHost": "127.0.0.1", "cdpPort": self.port, "targetId": self.target_id}
 
 
+class BrowserVerificationIncomplete(RuntimeError):
+    """Read-only owned endpoint observation failed; no ownership assertion changed."""
+
+
 class BrowserManager:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, verification_seconds=2):
+        """Configure a passive manager and one budget for owned endpoint checks.
+
+        ``verification_seconds`` bounds /json/version and /json/list together;
+        it does not change process ownership, generation or exact-target checks.
+        Startup additionally caps verification by its remaining startup budget.
+        """
+        if (type(verification_seconds) not in {int, float} or not math.isfinite(verification_seconds)
+                or not 0 < verification_seconds <= 60):
+            raise ValueError("bounded_browser_verification_required")
         self.root = Path(root).absolute()
+        self.verification_seconds = verification_seconds
 
     def _directory(self, name):
         if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", name):
@@ -159,19 +177,52 @@ class BrowserManager:
     @staticmethod
     def _get(port, path, timeout=1):
         # This transport is exclusively for an owned loopback debugging endpoint.
-        opener = build_opener(ProxyHandler({}))
+        deadline = time.monotonic() + timeout
+
+        class OwnedEndpoint(HTTPHandler):
+            def http_open(self, request):
+                def connection(host, **options):
+                    client = HTTPConnection(host, **options)
+                    client.response_class = lambda *args, **kwargs: DeadlineResponse(*args, deadline=deadline, **kwargs)
+                    return client
+                return self.do_open(connection, request)
+
+        opener = build_opener(ProxyHandler({}), OwnedEndpoint())
         with opener.open(f"http://127.0.0.1:{port}{path}", timeout=timeout) as response:
             return json.load(response)
 
-    def _verify(self, session):
+    def _verify(self, session, *, deadline=None):
         if not session.port or not session.target_id:
             raise RuntimeError("browser_startup_not_complete; stop the recorded generation before retrying")
         if not self._owned(session):
             raise RuntimeError("owned_browser_process_not_established")
-        version = self._get(session.port, "/json/version")
+        budget = time.monotonic() + self.verification_seconds
+        deadline = min(budget, deadline) if deadline is not None else budget
+
+        def observed(endpoint):
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError()
+                result = self._get(session.port, endpoint, timeout=remaining)
+                if time.monotonic() >= deadline:
+                    raise TimeoutError()
+                return result
+            except (OSError, ValueError) as error:
+                status = getattr(error, 'code', None)
+                status = status if type(status) is int and 100 <= status <= 599 else None
+                kind = 'timeout' if isinstance(error, TimeoutError) or isinstance(getattr(error, 'reason', None), TimeoutError) else 'endpoint_incomplete'
+                raise BrowserVerificationIncomplete(f"browser_verification_{kind}; endpoint={endpoint}; generation={session.generation}; "
+                                                    f"status={status}; evidence={self.root / session.name}") from None
+
+        version = observed("/json/version")
+        if not isinstance(version, dict) or not isinstance(version.get("webSocketDebuggerUrl"), str):
+            raise RuntimeError("browser_version_observation_invalid")
         if version.get("webSocketDebuggerUrl", "").rsplit("/devtools/browser/", 1)[-1] != session.browser_path.rsplit("/", 1)[-1]:
             raise RuntimeError("browser_endpoint_generation_differs")
-        targets = self._get(session.port, "/json/list")
+        targets = observed("/json/list")
+        if not isinstance(targets, list) or any(not isinstance(target, dict) for target in targets):
+            raise RuntimeError("browser_targets_observation_invalid")
         if len([t for t in targets if t.get("type") == "page" and t.get("id") == session.target_id]) != 1:
             raise RuntimeError("explicit_session_target_missing")
         return session
@@ -201,7 +252,7 @@ class BrowserManager:
                 raise RuntimeError("stale_browser_session")
             yield session
 
-    def start(self, name, *, executable, persistent=False, headless=True, sandbox=True,
+    def start(self, name, *, executable, persistent=False, headless=True, sandbox=True, require_new=False,
               disabled_features=(), proxy=None, startup_seconds=15):
         if type(startup_seconds) not in {int, float} or not 0 < startup_seconds <= 60:
             raise ValueError("bounded_startup_required")
@@ -221,6 +272,8 @@ class BrowserManager:
             if record:
                 previous = BrowserSession(**record["session"])
                 if self._owned(previous):
+                    if require_new:
+                        raise RuntimeError("browser_session_already_running")
                     if record["options"] != options:
                         raise RuntimeError("running_browser_configuration_differs")
                     return self._verify(previous)
@@ -285,11 +338,11 @@ class BrowserManager:
                             if len(matches) == 1:
                                 session = BrowserSession(name, generation, str(profile), process.pid, identity,
                                                          port, browser_path, matches[0]["id"], bool(persistent))
-                                self._verify(session)
+                                self._verify(session, deadline=deadline)
                                 private_json(directory / "session.json", {"session": asdict(session), "options": options,
                                                                           "phase": "ready", "scratch": str(scratch)})
                                 return session
-                        except (OSError, ValueError, IndexError):
+                        except (OSError, ValueError, IndexError, BrowserVerificationIncomplete):
                             pass
                     time.sleep(.025)
                 raise RuntimeError(f"browser_startup_incomplete; inspect {log}; no automatic sandbox fallback")

@@ -9,8 +9,9 @@ const {createCdpProxy}=require(path.join(browserRoot,'cdp.js'));
 test('real origin state and worker capture use an owned sandboxed browser',{skip:!process.env.CHROME_BIN,timeout:20000},async t=>{
   const fixture=await widgetFixture('react');
   const ui=new BrowserInteractions(fixture.session,{origin:fixture.origin,record:()=>{}});
+  let complete=false;
   let root,monitor;
-  t.after(async()=>{if(monitor)await monitor.close();root?.close();ui.dispose();await fixture.close();});
+  t.after(async()=>{try{if(monitor)await monitor.close();}finally{root?.close();ui.dispose();await fixture.close({preserveEvidence:!complete});if(!complete)t.diagnostic('Retained synthetic failure evidence: '+fixture.root);}});
   await ui.navigate(fixture.origin);
   await ui.evaluate(`(async()=>{
     localStorage.setItem('fixture','synthetic');sessionStorage.setItem('fixture','synthetic');
@@ -33,4 +34,5 @@ test('real origin state and worker capture use an owned sandboxed browser',{skip
   await ui.wait('worker request loading completed',()=>records.some(event=>event.targetType==='worker'&&event.kind==='loaded'),5000);
   assert.equal(records.some(event=>event.targetType==='worker'&&event.kind==='response'&&event.status===200),true);
   const result=await monitor.close();monitor=null;assert.equal(result.complete,true,JSON.stringify(result));
+  complete=true;
 });

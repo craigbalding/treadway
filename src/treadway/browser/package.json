@@ -1,6 +1,6 @@
 {
   "name": "treadway-browser-runtime",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "dependencies": {
     "ws": "8.22.1"

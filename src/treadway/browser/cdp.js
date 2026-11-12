@@ -894,7 +894,7 @@ async function waitForReady(cdp, { selectors = [], predicate = null, timeoutMs =
   const response = await cdp.send("Runtime.evaluate", {
     expression: `${source}(${JSON.stringify({ selectors, predicate, timeoutMs })})`,
     returnByValue: true, awaitPromise: true,
-  });
+  }, { timeoutMs });
   const result = response.result && response.result.value;
   if (!result || result.ready !== true) {
     throw new Error(`Browser readiness failed: ${(result && result.unmet || ["condition_unknown"]).join(", ")}`);

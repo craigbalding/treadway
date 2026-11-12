@@ -7,8 +7,9 @@ const {BrowserInteractions}=require(path.join(browserRoot,'interactions.js'));
 const {Autocomplete,DateRange}=require(path.join(browserRoot,'widgets.js'));
 for(const framework of ['react','vue'])test('fast '+framework+' delayed controller replacement and guarded commit',{skip:!process.env.CHROME_BIN,timeout:20000},async t=>{
   const fixture=await widgetFixture(framework),records=[];
+  let complete=false;
   const ui=new BrowserInteractions(fixture.session,{origin:fixture.origin,record:record=>records.push(record)});
-  t.after(async()=>{ui.dispose();await fixture.close();});
+  t.after(async()=>{ui.dispose();await fixture.close({preserveEvidence:!complete});if(!complete)t.diagnostic('Retained synthetic failure evidence: '+fixture.root);});
   await ui.navigate(fixture.origin+'/?slow_query=1');
   await ui.wait('framework mounted',()=>ui.visible('#choice'));
   const widget=new Autocomplete(ui,{field:'#choice'});
@@ -31,4 +32,5 @@ for(const framework of ['react','vue'])test('fast '+framework+' delayed controll
   await ui.evaluate(`(()=>{document.getElementById('date-form').action='/save/item/99';return true;})()`);
   await assert.rejects(dates.commit(edit),/native_form_binding_differs/);
   assert.equal(fixture.posts.some(post=>post.path==='/save/item/99'),false);
+  complete=true;
 });

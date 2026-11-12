@@ -12,7 +12,7 @@ const browserRoot=process.env.FORM_BROWSER_MODULE_ROOT||path.join(__dirname,'../
 const {createCdpProxy,connect}=require(path.join(browserRoot,'cdp.js'));
 const {FormAssessor}=require(path.join(browserRoot,'form-assessor.js'));
 const {launch}=require(path.join(browserRoot,'launcher.js'));
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const {navigateFixture}=require('./fixture-navigation.js');
 const enabled=process.env.CHROME_BIN&&process.env.FORM_REACT_FIXTURE_ROOT;
 test('explicit frame and contenteditable mechanics',{skip:!enabled,timeout:60000},async t=>{
   const posts=[];
@@ -41,7 +41,7 @@ test('explicit frame and contenteditable mechanics',{skip:!enabled,timeout:60000
     const url='http://127.0.0.1:'+port+'/';
     const records=[];
     const make=selector=>new FormAssessor(session,{frameSelector:selector,record:e=>records.push(JSON.parse(JSON.stringify(e)))});
-    async function reset(){await session.navigate(url);const f=make('iframe[name="canvas"]');for(let i=0;i<100;i++){try{const s=await f.inspect();if(s.fields.some(x=>x.id==='body'))return f;}catch{}await sleep(50);}throw new Error('frame fixture never became ready');}
+    async function reset(){await navigateFixture(session,url,{selectors:['iframe[name="canvas"]'],predicate:`(()=>{const child=document.querySelector('iframe[name="canvas"]').contentDocument;return !!child&&child.readyState!=='loading'&&!!child.querySelector('#body');})()`,timeoutMs:5000,record:e=>records.push(e)});return make('iframe[name="canvas"]');}
     const field=s=>s.fields.find(f=>f.id==='body');
     await t.test('parent inspection exposes frames; child binding carries parent and child identity',async()=>{
       const f=await reset(),parent=await new FormAssessor(session).inspect(),s=await f.inspect();

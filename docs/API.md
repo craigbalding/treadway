@@ -11,8 +11,14 @@ Python modules live under `treadway`; browser JavaScript assets ship in
   exclusive operation leases and independent HTTP actor cookie jars.
 - `treadway.credentials` and `treadway.credentials_robot.CredentialLibrary`:
   named credential providers and native Robot secret values, separate from login.
+- `treadway.entra_robot.EntraLibrary` and `browser/entra.js`: one Entra flow for
+  authenticated-session reuse, password, TOTP and first-login enrollment;
+  [configuration and evidence](ENTRA.md).
 - `browser/actors.js`, `state.js` and `targets.js`: same-session principal checks,
   explicit origin-state operations and scoped multi-target CDP observation.
+- `browser/cookies.js` and `HttpSession.import_browser_cookies`: private app-cookie
+  snapshots and explicit HTTP replay import, preserving scope and duplicate names;
+  required state completeness remains separate from authentication verification.
 - `treadway.robot.FormLibrary`: Robot keywords over the shared browser form utility.
 - `src/treadway/browser/form-assessor.js`: actions-first discovery, sourced candidate
   input/readback, explicit choices and one instrumented action with attempt memory.

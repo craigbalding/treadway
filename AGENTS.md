@@ -14,7 +14,10 @@ Purpose: reliable workflow execution for agents.
 - Enforce prerequisites inside operations that depend on them. Test actual
   composition, including failures that must stop later steps.
 - Keep credentials, private user data and runtime captures outside the repository.
-  Use clearly synthetic local fixtures in tests.
+  Use clearly synthetic local fixtures: invented identities, generic application
+  names and reserved example domains. Omit real customer, organisation and
+  private-platform identifiers. Retain provider/framework names only when needed
+  to describe or exercise the integration itself.
 - Prefer native Robot Framework composition over a second workflow DSL or scheduler.
 - Run focused checks for changed behavior. Include browser and installed-package
   checks when changing those boundaries; record skipped checks and known limits.

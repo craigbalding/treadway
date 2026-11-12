@@ -59,7 +59,8 @@ def test_skill_can_be_exported_independently(tmp_path):
                                            ('recipes', 'run_json_process'),
                                            ('walkthrough', 'Hand the same item'),
                                            ('sessions', 'A profile label is not a principal'),
-                                           ('credentials', 'Credentials and optional vaults')])
+                                           ('credentials', 'Credentials and optional vaults'),
+                                           ('entra', 'Sign in with Microsoft Entra')])
 def test_installed_reference_is_accessible(capsys, topic, content):
     main(['guide', topic])
     assert content in capsys.readouterr().out
@@ -125,19 +126,35 @@ def test_feedback_timeout_stops_actor_browsers_even_without_robot_teardown(tmp_p
         'Test Teardown    Close Collaborative Run\n*** Test Cases ***\n'
         'Interrupted Collaboration\n    Open Actor    author\n'
         '    Create File    ${CURDIR}/actor-opened\n    Sleep    60\n')
+    # Exercise the actual browser runner's interrupted-Robot cleanup directly.
+    # Repeating five offline gates here can consume the observation budget
+    # before the actor exists, which tests startup speed instead of cleanup.
+    driver = (
+        'import json,subprocess,time\nfrom pathlib import Path\nimport run\n'
+        'output=Path("artifacts/test-deadline");output.mkdir(parents=True)\nchecks=[]\n'
+        'try:\n'
+        ' run.browser_test(output.resolve(),time.monotonic()+20,[Path("deadline.robot").resolve()],checks)\n'
+        'except subprocess.TimeoutExpired:\n'
+        ' print(json.dumps({"passed":False,"timedOut":True,"checks":checks,"artifacts":str(output.resolve())}))\n'
+        ' raise SystemExit(1)\n'
+        'raise SystemExit("Expected the browser-flow deadline")\n'
+    )
     try:
-        result = subprocess.run([sys.executable, 'run.py', 'test', '--suite', 'deadline.robot', '--budget-seconds', '20'],
+        result = subprocess.run([sys.executable, '-c', driver],
                                 cwd=project, capture_output=True, text=True, timeout=32)
         assert result.returncode == 1, result.stdout+result.stderr
         summary = json.loads(result.stdout.splitlines()[-1])
         assert summary['passed'] is False
-        assert (project/'actor-opened').is_file(), result.stdout
+        assert summary['timedOut'] is True
         output = Path(summary['artifacts'])
         assert json.loads((output/'browser-cleanup.json').read_text())['complete'] is True
         assert summary['checks'][-1]['status'] == 'incomplete'
         for directory in ('browsers', 'actors'):
             sessions = BrowserManager(output/directory).sessions()
             assert sessions and all(not entry['running'] for entry in sessions)
+            # A ready owned actor is the resource this regression must recover.
+            # Its later app-principal probe need not finish before interruption.
+            assert all(entry['phase'] == 'ready' and entry['session']['target_id'] for entry in sessions)
     finally:
         # Keep a future failing regression from leaking its own test browsers.
         # This runs after assertions, so it cannot make broken runner cleanup pass.

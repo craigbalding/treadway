@@ -13,6 +13,7 @@ const browserRoot = process.env.FORM_BROWSER_MODULE_ROOT || path.join(__dirname,
 const { createCdpProxy, connect } = require(path.join(browserRoot, 'cdp.js'));
 const { FormAssessor, redactFieldValues } = require(path.join(browserRoot, 'form-assessor.js'));
 const {launch}=require(path.join(browserRoot,'launcher.js'));
+const {navigateFixture}=require('./fixture-navigation.js');
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
 const enabled = process.env.CHROME_BIN && process.env.FORM_REACT_FIXTURE_ROOT;
@@ -67,7 +68,7 @@ test('real Chromium and React form interactions', { skip: !enabled, timeout:6000
     session=await connect(proxy,target.id,{commandTimeoutMs:1500});
     const url='http://127.0.0.1:'+server.address().port+'/';
     const records=[];
-    async function reset(){await session.navigate(url);await session.waitForReady({selectors:['#name'],timeoutMs:3000});await sleep(100);return new FormAssessor(session,{scope:'#application',record:e=>records.push(JSON.parse(JSON.stringify(e)))});}
+    async function reset(){await navigateFixture(session,url,{selectors:['#name'],timeoutMs:3000,record:e=>records.push(e)});await sleep(100);return new FormAssessor(session,{scope:'#application',record:e=>records.push(JSON.parse(JSON.stringify(e)))});}
     function one(items,label){const matches=items.filter(i=>i.label===label);assert.equal(matches.length,1,label);return matches[0];}
 
     await t.test('passive inspection puts all actions first, including external secondary save, without submitting',async()=>{

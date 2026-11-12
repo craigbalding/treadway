@@ -5,10 +5,12 @@ not a principal assertion; applications supply their read-only identity probe.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from http.cookiejar import CookieJar
+from http.cookiejar import Cookie, CookieJar
 from http.client import HTTPConnection, HTTPSConnection, HTTPException, HTTPResponse
 import io
 import json
+import math
+import re
 from threading import Lock
 import time
 from urllib.error import HTTPError
@@ -163,6 +165,61 @@ class HttpSession:
     def request(self, path, *, method="GET", body=None, timeout_seconds=5):
         with self._lease():
             return self._request(path, method, body, timeout_seconds)
+
+    def import_browser_cookies(self, snapshot, *, generation):
+        """Replace this jar from one complete, explicitly bound private snapshot.
+
+        Import does not establish a principal. Use ``attempt`` or an explicit
+        application probe afterward. Partitioned cookies cannot be faithfully
+        replayed by CookieJar and are refused, without changing existing state.
+        Duplicate names at distinct domains/paths remain distinct. SameSite and
+        browser metadata are retained, but browser navigation policy is not
+        reproduced by this same-origin HTTP client.
+        """
+        with self._lease():
+            if (not isinstance(snapshot, dict) or snapshot.get('version') != 'treadway.cookies/1'
+                    or snapshot.get('complete') is not True or not isinstance(generation, str) or not generation
+                    or snapshot.get('generation') != generation or snapshot.get('actor') != self.actor
+                    or snapshot.get('origin') != self.origin or not isinstance(snapshot.get('cookies'), list)):
+                raise ValueError('browser_cookie_snapshot_binding_differs_or_incomplete')
+            jar, seen = CookieJar(), set()
+            hostname = urlsplit(self.origin).hostname.lower()
+            for item in snapshot['cookies']:
+                if not isinstance(item, dict):
+                    raise ValueError('browser_cookie_snapshot_invalid')
+                if item.get('partitionKey') is not None or item.get('partitionKeyOpaque'):
+                    raise ValueError('partitioned_browser_cookie_replay_unsupported')
+                if (not all(isinstance(item.get(k), str) for k in ('name', 'value', 'domain', 'path'))
+                        or not all(type(item.get(k)) is bool for k in ('secure', 'httpOnly', 'session'))
+                        or type(item.get('expires')) not in (int, float) or not math.isfinite(item['expires'])):
+                    raise ValueError('browser_cookie_snapshot_invalid')
+                name, value, domain, path = (item[k] for k in ('name', 'value', 'domain', 'path'))
+                domain = domain.lower()
+                if (not re.fullmatch(r"[^\x00-\x20\x7f()<>@,;:\\\"/\[\]?={}]+", name)
+                        or any(ord(c) < 32 or ord(c) == 127 or c == ';' for c in value)
+                        or not path.startswith('/') or any(ord(c) < 32 or ord(c) == 127 for c in path)
+                        or not (domain == hostname or domain == '.' + hostname
+                                or domain.startswith('.') and hostname.endswith(domain))):
+                    raise ValueError('browser_cookie_scope_or_value_invalid')
+                identity = domain, path, name
+                if identity in seen:
+                    raise ValueError('duplicate_browser_cookie_identity')
+                seen.add(identity)
+                if item.get('sameSite') not in (None, 'Strict', 'Lax', 'None'):
+                    raise ValueError('browser_cookie_same_site_unsupported')
+                rest = {key: val for key, val in item.items()
+                        if key not in {'name', 'value', 'domain', 'path', 'secure', 'expires', 'session'}}
+                if item['httpOnly']:
+                    rest['HttpOnly'] = None
+                jar.set_cookie(Cookie(version=0, name=name, value=value, port=None, port_specified=False,
+                    domain=domain, domain_specified=domain.startswith('.'), domain_initial_dot=domain.startswith('.'),
+                    path=path, path_specified=True, secure=item['secure'],
+                    expires=None if item['session'] else int(item['expires']), discard=item['session'],
+                    comment=None, comment_url=None, rest=rest, rfc2109=False))
+            self._jar = jar
+            return {'complete': True, 'imported': len(seen), 'actor': self.actor, 'generation': generation,
+                    'limits': ['SameSite navigation policy is not reproduced',
+                               'Import does not verify the application principal']}
 
     def attempt(self, path, *, probe, expected, method="GET", body=None, timeout_seconds=5):
         """Verify this actual session, then dispatch once, preserving denial responses.

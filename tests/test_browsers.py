@@ -21,6 +21,99 @@ def test_construction_is_passive_and_paths_are_scoped(tmp_path):
         BrowserManager(link).attach("a")
 
 
+@pytest.mark.parametrize('budget', [0, -1, 61, True, '5', float('inf'), float('nan')])
+def test_verification_budget_validation_is_passive(tmp_path, budget):
+    root = tmp_path / 'not-created'
+    with pytest.raises(ValueError, match='bounded_browser_verification_required'):
+        BrowserManager(root, verification_seconds=budget)
+    assert not root.exists()
+
+
+def verified_fixture(manager, monkeypatch, clock, durations):
+    session = BrowserSession('synthetic', 'synthetic-generation', '/synthetic-profile', 1,
+                             ('synthetic-boot', 'synthetic-start'), 9222, '/devtools/browser/owned', 'exact-target', True)
+    calls = []
+    monkeypatch.setattr('treadway.browsers.time.monotonic', lambda: clock[0])
+    monkeypatch.setattr(manager, '_owned', lambda handle: True)
+
+    def get(port, endpoint, timeout):
+        calls.append((endpoint, timeout))
+        clock[0] += durations[len(calls)-1]
+        return {'webSocketDebuggerUrl': 'ws://127.0.0.1/devtools/browser/owned'} if endpoint == '/json/version' else [
+            {'type': 'page', 'id': 'exact-target'}, {'type': 'page', 'id': 'decoy'}]
+
+    monkeypatch.setattr(manager, '_get', get)
+    return session, calls
+
+
+def test_owned_verification_uses_one_remaining_budget_for_both_endpoints(tmp_path, monkeypatch):
+    manager = BrowserManager(tmp_path, verification_seconds=5)
+    session, calls = verified_fixture(manager, monkeypatch, [100], [1.4, 1.4])
+    assert manager._verify(session) is session
+    assert calls == [('/json/version', 5), ('/json/list', pytest.approx(3.6))]
+
+
+def test_startup_remaining_budget_caps_owned_verification(tmp_path, monkeypatch):
+    manager = BrowserManager(tmp_path, verification_seconds=5)
+    session, calls = verified_fixture(manager, monkeypatch, [100], [.7, .4])
+    with pytest.raises(RuntimeError, match='browser_verification_timeout; endpoint=/json/list; generation=synthetic-generation'):
+        manager._verify(session, deadline=101)
+    assert calls == [('/json/version', 1), ('/json/list', pytest.approx(.3))]
+
+
+def test_verification_failure_retains_only_safe_endpoint_metadata(tmp_path, monkeypatch):
+    from urllib.error import HTTPError
+    manager = BrowserManager(tmp_path, verification_seconds=5)
+    session, calls = verified_fixture(manager, monkeypatch, [100], [0, 0])
+
+    def unavailable(*args, **kwargs):
+        raise HTTPError('http://synthetic.invalid/private-token', 503, 'private-token', {}, None)
+
+    monkeypatch.setattr(manager, '_get', unavailable)
+    with pytest.raises(RuntimeError) as failed:
+        manager._verify(session)
+    assert 'status=503' in str(failed.value) and 'endpoint=/json/version' in str(failed.value)
+    assert 'private-token' not in str(failed.value)
+    monkeypatch.setattr(manager, '_owned', lambda handle: False)
+    with pytest.raises(RuntimeError, match='owned_browser_process_not_established'):
+        manager._verify(session)
+    assert calls == []
+
+
+def test_owned_endpoint_trickled_body_cannot_restart_the_verification_budget(tmp_path):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    import time
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            try:
+                for byte in b'{"synthetic":"slow"}':
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                    time.sleep(.04)
+            except OSError:
+                pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            BrowserManager._get(server.server_port, '/json/list', timeout=.12)
+        assert time.monotonic() - started < .5
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()
+
+
 def test_exclusive_lease_and_private_manifest(tmp_path):
     manager = BrowserManager(tmp_path)
     with manager._lock("a") as directory:
@@ -57,6 +150,51 @@ def test_startup_failure_is_bounded_and_never_changes_sandbox(tmp_path):
     assert "--no-sandbox" not in logs[0].read_text()
     assert "--remote-debugging-address=127.0.0.1" in logs[0].read_text()
     assert all(not entry["running"] for entry in manager.sessions())
+
+
+def test_require_new_refuses_to_adopt_a_running_browser_and_preserves_profile(tmp_path):
+    manager = BrowserManager(tmp_path / 'sessions')
+    executable = synthetic_browser(tmp_path)
+    session = manager.start('identity', executable=executable, persistent=True)
+    try:
+        with pytest.raises(RuntimeError, match='browser_session_already_running'):
+            manager.start('identity', executable=executable, persistent=True, require_new=True)
+        assert manager.attach('identity') == session
+    finally:
+        manager.stop(session)
+    assert os.path.isdir(session.profile)
+
+
+@pytest.mark.parametrize('eventually_ready', [True, False])
+def test_startup_polls_only_incomplete_owned_endpoint_until_its_deadline(tmp_path, monkeypatch, eventually_ready):
+    import time
+    executable = synthetic_browser(tmp_path)
+    manager = BrowserManager(tmp_path / 'sessions', verification_seconds=5)
+    original = manager._get
+    versions = []
+
+    def transient(port, endpoint, timeout=1):
+        if endpoint == '/json/version':
+            versions.append(timeout)
+            if not eventually_ready or len(versions) == 1:
+                raise TimeoutError('synthetic transient owned endpoint')
+        return original(port, endpoint, timeout=timeout)
+
+    monkeypatch.setattr(manager, '_get', transient)
+    started = time.monotonic()
+    if eventually_ready:
+        session = manager.start('a', executable=executable, startup_seconds=2)
+        try:
+            assert len(versions) == 2
+            assert all(timeout <= 2 for timeout in versions)
+        finally:
+            manager.stop(session)
+    else:
+        with pytest.raises(RuntimeError, match='browser_startup_incomplete'):
+            manager.start('a', executable=executable, startup_seconds=1)
+        assert versions
+        assert time.monotonic() - started < 2
+        assert all(not entry['running'] for entry in manager.sessions())
 
 
 def synthetic_browser(tmp_path, matching_page=True, lingering_child=False):

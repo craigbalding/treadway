@@ -10,3 +10,6 @@ contract regressions first; keep the original evidence. Then run the affected
 suite with `CHROME_BIN` and `python run.py test --suite YOUR.robot`.
 Imports/constructors and offline checks must not contact applications. Preserve
 uncertain effects, avoid implicit action retries, and keep raw artifacts private.
+Keep shared fixtures synthetic: generic application names, invented identities
+and reserved example domains. Real application bindings belong in the consumer's
+private configuration.

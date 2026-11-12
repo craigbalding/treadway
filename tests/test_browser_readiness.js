@@ -76,3 +76,25 @@ test('an unspecified readiness condition cannot stand in for a rendered applicat
   const cdp = { send: () => { throw new Error('no condition should have been evaluated'); } };
   await assert.rejects(waitForReady(cdp), /observed selectors or an application predicate/);
 });
+
+test('explicit readiness budget also bounds transport instead of inheriting a shorter command default', async () => {
+  const {EventEmitter} = require('node:events');
+  const {makeCdpClient, waitForReady} = require('../src/treadway/browser/cdp.js');
+  const socket = new EventEmitter();
+  let sent = 0;
+  socket.close = () => socket.emit('close');
+  socket.send = data => {
+    const request = JSON.parse(data); sent++;
+    setTimeout(() => socket.emit('message', JSON.stringify({id: request.id,
+      result: {result: {value: {ready: true, unmet: []}}}})), 25);
+  };
+  const cdp = makeCdpClient(socket, {commandTimeoutMs: 5});
+  try {
+    assert.equal((await waitForReady(cdp, {selectors: ['#name'], timeoutMs: 500})).ready, true);
+    assert.equal(sent, 1);
+    socket.send = () => {sent++;};
+    await assert.rejects(waitForReady(cdp, {selectors: ['#name'], timeoutMs: 15}),
+      error => error.code === 'CDP_COMMAND_TIMEOUT' && error.timeoutMs === 15);
+    assert.equal(sent, 2);
+  } finally {cdp.close();}
+});

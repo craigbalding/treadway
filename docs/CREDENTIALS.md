@@ -7,3 +7,7 @@ and the runnable authenticated collaboration example.
 
 Use `treadway guide credentials` from an installed package. Retrieval is explicit
 and separate from login, session renewal and actual-principal verification.
+
+For applications using Microsoft Entra, the [shared login flow](ENTRA.md) consumes
+these references, verifies the actual browser principal and handles supported
+TOTP challenges and first-login enrollment.
