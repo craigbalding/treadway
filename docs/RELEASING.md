@@ -40,5 +40,5 @@ Published versions must not be overwritten; fix a failed publication and rerun
 the failed job, or release a new patch version when the package changes.
 
 Download the wheel from [GitHub Releases](https://github.com/craigbalding/treadway/releases)
-and follow [wheel installation](../README.md#installing-a-wheel), including the
+and follow [wheel installation](INSTALLING.md#from-a-github-release), including the
 locked Node dependency installation. PyPI publishing will be added separately.
