@@ -25,12 +25,18 @@ finally:
 Use it around the entire dependent operation, including identity checks and action.
 Attach verifies the owned process, browser generation and exact page target.
 A closed page requires explicit recovery; another tab is never substituted.
-Stop preserves profiles/logs. Delete an artifact directory only after its sessions
+Stop asks Chrome to close gracefully and flush profile data, allowing three
+seconds before forcibly stopping remaining owned processes. A forced stop can
+lose unflushed state. Stop preserves profiles/logs. Delete an artifact directory only after its sessions
 are stopped and the retained state is no longer needed. There is no global reset.
 Chrome's temporary socket files use a separate private directory directly under
 `/tmp`, keeping socket paths short even when artifact paths are deeply nested.
 The manifest records this directory; startup failure and explicit shutdown remove
 it. Persistent browser data remains in the named profile.
+
+Startup allows 15 seconds by default and returns as soon as the exact page is
+ready. Python callers can set `startup_seconds` up to 60 seconds; the reference
+runner also bounds startup by its remaining overall deadline.
 
 `persistent=True` explicitly reuses that named profile after restart. Restart
 returns a new generation, invalidating old handles. A running configuration

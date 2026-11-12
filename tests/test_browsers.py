@@ -59,11 +59,11 @@ def test_startup_failure_is_bounded_and_never_changes_sandbox(tmp_path):
     assert all(not entry["running"] for entry in manager.sessions())
 
 
-def synthetic_browser(tmp_path, matching_page=True):
+def synthetic_browser(tmp_path, matching_page=True, lingering_child=False):
     import sys
     executable = tmp_path / "synthetic-browser"
     executable.write_text(f"#!{sys.executable}\n" + '''
-import json, os, socket, sys
+import json, os, signal, socket, sys, time
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
 profile = Path(next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--user-data-dir=')))
@@ -75,6 +75,16 @@ socket_root = scratch / 'org.chromium.Chromium.synthetic'
 socket_root.mkdir()
 singleton = socket.socket(socket.AF_UNIX)
 singleton.bind(str(socket_root / 'SingletonSocket'))
+if LINGERING_CHILD:
+    child = os.fork()
+    if child == 0:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        (profile / 'child-pid').write_text(str(os.getpid()))
+        while True:
+            signal.pause()
+    while not (profile / 'child-pid').exists():
+        time.sleep(.01)
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -93,7 +103,7 @@ class Handler(BaseHTTPRequestHandler):
 server = HTTPServer(('127.0.0.1', 0), Handler)
 (profile / 'DevToolsActivePort').write_text(str(server.server_port) + '\\n/devtools/browser/synthetic')
 server.serve_forever()
-'''.replace('MATCHING_PAGE', repr(matching_page)))
+'''.replace('MATCHING_PAGE', repr(matching_page)).replace('LINGERING_CHILD', repr(lingering_child)))
     executable.chmod(0o700)
     return executable
 
@@ -125,6 +135,60 @@ def test_startup_requires_exact_inert_marker_and_ignores_other_targets(tmp_path,
             manager.stop(session)
     assert all(not entry["running"] for entry in manager.sessions())
     assert scratch is not None and not scratch.exists()
+
+
+def test_stop_kills_owned_child_after_parent_exits_on_interrupt(tmp_path):
+    import json
+    from pathlib import Path
+    import signal
+    executable = synthetic_browser(tmp_path, lingering_child=True)
+    manager = BrowserManager(tmp_path / "sessions")
+    session = manager.start("a", executable=executable, startup_seconds=2)
+    child = int((Path(session.profile) / "child-pid").read_text())
+    identity = process_identity(child)
+    scratch = Path(json.loads((manager.root / "a/session.json").read_text())["scratch"])
+    try:
+        assert identity is not None and os.getpgid(child) == session.pid
+        manager.stop(session)
+        assert process_identity(session.pid) is None
+        assert process_identity(child) is None
+        assert not scratch.exists()
+    finally:
+        # A failed cleanup assertion must not leave this test's child running.
+        if process_identity(child) == identity:
+            os.kill(child, signal.SIGKILL)
+        if process_identity(session.pid) == session.process_identity:
+            manager.stop(session)
+
+
+def test_group_cleanup_rejects_reused_pid_and_changed_group(monkeypatch):
+    import treadway.browsers as browsers
+    identities = {101: ("boot", "new-start"), 102: ("boot", "original"),
+                  103: ("boot", "original")}
+    groups = {101: 100, 102: 200, 103: 100}
+    monkeypatch.setattr(browsers, "process_identity", identities.get)
+    monkeypatch.setattr(browsers.os, "getpgid", groups.__getitem__)
+    members = {pid: ("boot", "original") for pid in identities}
+    assert BrowserManager._live_members(100, members) == [103]
+
+
+def test_stop_never_signals_a_reused_main_pid(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    import treadway.browsers as browsers
+    manager = BrowserManager(tmp_path)
+    session = BrowserSession("a", "generation", "/not-this-process", os.getpid(),
+                             ("previous-boot", "previous-start"), 1,
+                             "/devtools/browser/a", "target", False)
+    with manager._lock("a") as directory:
+        private_json(directory / "session.json", {"session": asdict(session)})
+
+    def forbidden(*args):
+        raise AssertionError("must not signal or enumerate a reused process")
+
+    monkeypatch.setattr(browsers.os, "kill", forbidden)
+    monkeypatch.setattr(browsers.os, "killpg", forbidden)
+    monkeypatch.setattr(manager, "_group_members", forbidden)
+    manager.stop(session)
 
 
 def test_restart_after_external_exit_removes_old_scratch(tmp_path):
@@ -227,12 +291,12 @@ def test_real_profile_isolation_restart_and_stale_handle(tmp_path):
             with pytest.raises(RuntimeError, match="session_in_use"):
                 manager.stop(a)
         manager.stop(a)
-        restarted = manager.start("a", executable=executable, persistent=True, sandbox=sandbox)
-        assert restarted.profile == a.profile and restarted.generation != a.generation
-        assert storage(restarted) == "retained"
+        old = a
+        a = manager.start("a", executable=executable, persistent=True, sandbox=sandbox)
+        assert a.profile == old.profile and a.generation != old.generation
+        assert storage(a) == "retained"
         with pytest.raises(RuntimeError, match="stale"):
-            manager.stop(a)
-        a = restarted
+            manager.stop(old)
     finally:
         manager.stop(a)
         if b:

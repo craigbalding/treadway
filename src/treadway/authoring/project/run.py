@@ -109,7 +109,7 @@ def browser_test(output, deadline, suites, checks):
     try:
         browser = manager.start("author", executable=chrome,
                                 sandbox=os.environ.get("TREADWAY_CHROME_SANDBOX", "on") != "off",
-                                startup_seconds=min(8, max(.01, deadline-time.monotonic())))
+                                startup_seconds=min(15, max(.01, deadline-time.monotonic())))
         config = {"origin": origin, "cdpPort": browser.port, "targetId": browser.target_id,
                   "browserRoot": str(BROWSER), "artifacts": str(output), "run": uuid.uuid4().hex}
         config_file = output / "runtime.json"

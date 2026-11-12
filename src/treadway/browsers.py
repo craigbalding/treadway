@@ -130,6 +130,33 @@ class BrowserManager:
             return False
 
     @staticmethod
+    def _group_members(group):
+        members = {}
+        for path in Path("/proc").iterdir():
+            if not path.name.isdecimal():
+                continue
+            pid = int(path.name)
+            try:
+                if os.getpgid(pid) == group:
+                    identity = process_identity(pid)
+                    if identity is not None:
+                        members[pid] = identity
+            except OSError:
+                pass
+        return members
+
+    @staticmethod
+    def _live_members(group, members):
+        live = []
+        for pid, identity in members.items():
+            try:
+                if process_identity(pid) == identity and os.getpgid(pid) == group:
+                    live.append(pid)
+            except OSError:
+                pass
+        return live
+
+    @staticmethod
     def _get(port, path, timeout=1):
         # This transport is exclusively for an owned loopback debugging endpoint.
         opener = build_opener(ProxyHandler({}))
@@ -175,7 +202,7 @@ class BrowserManager:
             yield session
 
     def start(self, name, *, executable, persistent=False, headless=True, sandbox=True,
-              disabled_features=(), proxy=None, startup_seconds=8):
+              disabled_features=(), proxy=None, startup_seconds=15):
         if type(startup_seconds) not in {int, float} or not 0 < startup_seconds <= 60:
             raise ValueError("bounded_startup_required")
         executable = str(Path(executable).absolute())
@@ -285,16 +312,27 @@ class BrowserManager:
                 return  # Already exited. Never signal a reused PID.
             if not self._owned(session):
                 raise RuntimeError("owned_browser_process_not_established")
-            os.killpg(session.pid, signal.SIGTERM)
+            members = self._group_members(session.pid)
+            # Chrome's SIGINT path gracefully closes renderers and flushes
+            # profile data. SIGTERM treats this as an ending desktop session.
+            os.kill(session.pid, signal.SIGINT)
             deadline = time.monotonic() + 3
-            while self._owned(session) and time.monotonic() < deadline:
+            while self._live_members(session.pid, members) and time.monotonic() < deadline:
+                members.update(self._group_members(session.pid))
                 time.sleep(.025)
-            if self._owned(session):
+            # A verified child can outlive the main process. Its unchanged
+            # identity anchors group ownership even after the parent exits.
+            if self._live_members(session.pid, members):
                 os.killpg(session.pid, signal.SIGKILL)
             try:
                 os.waitpid(session.pid, 0)
             except ChildProcessError:
                 pass
+            deadline = time.monotonic() + 1
+            while self._live_members(session.pid, members) and time.monotonic() < deadline:
+                time.sleep(.025)
+            if self._live_members(session.pid, members):
+                raise RuntimeError("owned_browser_shutdown_incomplete")
             self._clean_scratch(record)
 
     def sessions(self):
