@@ -27,6 +27,10 @@ Attach verifies the owned process, browser generation and exact page target.
 A closed page requires explicit recovery; another tab is never substituted.
 Stop preserves profiles/logs. Delete an artifact directory only after its sessions
 are stopped and the retained state is no longer needed. There is no global reset.
+Chrome's temporary socket files use a separate private directory directly under
+`/tmp`, keeping socket paths short even when artifact paths are deeply nested.
+The manifest records this directory; startup failure and explicit shutdown remove
+it. Persistent browser data remains in the named profile.
 
 `persistent=True` explicitly reuses that named profile after restart. Restart
 returns a new generation, invalidating old handles. A running configuration

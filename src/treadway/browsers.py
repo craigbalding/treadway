@@ -13,8 +13,10 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from urllib.request import ProxyHandler, build_opener
 import uuid
@@ -102,6 +104,22 @@ class BrowserManager:
             raise ValueError("session_manifest_symlink")
         return json.loads(path.read_text()) if path.exists() else None
 
+    @staticmethod
+    def _clean_scratch(record):
+        if not record.get("scratch"):
+            return  # Records created before scratch directories were managed.
+        scratch = Path(record["scratch"])
+        generation = record["session"]["generation"]
+        if (not re.fullmatch(r"[0-9a-f]{32}", generation)
+                or scratch.parent != Path("/tmp")
+                or not re.fullmatch(r"tw-" + generation + r"-[a-z0-9_]{8}", scratch.name)
+                or scratch.is_symlink()):
+            raise ValueError("owned_scratch_directory_required")
+        if scratch.exists():
+            if scratch.stat().st_uid != os.getuid():
+                raise ValueError("owned_scratch_directory_required")
+            shutil.rmtree(scratch)
+
     def _owned(self, session):
         if process_identity(session.pid) != session.process_identity:
             return False
@@ -181,6 +199,7 @@ class BrowserManager:
                     return self._verify(previous)
                 if process_identity(previous.pid) == previous.process_identity:
                     raise RuntimeError("recorded_process_ownership_differs")
+                self._clean_scratch(record)
             generation = uuid.uuid4().hex
             profile = directory / ("persistent" if persistent else "profile-" + generation)
             if profile.is_symlink():
@@ -192,9 +211,9 @@ class BrowserManager:
             if active.is_symlink():
                 raise ValueError("debug_endpoint_symlink")
             active.unlink(missing_ok=True)
-            scratch = directory / "scratch"
-            scratch.mkdir(mode=0o700, exist_ok=True)
-            marker = "about:blank#treadway-" + generation
+            # Full Chrome can replace an about:blank URL with a fragment with
+            # its New Tab page. An inert data URL preserves the exact marker.
+            marker = "data:text/html,treadway-" + generation
             flags = [executable, "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
                      "--disable-dev-shm-usage", "--remote-debugging-address=127.0.0.1",
                      "--remote-debugging-port=0", "--user-data-dir=" + str(profile)]
@@ -211,8 +230,12 @@ class BrowserManager:
             log = directory / ("chrome-" + generation + ".log")
             fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             process = None
+            scratch = None
             try:
                 with os.fdopen(fd, "w") as stream:
+                    # Chrome puts its singleton Unix socket under TMPDIR. A
+                    # nested profile path can exceed Linux's socket-path limit.
+                    scratch = Path(tempfile.mkdtemp(prefix="tw-" + generation + "-", dir="/tmp"))
                     process = subprocess.Popen([*flags, marker], stdout=stream, stderr=stream,
                                                start_new_session=True, env={**os.environ, "TMPDIR": str(scratch)})
                 identity = process_identity(process.pid)
@@ -220,7 +243,7 @@ class BrowserManager:
                     launching = BrowserSession(name, generation, str(profile), process.pid, identity,
                                                0, "", "", bool(persistent))
                     private_json(directory / "session.json", {"session": asdict(launching), "options": options,
-                                                              "phase": "starting"})
+                                                              "phase": "starting", "scratch": str(scratch)})
                 deadline = time.monotonic() + startup_seconds
                 while time.monotonic() < deadline and process.poll() is None:
                     if active.exists():
@@ -237,7 +260,7 @@ class BrowserManager:
                                                          port, browser_path, matches[0]["id"], bool(persistent))
                                 self._verify(session)
                                 private_json(directory / "session.json", {"session": asdict(session), "options": options,
-                                                                          "phase": "ready"})
+                                                                          "phase": "ready", "scratch": str(scratch)})
                                 return session
                         except (OSError, ValueError, IndexError):
                             pass
@@ -247,6 +270,8 @@ class BrowserManager:
                 if process is not None and process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=3)
+                if scratch is not None:
+                    self._clean_scratch({"scratch": str(scratch), "session": {"generation": generation}})
                 raise
 
     def stop(self, session):
@@ -256,6 +281,7 @@ class BrowserManager:
             if record is None or BrowserSession(**record["session"]) != session:
                 raise RuntimeError("stale_browser_session")
             if process_identity(session.pid) != session.process_identity:
+                self._clean_scratch(record)
                 return  # Already exited. Never signal a reused PID.
             if not self._owned(session):
                 raise RuntimeError("owned_browser_process_not_established")
@@ -269,6 +295,7 @@ class BrowserManager:
                 os.waitpid(session.pid, 0)
             except ChildProcessError:
                 pass
+            self._clean_scratch(record)
 
     def sessions(self):
         if not self.root.exists():

@@ -59,6 +59,117 @@ def test_startup_failure_is_bounded_and_never_changes_sandbox(tmp_path):
     assert all(not entry["running"] for entry in manager.sessions())
 
 
+def synthetic_browser(tmp_path, matching_page=True):
+    import sys
+    executable = tmp_path / "synthetic-browser"
+    executable.write_text(f"#!{sys.executable}\n" + '''
+import json, os, socket, sys
+from pathlib import Path
+from http.server import BaseHTTPRequestHandler, HTTPServer
+profile = Path(next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--user-data-dir=')))
+marker = sys.argv[-1]
+(profile / 'startup-marker').write_text(marker)
+scratch = Path(os.environ['TMPDIR'])
+(profile / 'scratch-path').write_text(str(scratch))
+socket_root = scratch / 'org.chromium.Chromium.synthetic'
+socket_root.mkdir()
+singleton = socket.socket(socket.AF_UNIX)
+singleton.bind(str(socket_root / 'SingletonSocket'))
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+    def do_GET(self):
+        if self.path == '/json/version':
+            value = {'webSocketDebuggerUrl': 'ws://127.0.0.1:%s/devtools/browser/synthetic' % self.server.server_port}
+        else:
+            value = [{'type': 'page', 'url': 'chrome://newtab/', 'id': 'decoy'},
+                     {'type': 'browser_ui', 'url': marker, 'id': 'toolbar'},
+                     {'type': 'page', 'url': marker + '-changed', 'id': 'changed'}]
+            if MATCHING_PAGE:
+                value.append({'type': 'page', 'url': marker, 'id': 'owned'})
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(json.dumps(value).encode())
+server = HTTPServer(('127.0.0.1', 0), Handler)
+(profile / 'DevToolsActivePort').write_text(str(server.server_port) + '\\n/devtools/browser/synthetic')
+server.serve_forever()
+'''.replace('MATCHING_PAGE', repr(matching_page)))
+    executable.chmod(0o700)
+    return executable
+
+
+@pytest.mark.parametrize("matching_page", [True, False])
+def test_startup_requires_exact_inert_marker_and_ignores_other_targets(tmp_path, matching_page):
+    import json
+    from pathlib import Path
+    executable = synthetic_browser(tmp_path, matching_page)
+    manager = BrowserManager(tmp_path / ("nested-" + "x" * 110))
+    scratch = None
+    session = None
+    try:
+        if matching_page:
+            session = manager.start("a", executable=executable, startup_seconds=2)
+            assert session.target_id == "owned"
+        else:
+            with pytest.raises(RuntimeError, match="browser_startup_incomplete"):
+                manager.start("a", executable=executable, startup_seconds=2)
+        record = json.loads((manager.root / "a/session.json").read_text())
+        assert record["options"]["sandbox"] is True
+        marker = (Path(record["session"]["profile"]) / "startup-marker").read_text()
+        assert marker == "data:text/html,treadway-" + record["session"]["generation"]
+        scratch = Path(record["scratch"])
+        if matching_page:
+            assert scratch.stat().st_mode & 0o777 == 0o700
+    finally:
+        if session is not None:
+            manager.stop(session)
+    assert all(not entry["running"] for entry in manager.sessions())
+    assert scratch is not None and not scratch.exists()
+
+
+def test_restart_after_external_exit_removes_old_scratch(tmp_path):
+    import json
+    from pathlib import Path
+    import signal
+    executable = synthetic_browser(tmp_path)
+    manager = BrowserManager(tmp_path / "sessions")
+    first = manager.start("a", executable=executable, startup_seconds=2)
+    old_scratch = Path(json.loads((manager.root / "a/session.json").read_text())["scratch"])
+    os.killpg(first.pid, signal.SIGKILL)
+    os.waitpid(first.pid, 0)
+    second = None
+    try:
+        second = manager.start("a", executable=executable, startup_seconds=2)
+        new_scratch = Path(json.loads((manager.root / "a/session.json").read_text())["scratch"])
+        assert not old_scratch.exists()
+        assert new_scratch.is_dir()
+    finally:
+        if second is not None:
+            manager.stop(second)
+        else:
+            manager.stop(first)
+    assert not new_scratch.exists()
+
+
+def test_scratch_cleanup_refuses_foreign_directory_or_symlink(tmp_path):
+    from pathlib import Path
+    import tempfile
+    generation = "f" * 32
+    record = {"session": {"generation": generation}, "scratch": str(tmp_path)}
+    with pytest.raises(ValueError, match="owned_scratch_directory_required"):
+        BrowserManager._clean_scratch(record)
+    link = Path(tempfile.mkdtemp(prefix="tw-" + generation + "-", dir="/tmp"))
+    link.rmdir()
+    link.symlink_to(tmp_path, target_is_directory=True)
+    try:
+        record["scratch"] = str(link)
+        with pytest.raises(ValueError, match="owned_scratch_directory_required"):
+            BrowserManager._clean_scratch(record)
+        assert tmp_path.is_dir()
+    finally:
+        link.unlink()
+
+
 @pytest.mark.skipif(not os.environ.get("CHROME_BIN"), reason="CHROME_BIN required")
 def test_real_profile_isolation_restart_and_stale_handle(tmp_path):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
