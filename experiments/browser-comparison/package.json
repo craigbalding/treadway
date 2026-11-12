@@ -1,0 +1,7 @@
+{
+  "name": "treadway-browser-comparison",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Optional local comparison; not a Treadway runtime dependency",
+  "dependencies": {"element-plus": "2.14.8"}
+}

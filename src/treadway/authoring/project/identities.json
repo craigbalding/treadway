@@ -1,0 +1,19 @@
+{
+  "providers": {"fixture": {"type": "environment"}},
+  "identities": {
+    "casey": {
+      "expected": {"principal": "user-casey", "tenant": "synthetic-team"},
+      "credentials": {
+        "username": {"provider": "fixture", "name": "TREADWAY_FIXTURE_CASEY_USERNAME"},
+        "password": {"provider": "fixture", "name": "TREADWAY_FIXTURE_CASEY_PASSWORD"}
+      }
+    },
+    "sam": {
+      "expected": {"principal": "user-sam", "tenant": "synthetic-team"},
+      "credentials": {
+        "username": {"provider": "fixture", "name": "TREADWAY_FIXTURE_SAM_USERNAME"},
+        "password": {"provider": "fixture", "name": "TREADWAY_FIXTURE_SAM_PASSWORD"}
+      }
+    }
+  }
+}
