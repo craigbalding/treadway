@@ -5,6 +5,12 @@ Chromium executable for browser workflows. Preserve your proxy and CA settings.
 The Python package ships browser-control code, authoring guides and examples.
 It does not include Node or a browser binary.
 
+Keep Chromium's sandbox enabled by default, including under gVisor. Sandboxed
+browser startup and the generated example flow have both been verified in a
+SafeYolo environment using gVisor. Do not add `--no-sandbox` or set
+`TREADWAY_CHROME_SANDBOX=off` just because the runtime is gVisor; see
+[sandbox support and startup diagnostics](BROWSER-SESSIONS.md#chromium-sandbox-in-gvisor).
+
 ## From a GitHub release
 
 Download the wheel for your version from

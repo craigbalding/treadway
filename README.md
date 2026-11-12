@@ -58,6 +58,9 @@ To run the browser example, use your installed Chrome executable. The command
 below uses Google Chrome's standard Linux path; replace it if yours differs.
 The runner starts a local workboard and sandboxed browser with a fresh profile,
 creates synthetic records and cleans them up. Logs remain in `my-flow/artifacts/`.
+Keep Chromium's sandbox enabled under gVisor. Sandboxed startup and this example
+have been verified in SafeYolo using gVisor; see
+[sandbox support](docs/BROWSER-SESSIONS.md#chromium-sandbox-in-gvisor).
 
 ```sh
 CHROME_BIN=/usr/bin/google-chrome python run.py test

@@ -29,6 +29,10 @@ read [the session guide](references/SESSIONS.md). Use explicit actor/session
 handles, preserve intended authentication conditions, and prove refusal with an
 actual application response. The `collaboration.robot` walkthrough demonstrates
 self-approval refusal and private-resource access across isolated sessions.
+Keep Chromium's sandbox enabled by default, including under gVisor. Sandboxed
+startup and the generated example have been verified in a SafeYolo/gVisor
+environment. Do not disable it based on the runtime or a startup timeout;
+inspect the actual Chrome log.
 
 For named credential sources, native Robot `Secret` values and optional vaults,
 read [the credential guide](references/CREDENTIALS.md). Keep references in flow

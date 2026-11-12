@@ -42,10 +42,7 @@ runner also bounds startup by its remaining overall deadline.
 returns a new generation, invalidating old handles. A running configuration
 mismatch fails rather than relaunching. The effective configuration is retained
 privately with the manifest. Proxy settings inherit the caller's environment;
-CA variables remain intact. No certificate-verification bypass is added. An
-environment that cannot support the Chromium sandbox may explicitly choose
-`sandbox=False`; the library never falls back automatically. The reference
-runner exposes this choice as `TREADWAY_CHROME_SANDBOX=off`.
+CA variables remain intact. No certificate-verification bypass is added.
 
 The same lifecycle is available through `python -m treadway.browsers --root DIR`
 with `start NAME --executable PATH`, `attach NAME`, `list`, and `stop NAME`.
@@ -59,6 +56,28 @@ The default Chromium switches are `--no-first-run`, `--no-default-browser-check`
 page. The OS chooses the debugging port. Explicit options can omit headless mode,
 add `--no-sandbox` or `--disable-features=...`; configured proxy settings add
 `--proxy-server=...` and, when present, `--proxy-bypass-list=...`.
+
+## Chromium sandbox in gVisor
+
+Sandboxed Chromium startup and Treadway's generated example flow have both been
+verified in a SafeYolo environment using gVisor, with user namespaces enabled.
+Keep the sandbox enabled by default, including under gVisor. Do not pass
+`--no-sandbox`, set `sandbox=False` or set `TREADWAY_CHROME_SANDBOX=off` just
+because the runtime is gVisor.
+
+For a normal run, leave `TREADWAY_CHROME_SANDBOX` unset or set it to `on`. Use
+`BrowserManager.start(...)` with its default `sandbox=True`. Start the browser
+and check the actual result instead of assuming that a container or gVisor
+requires disabling its sandbox. A nonzero `/proc/sys/user/max_user_namespaces`
+alone does not establish that the browser can use the required namespaces.
+
+If startup fails, inspect the retained Chrome log named in the error. A timeout
+alone is not a sandbox diagnosis; browser installation, namespace permissions
+and other runtime failures need their own diagnosis. Only an environment that
+demonstrably cannot support the Chromium sandbox may explicitly opt out with
+`sandbox=False` or the CLI's `--no-sandbox`; the reference runner exposes the
+same choice as `TREADWAY_CHROME_SANDBOX=off`. The library never falls back
+automatically. These opt-outs disable Chromium's own sandbox.
 
 ## A profile label is not a principal
 
