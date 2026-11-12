@@ -2,10 +2,13 @@
 
 **Reusable browser workflows for humans and agents.**
 
-Create a record, assign its owner and verify that the saved values survive a
-reload. Have a second user approve it, and check that the creator cannot approve
-their own work. Treadway supplies the browser operations, separate user sessions
-and checks needed to build flows like these.
+Treadway lets people and coding agents automate tasks in web applications and
+verify their results. Its reusable browser actions and checks compose into
+workflows, from updating a form to coordinating work between several users.
+
+For example, a workflow in a workboard app can create an item, assign its owner
+and verify that the saved values survive a reload. It can then have a second
+user approve the item and check that the creator cannot approve their own work.
 
 Workflows use native [Robot Framework](https://robotframework.org/) steps, with
 Python and JavaScript APIs underneath. You describe your application's controls
