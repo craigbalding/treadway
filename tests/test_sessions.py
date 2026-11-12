@@ -29,7 +29,11 @@ def app():
                 except OSError:
                     pass
                 return
-            self.send_response(302 if self.path == "/redirect" else 200)
+            self.send_response(302 if self.path == "/redirect" else 428 if self.path == "/blocked" else 200)
+            if self.path == "/blocked":
+                self.send_header("X-Blocked-By", "synthetic-policy")
+                self.send_header("X-Trace", "first")
+                self.send_header("X-Trace", "second")
             if self.path == "/login":
                 self.send_header("Set-Cookie", "user=a; HttpOnly; Path=/")
             if self.path == "/redirect":
@@ -64,9 +68,24 @@ def test_no_redirect_no_cross_origin_and_incomplete_is_not_empty(app):
     session = HttpSession(actor="visitor", origin=origin, max_body_bytes=1)
     result = session.request("/redirect")
     assert result.status == 302 and not result.complete
+    assert result.header("location") == "/must-not-follow"
     with pytest.raises(ValueError, match="incomplete"):
         result.json()
     assert len(calls) == 1
+
+
+def test_response_headers_survive_errors_and_keep_duplicate_values_private(app):
+    origin, calls = app
+    session = HttpSession(actor="visitor", origin=origin)
+    blocked = session.request("/blocked")
+    assert blocked.status == 428 and blocked.complete
+    assert blocked.header("x-BLOCKED-by") == "synthetic-policy"
+    assert blocked.header("missing", "absent") == "absent"
+    assert tuple(value for key, value in blocked.headers if key.lower() == "x-trace") == ("first", "second")
+    login = session.request("/login")
+    assert login.header("set-cookie") == "user=a; HttpOnly; Path=/"
+    assert "user=a" not in repr(login) and "synthetic-policy" not in repr(blocked)
+    assert len(calls) == 2
 
 
 def test_slow_headers_cannot_extend_the_feedback_deadline(app):

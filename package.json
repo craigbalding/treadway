@@ -1,6 +1,6 @@
 {
   "name": "treadway",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Reliable workflow execution for agents",
   "main": "src/treadway/browser/form-assessor.js",

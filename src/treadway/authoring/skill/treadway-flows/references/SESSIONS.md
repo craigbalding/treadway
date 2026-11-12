@@ -116,7 +116,14 @@ uses this boundary instead of embedding a password in its browser helper.
 `attempt(..., probe="/api/session", expected={...})` verifies identity first.
 Neither operation renews credentials, retries work or uses browser cookies
 implicitly. Body limits expose incomplete responses; they never turn missing
-data into an empty successful result. Retain response bodies privately.
+data into an empty successful result. `observation.headers` is an immutable
+tuple of `(name, value)` pairs preserving repeated headers; `observation.header(name,
+default=None)` returns the first value with case-insensitive lookup. Headers are
+retained on error, redirect and incomplete-body responses, so an adapter can
+inspect response metadata without replacing the HTTP transport. Retain bodies
+and headers privately: cookies and other credentials may appear in them. Both
+are excluded from the observation's default representation. Metadata does not
+establish principal identity, permission enforcement or a completed effect.
 Response-header and body progress use the remaining timeout budget. DNS and
 connection establishment retain the standard library's timeout limitations;
 use `run_json_process` around a helper when a strict overall process deadline is

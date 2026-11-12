@@ -24,7 +24,7 @@ virtual environment, install the Python wheel with the `robot` extra, then insta
 the browser runtime's dependency beside those assets:
 
 ```sh
-python -m pip install 'path/to/treadway-0.1.0-py3-none-any.whl[robot]'
+python -m pip install 'path/to/treadway-0.1.1-py3-none-any.whl[robot]'
 TREADWAY_BROWSER_DIR=$(python -c 'from pathlib import Path; import treadway; print(Path(treadway.__file__).parent / "browser")')
 npm ci --ignore-scripts --prefix "$TREADWAY_BROWSER_DIR"
 ```

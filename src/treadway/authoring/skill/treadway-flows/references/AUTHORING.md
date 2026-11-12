@@ -11,7 +11,7 @@ extra in a virtual environment; the project is an early library, so do not assum
 a public package index release. Then install the locked Node runtime beside it:
 
 ```sh
-python -m pip install '/path/to/treadway-0.1.0-py3-none-any.whl[robot]'
+python -m pip install '/path/to/treadway-0.1.1-py3-none-any.whl[robot]'
 TREADWAY_BROWSER_DIR=$(python -c 'from pathlib import Path; import treadway; print(Path(treadway.__file__).parent / "browser")')
 npm ci --ignore-scripts --prefix "$TREADWAY_BROWSER_DIR"
 python -m treadway.authoring new my-flow

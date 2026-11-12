@@ -74,6 +74,15 @@ class HttpObservation:
     status: int
     complete: bool
     body: bytes = field(repr=False)
+    headers: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+
+    def header(self, name, default=None):
+        """Return the first value, ignoring case; ``headers`` retains duplicates.
+
+        Header values can contain credentials. Keep raw observations private.
+        Headers describe the response even when its body is incomplete.
+        """
+        return next((value for key, value in self.headers if key.lower() == name.lower()), default)
 
     def json(self):
         if not self.complete:
@@ -146,7 +155,8 @@ class HttpSession:
                 if declared is not None and (not declared.isdecimal() or len(content) != int(declared)):
                     complete = False
                 return HttpObservation(self.actor, self.session_id, response.code,
-                                       complete and len(content) <= self.max_body_bytes, bytes(content[:self.max_body_bytes]))
+                                       complete and len(content) <= self.max_body_bytes, bytes(content[:self.max_body_bytes]),
+                                       tuple(response.headers.items()))
         except Exception:
             raise RuntimeError("actor_http_observation_incomplete; application effect unknown") from None
 
