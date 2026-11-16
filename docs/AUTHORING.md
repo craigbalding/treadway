@@ -1,5 +1,11 @@
 # Flow authoring kit
 
+Build flows that carry out work with explicit intent, checked identity/resource
+prerequisites and verified outcomes. The same mechanics support operational
+automation and application testing. Establish the operator's objective first:
+completing a valid handoff and proving that an invalid handoff is refused require
+different actions and evidence.
+
 The installable authoring guide is maintained with the wheel's skill resources:
 [Start here](../src/treadway/authoring/skill/treadway-flows/references/AUTHORING.md).
 See the [recipe index](../src/treadway/authoring/skill/treadway-flows/references/RECIPES.md)

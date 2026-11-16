@@ -63,42 +63,56 @@ class ActorBrowser {
 async function browserRequest({origin,probe,expected,path,method,body,verify,timeoutMs,maxBodyBytes}) {
   if(location.origin!==origin) return {complete:false,dispatched:false,prerequisiteError:'actor_origin_differs'};
   const abort=new AbortController(),timer=setTimeout(()=>abort.abort(),timeoutMs);
-  let dispatched=false,principal=null;
+  let dispatched=false,principal=null,probeObservation=null,phase=verify?'probe':'mutation';
   async function read(response) {
-    const reader=response.body?.getReader(),chunks=[];let bytes=0,truncated=false;
-    if(reader) while(true) {
+    const reader=response.body?.getReader(),chunks=[];let bytes=0,truncated=false,readError=null;
+    try {if(reader) while(true) {
       const {value,done}=await reader.read();if(done)break;
+      const available=Math.max(0,maxBodyBytes-bytes);
       bytes+=value.byteLength;
-      if(bytes>maxBodyBytes){truncated=true;await reader.cancel();break;}
+      if(bytes>maxBodyBytes){chunks.push(value.slice(0,available));truncated=true;await reader.cancel();break;}
       chunks.push(value);
-    }
+    }}catch(error){readError=error;}
     const data=new Uint8Array(chunks.reduce((sum,chunk)=>sum+chunk.length,0));let offset=0;
     for(const chunk of chunks){data.set(chunk,offset);offset+=chunk.length;}
     const text=new TextDecoder().decode(data);let value;
     try{value=JSON.parse(text);}catch{value=null;}
-    return {status:response.status,body:value,text,complete:!truncated,bodyTruncated:truncated};
+    return {status:response.status,body:value,text,complete:!truncated&&!readError,bodyTruncated:truncated,
+      ...(readError?{error:abort.signal.aborted?'request_deadline':'response_body_incomplete',
+        applicationOutcome:'unknown'}:{})};
   }
   try {
     const options={credentials:'same-origin',redirect:'error',cache:'no-store',signal:abort.signal};
     if(verify) {
-      const observed=await read(await fetch(probe,options));principal=observed.body;
-      const matches=observed.complete && observed.status===200 && principal!==null &&
-        Object.entries(expected).every(([key,value])=>{
+      const observed=await read(await fetch(probe,options));probeObservation=observed;principal=observed.body;
+      let principalState='expected';
+      if(observed.complete && observed.status===200 && principal!==null) {
+        for(const [key,value] of Object.entries(expected)) {
           let actual=principal;
+          let missing=false;
           for(const part of key.split('.')) {
-            if(!actual || typeof actual!=='object' || !Object.hasOwn(actual,part))return false;
+            if(!actual || typeof actual!=='object' || !Object.hasOwn(actual,part)){missing=true;break;}
             actual=actual[part];
           }
-          return typeof actual===typeof value && actual===value;
-        });
-      if(!matches)return {complete:false,dispatched:false,prerequisiteError:'actual_principal_differs_or_unknown'};
+          if(missing){principalState='unknown';continue;}
+          const match=typeof actual===typeof value && actual===value;
+          if(!match) {
+            if(actual!==null){principalState='wrong';break;}
+            principalState='unknown';
+          }
+        }
+      } else principalState='unknown';
+      const matches=principalState==='expected';
+      if(!matches)return {complete:false,dispatched:false,phase:'probe',principalState:
+        observed.complete&&observed.status===200&&principal!==null?principalState:'unknown',probeObservation,
+        prerequisiteError:'actual_principal_differs_or_unknown'};
     }
-    dispatched=true;
+    phase='mutation';dispatched=true;
     const response=await fetch(path,{...options,method,
       ...(body===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
-    return {...await read(response),dispatched,principal};
+    return {...await read(response),phase,dispatched,principal,probeObservation};
   } catch (error) {
-    return {complete:false,dispatched,principal,
+    return {complete:false,dispatched,phase,principal,probeObservation,
       error:abort.signal.aborted?'request_deadline':'request_observation_incomplete',
       errorType:['TypeError','AbortError','TimeoutError'].includes(error?.name)?error.name:'Error',
       applicationOutcome:'unknown'};

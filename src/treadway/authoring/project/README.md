@@ -1,5 +1,23 @@
 # Your Treadway flow project
 
+Build high-assurance web workflows: carry out work as the intended user, enforce
+current prerequisites and retain evidence that the requested effects persisted.
+The same operations also support testing application behaviour and refusals.
+
+To optimise a proven flow for the operator's objective and required assurance, follow
+[objective-directed optimisation](.agents/skills/treadway-flows/references/OPTIMISATION.md):
+
+```sh
+python optimise_flow.py --describe
+python optimise_flow.py --bindings 100
+CHROME_BIN=/absolute/path/to/chromium python optimise_flow.py --objective validation
+CHROME_BIN=/absolute/path/to/chromium python optimise_flow.py --benchmark
+```
+
+Persistence uses a journalled HTTP operation; editor validation retains the UI.
+The benchmark explicitly executes separate cold/warm baseline and candidate
+transactions, records reuse costs and checks the operator's required evidence.
+
 This runnable reference uses a synthetic local workboard. It creates a work item,
 selects an owner by actual ID, enters dates and a literal note, commits against a
 revision, then verifies SQLite persistence and a fresh browser reload. A second
@@ -40,3 +58,27 @@ with `CHROME_BIN` configured. Default whole-run budgets are 15 and 60 seconds.
 All evidence stays in private ignored `artifacts/` directories; failures are retained.
 The original workboard is unauthenticated; collaboration routes use synthetic
 fixture accounts and HttpOnly session cookies. This is not a production deployment.
+
+`session_recovery.robot` demonstrates 100 REST mutations, application-session
+expiry, one refresh and a lost-response reconciliation. It needs no browser:
+
+```sh
+python -m robot --pythonpath . --outputdir artifacts/recovery session_recovery.robot
+```
+
+Read [the recovery guide](.agents/skills/treadway-flows/references/SESSION-RECOVERY.md)
+and `session_recovery.py` together. Its application-owned callbacks identify
+renewal, verify the actual HTTP principal and independently inspect SQLite
+persistence. Native Robot supplies the loop; completed bindings are not repeated.
+
+For live machinery diagnostics and per-run statistics, run:
+
+```sh
+python debug_recovery.py --level DEBUG
+python debug_recovery.py --simulate-contract-change-at 38
+```
+
+The second command explicitly changes the synthetic app's schema contract and
+stops before write 38. Read [the diagnostics guide](.agents/skills/treadway-flows/references/DIAGNOSTICS.md)
+for terminal/JSON/Robot sinks, statistics, watched implementation changes and
+read-only reconciliation after an uncertain action.

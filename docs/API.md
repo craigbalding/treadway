@@ -11,6 +11,16 @@ Python modules live under `treadway`; browser JavaScript assets ship in
   exclusive operation leases and independent HTTP actor cookie jars.
 - `treadway.credentials` and `treadway.credentials_robot.CredentialLibrary`:
   named credential providers and native Robot secret values, separate from login.
+- `treadway.recovery`: opt-in application-owned authentication maintenance and
+  durable execution of one HTTP mutation, with explicit effect reconciliation;
+  [repeated mutations and session recovery](SESSION-RECOVERY.md).
+- `treadway.diagnostics.RunDiagnostics`: shared safe live events, selectable sinks,
+  per-run statistics and optional watched implementation/observed-contract guards.
+  `treadway.diagnostics_robot.DiagnosticsListener` integrates native Robot logs;
+  see [diagnostics](OBSERVABILITY.md).
+- `treadway.optimisation.summarise_profile` and `compare_objective_runs`: offline
+  timing analysis and evidence comparison against an operational or testing objective. They do
+  not execute flows; see [flow optimisation](FLOW-OPTIMISATION.md).
 - `treadway.entra_robot.EntraLibrary` and `browser/entra.js`: one Entra flow for
   authenticated-session reuse, password, TOTP and first-login enrollment;
   [configuration and evidence](ENTRA.md).

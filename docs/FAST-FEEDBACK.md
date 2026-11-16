@@ -13,6 +13,9 @@ Run these commands from the Treadway checkout, using its development dependencie
 python -m pytest -q tests/test_widget_results.py
 node --test tests/test_widget_guards.js
 python -m pytest -q tests/test_browsers.py tests/test_sessions.py
+python -m pytest -q tests/test_recovery.py
+python -m pytest -q tests/test_diagnostics.py
+python -m pytest -q tests/test_optimisation.py
 node --test tests/test_actor_contracts.js tests/test_target_sessions.js
 python -m pytest -q tests/test_credentials.py tests/test_credentials_robot.py
 npm run test:entra

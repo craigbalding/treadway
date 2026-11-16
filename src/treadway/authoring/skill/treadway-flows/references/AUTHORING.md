@@ -1,8 +1,16 @@
 # Build a flow with Treadway
 
-Treadway supplies browser mechanics, JSON process transport and strict field
-comparisons. Your adapter supplies application intent, identity/revision guards,
-selectors, independent effect observations and cleanup. Robot supplies sequencing.
+Treadway supports high-assurance web workflows for operational automation and
+application testing. It supplies browser/HTTP mechanics, session handling,
+explicit recovery, diagnostics and strict field comparisons. Your adapter
+supplies application intent, identity/revision guards, selectors, independent
+effect observations and cleanup. Robot supplies sequencing.
+
+Start with what the operator wants to accomplish and what evidence establishes
+completion. An operational flow may update records or hand work to another user.
+A testing flow may deliberately attempt a prohibited action. Preserve the
+required guarantees and the intended session/input conditions in either case;
+never turn an intentional refusal test into a successful operational action.
 
 ## Start from an installed package
 

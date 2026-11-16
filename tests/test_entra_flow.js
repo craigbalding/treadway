@@ -17,6 +17,7 @@ const IDP = 'https://login.microsoftonline.com';          // trusted IdP origin
 const APPO = 'https://' + RH;                              // trusted full app origin
 const EMAIL = { host: 'login.microsoftonline.com', origin: IDP, ready: 'complete', path: '/authorize', inputs: [{ name: 'loginfmt', type: 'email', id: 'i0116' }], btns: ['idSIButton9'], body: 'Sign in' };
 const EMAIL_RETRY = { ...EMAIL, body: 'Sign in\nThere was an issue looking up your account. Tap Next to try again.' };
+const PICKER = { ...EMAIL, inputs: [], body: 'Pick an account' };
 const PW = { host: 'login.microsoftonline.com', origin: IDP, ready: 'complete', path: '/login', inputs: [{ name: 'passwd', type: 'password' }], btns: ['idSIButton9'], body: 'Enter password' };
 const PWERR = { ...PW, body: 'Your account or password is incorrect.' };
 const TOTP = { host: 'login.microsoftonline.com', origin: IDP, ready: 'complete', path: '/login', inputs: [{ id: 'idTxtBx_SAOTCC_OTC', type: 'tel' }], btns: ['idSubmit_SAOTCC_Continue', 'idSIButton9'], body: 'Enter the code displayed in your authenticator app' };
@@ -38,9 +39,13 @@ function qs(page, sel) {
   return null;
 }
 function evalPredicate(page, predicate) {
-  const document = { querySelector: s => qs(page, s), body: { innerText: page.body || '' } };
-  const location = { host: page.host || '', origin: page.origin || '' };
-  return !!(new Function('document', 'location', 'return (' + predicate + ')'))(document, location);
+  const element=value=>({...value,getClientRects:()=>[{}],getAttribute:name=>name==='inputmode'?value.im:null,
+    innerText:value.txt||''});
+  const document = { querySelector: s => qs(page, s), body: { innerText: page.body || '' },
+    querySelectorAll:selector=>(selector==='input'?page.inputs||[]:page.links||[]).map(element)};
+  const location = { host: page.host || '', origin: page.origin || '', pathname:page.path||'' };
+  return !!(new Function('document', 'location','getComputedStyle', 'return (' + predicate + ')'))(
+    document, location,()=>({visibility:'visible'}));
 }
 
 function fakeIO(page0, clicks = [], tiles = [], clock0 = 10000) {
@@ -78,6 +83,32 @@ function fakeIO(page0, clicks = [], tiles = [], clock0 = 10000) {
   io = fakeIO(EMAIL, [{ state: 'clicked', to: PW }]);
   r = await runPrep(io, CTX);
   check('email->password -> ready_to_submit', r.status, 'ready_to_submit');
+
+  io = fakeIO(EMAIL, [{state:'clicked',to:PICKER}], [{state:'clicked',to:EMAIL}]);
+  r = await runPrep(io, CTX);
+  check('return to completed email stage stops', r.status, 'email_revisited');
+  check('email and picker each submitted once', io.log.clicks, 2);
+
+  for(const start of [EMAIL,PICKER]) {
+    io = fakeIO(start,[{state:'clicked',to:APP}],[{state:'clicked',to:APP}]);
+    const inspect=io.inspect;let reads=0;
+    io.inspect=async()=>++reads===2?PW:inspect();
+    r = await runPrep(io,CTX);
+    check('screen change before first action can reclassify',r.status,'already_app');
+    check('pre-action screen change still submits only once',io.log.clicks,1);
+  }
+
+  for(const [name,screen] of [['TOTP',TOTP],['KMSI',KMSI]]) {
+    for(const [start,clicks,tiles] of [[EMAIL,[{state:'clicked',to:screen}],[]],
+                                    [PICKER,[],[{state:'clicked',to:screen}]]]) {
+      io = fakeIO(start,clicks,tiles);
+      let challenges=0;io.challenge=async()=>{challenges++;};
+      r = await runPrep(io, CTX);
+      check(`${start===EMAIL?'email':'picker'} directly to ${name}`,r.status,'challenge');
+      check(`${name} action count`,io.log.clicks,1);
+      check(`${name} lazy secret source`,challenges,name==='TOTP'?1:0);
+    }
+  }
 
   // runPrep password stage on a FOREIGN origin -> untrusted_idp_origin, NO password fill
   io = fakeIO(EMAIL, [{ state: 'clicked', to: PW_FOREIGN }]);

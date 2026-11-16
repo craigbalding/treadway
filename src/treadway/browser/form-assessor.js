@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createCdpProxy, connect } = require('./cdp.js');
 const {choiceContext}=require('./choice-binding.js');
+const diagnostics=require('./diagnostics.js');
 const runtime = fs.readFileSync(path.join(__dirname, 'browser-form.function.js'), 'utf8');
 const VERSION = 'treadway.form/4';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -166,6 +167,7 @@ class FormAssessor {
     this.record({kind:'input_plan',version:VERSION,at:new Date().toISOString(),snapshot,candidates});
     const receipts = [];
     for (const { c, f, toggle, select, editable } of plans) {
+      diagnostics.checkpoint();
       this.emit({ phase:'input_started', ref:c.ref, source:c.source });
       try {
         // An earlier field can navigate or open a modal. Rebind before the
@@ -194,6 +196,7 @@ class FormAssessor {
         this.emit({ phase:'input_finished', ref:c.ref, applied:matched });
         if (!matched) break;
       } catch (e) {
+        diagnostics.contractMismatch(e.message);
         receipts.push({ref:c.ref,source:c.source,applied:false,outcome:'unknown',reason:errorKind(e)});
         break; // never silently retry or fall back to another control
       }
@@ -249,6 +252,7 @@ class FormAssessor {
     // Record the inputs and decision BEFORE any potentially committed action.
     // Storage failure stops dispatch; this is an attempt journal, not traffic capture.
     this.record({kind:'action_intent',at:receipt.startedAt,receipt});
+    diagnostics.checkpoint();
     try {
       // Exactly one pointer gesture. A timeout may occur AFTER dispatch.
       receipt.actionDispatch = 'attempted'; await this.pointer(actionRef,choice);
@@ -272,7 +276,8 @@ class FormAssessor {
     receipt.finishedAt = new Date().toISOString();
     try{this.record({kind:'action_result',at:receipt.finishedAt,receipt});receipt.recordStatus='recorded';}
     catch(e){receipt.recordStatus='result_write_failed';receipt.recordError=errorKind(e);}
-    this.emit({phase:'action_finished',diagnosis:receipt.diagnosis,completion:receipt.completion});
+    this.emit({phase:'action_finished',diagnosis:receipt.diagnosis,completion:receipt.completion,
+      actionDispatch:receipt.actionDispatch,recordStatus:receipt.recordStatus});
     return receipt;
   }
 }
@@ -334,6 +339,9 @@ function diagnose(r,before) {
 // artifacts and reconciles relevant request references.
 async function main() {
   const input=JSON.parse(fs.readFileSync(0,'utf8'));
+  return require('./diagnostics.js').withDiagnostics(input._diagnostics,()=>executeMain(input));
+}
+async function executeMain(input) {
   if(!input.targetId || !input.cdpHost || !input.cdpPort) throw new Error('explicit_browser_host_port_and_target_required');
   if(!['inspect','locate','apply','attempt'].includes(input.operation))throw new Error('unknown_operation');
   if(['apply','attempt'].includes(input.operation) && !input.recordPath)throw new Error('mutation_recordPath_required');
@@ -345,7 +353,8 @@ async function main() {
       const fd=fs.openSync(input.recordPath,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_APPEND|fs.constants.O_NOFOLLOW,0o600);
       try{fs.fchmodSync(fd,0o600);fs.writeFileSync(fd,JSON.stringify(entry)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
     } : ()=>{};
-    const form=new FormAssessor(session,{scope:input.scope,frameSelector:input.frameSelector,record,emit:e=>process.stderr.write(JSON.stringify(e)+'\n')});
+    const form=new FormAssessor(session,{scope:input.scope,frameSelector:input.frameSelector,record,
+      emit:e=>require('./diagnostics.js').machinery(e.phase,e)});
     let result;
     if(input.operation==='inspect'){
       result=await form.inspect();

@@ -3,6 +3,7 @@
 // A thin JSON transport for native Robot keywords. Profiles describe component
 // controls only; there is no application workflow or completion evaluator here.
 const fs=require('node:fs');
+const diagnostics=require('./diagnostics.js');
 const {createCdpProxy,connect}=require('./cdp.js');
 const {BrowserInteractions}=require('./interactions.js');
 const {Autocomplete,MultiSelect,DateRange,RichTextEditor,InlineEditor,PreparedEdit}=require('./widgets.js');
@@ -51,6 +52,9 @@ async function execute(ui,input){
 }
 async function main(){
   const input=JSON.parse(fs.readFileSync(0,'utf8'));
+  return diagnostics.withDiagnostics(input._diagnostics,()=>executeMain(input));
+}
+async function executeMain(input){
   if(!input.cdpHost||!input.cdpPort||!input.targetId||!input.origin||!input.recordPath)throw new Error('explicit_browser_origin_target_and_journal_required');
   createWidget(null,input.kind,input.profile); // Offline validation before connect.
   const record=entry=>{
@@ -61,7 +65,7 @@ async function main(){
   let session,ui;
   try{
     session=await connect(createCdpProxy({cdpHost:input.cdpHost,cdpPort:input.cdpPort}),input.targetId,{commandTimeoutMs:3000});
-    ui=new BrowserInteractions(session,{origin:input.origin,scope:input.scope,frameSelector:input.frameSelector,record,emit:(phase,event)=>process.stderr.write(JSON.stringify({phase,...event})+'\n')});
+    ui=new BrowserInteractions(session,{origin:input.origin,scope:input.scope,frameSelector:input.frameSelector,record,emit:diagnostics.machinery});
     if(await ui.evaluate('location.origin')!==input.origin)throw new Error('widget_browser_origin_differs');
     const result=await execute(ui,input);
     process.stdout.write(JSON.stringify({version:'treadway.widget/1',mechanicsComplete:true,result,applicationOutcome:'not_evaluated'})+'\n');

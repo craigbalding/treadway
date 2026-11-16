@@ -1,5 +1,11 @@
 # Execution evidence
 
+For the implemented Python/Robot live event interface, browser subprocess bridge,
+run statistics and flow-change guards, read the self-contained
+[diagnostics guide](../src/treadway/authoring/skill/treadway-flows/references/DIAGNOSTICS.md)
+or run `treadway guide diagnostics`. The generated project includes
+`python debug_recovery.py --level DEBUG` as a complete executable walkthrough.
+
 Use Robot Framework's execution model, result files and log viewer. Treadway
 supplies the observations needed to interpret a browser operation: current
 identity and target bindings, screen state, intended action, dispatch receipt,

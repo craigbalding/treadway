@@ -1,11 +1,16 @@
 # Project boundary
 
-Treadway supplies reusable mechanics for agent-directed workflows:
+Treadway supplies reusable mechanics for high-assurance web workflows directed
+by humans and agents. Operational automation and application testing both need
+explicit intent, checked prerequisites and evidence of the outcome:
 
 - Form discovery, sourced candidate input, verified readback and explicit actions.
 - Bounded subprocess execution with live progress and retained incomplete results.
 - Strict comparisons between expected fields and observed application state.
 - Explicit-target browser connections and thin Robot Framework bindings.
+- Isolated browser/HTTP identities and application-owned session maintenance.
+- Durable intent, dispatch records and explicit reconciliation for supported HTTP mutations.
+- Live diagnostics, run statistics and objective-directed optimisation.
 
 Application adapters own selectors, routes, request shapes, account and resource
 relationships, state observers and completion conditions. They combine calibrated
@@ -19,7 +24,12 @@ validating Treadway requires no other repository. Public guides teach from the
 shipped examples and must be usable without access to an integration's source
 or private captures.
 
-Agents choose goals, candidate inputs, meaningful variations and assertions.
+Operators choose the intended result and required assurance. For operational
+work, this might mean updating ownership and verifying the saved assignments.
+For testing, it might mean exercising an application boundary with a deliberately
+invalid input or a different identity. Optimisation must preserve that distinction.
+Agents choose candidate inputs, meaningful variations and observations within
+the operator's objective.
 Operations pass actual runtime values between steps and enforce their required
 conditions. Property comparisons expose matches, differences and unknowns with
 observation references; callers supply and justify the expected behavior.

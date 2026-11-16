@@ -1,28 +1,30 @@
 # Treadway
 
-**Reusable browser workflows for humans and agents.**
+**High-assurance web workflows for humans and agents.**
 
-Treadway lets people and coding agents automate tasks in web applications and
-verify their results. Its reusable browser actions and checks compose into
-workflows, from updating a form to coordinating work between several users.
+Treadway helps people and agents carry out work in web applications with explicit
+intent, checked prerequisites and evidence of the outcome. Compose browser and
+HTTP operations into workflows that use the intended identity, protect current
+resource bindings and verify that the requested changes persisted.
 
-For example, a workflow in a workboard app can create an item, assign its owner
-and verify that the saved values survive a reload. It can then have a second
-user approve the item and check that the creator cannot approve their own work.
+Use it to assign and schedule work, process a batch of records, or hand a request
+between its creator and an approver. Session renewal, explicit transaction
+recovery and retained observations help a flow continue reliably or stop with
+its uncertain effects preserved. The same operations support application testing,
+including checking that creators cannot approve their own work.
 
 Workflows use native [Robot Framework](https://robotframework.org/) steps, with
 Python and JavaScript APIs underneath. You describe your application's controls
 and expected outcomes. Shared operations handle forms, React/Vue components,
 bounded waits and saved-state checks. Failed prerequisites stop dependent steps.
 
-For example, the included [collaboration flow](src/treadway/authoring/project/collaboration.robot)
-contains this sequence:
+The included [collaboration flow](src/treadway/authoring/project/collaboration.robot)
+demonstrates creation, approval and confirmation across separate user sessions:
 
 ```robotframework
 ${author}=    Open Fixture Identity    author    casey
 ${reviewer}=    Open Fixture Identity    reviewer    sam
 ${request}=    Create Shared Request    ${author}
-Attempt Self Approval And Verify Refusal    ${author}    ${request}
 ${approved}=    Approve Shared Request    ${reviewer}    ${request}
 Observe Approved Request    ${author}    ${approved}    ${reviewer}
 ```
@@ -30,6 +32,25 @@ Observe Approved Request    ${author}    ${approved}    ${reviewer}
 Treadway is pre-1.0 and runs on Linux. It requires Python 3.11+, Node 22+ and a
 separately installed Chrome or Chromium browser. The package includes browser
 control code, guides, an agent skill and a runnable example app.
+
+## What makes a workflow dependable
+
+- **Checked intent and prerequisites.** Application mappings establish the actual
+  user, resource, revision and required state before dependent actions proceed.
+- **Recovery that accounts for effects.** Supported HTTP mutations retain durable
+  intent and dispatch records. After an uncertain result, reconcile the original
+  operation before deciding whether another attempt is justified.
+- **Separate identities and session lifetimes.** Owned browser profiles and HTTP
+  cookie jars support user handoffs and application-specific session renewal.
+- **Evidence beyond a successful click.** Keep intended values, interaction
+  receipts, observed responses and independent persisted-state checks distinct.
+- **Visibility and efficient execution.** Live diagnostics and run statistics
+  expose machinery costs; objective-directed optimisation can omit unnecessary
+  work while preserving the required guarantees and evidence.
+
+Your adapter defines application semantics and authoritative observations.
+Treadway supplies reusable enforcement and recovery mechanics; a timeout or
+successful HTTP response alone cannot establish the business outcome.
 
 ## Try the local example
 
@@ -84,10 +105,13 @@ explains focused checks and the browser acceptance steps.
 
 | Task | Guide |
 | --- | --- |
-| Hand work between users; test self-approval and private-resource access | [Guided examples](docs/EXAMPLES.md) |
+| Create, assign and hand work between users; exercise permission rules | [Guided examples](docs/EXAMPLES.md) |
 | Reuse a persistent profile or isolate identities | [Browser and actor sessions](docs/BROWSER-SESSIONS.md) |
 | Supply credentials from environment variables, 1Password or optional vaults | [Credentials](docs/CREDENTIALS.md) |
 | Sign in with Entra, including TOTP and first-login setup | [Entra flow](docs/ENTRA.md) |
+| Continue repeated mutations across session expiry | [Session recovery](docs/SESSION-RECOVERY.md) |
+| Shorten a flow for the operator's objective and assurance requirements | [Flow optimisation](docs/FLOW-OPTIMISATION.md) |
+| Debug flow machinery, inspect run statistics and report contract changes | [Diagnostics](docs/OBSERVABILITY.md) |
 | Inspect step screenshots, retained attempts and native Robot results | [Execution evidence](docs/OBSERVABILITY.md) |
 | Map forms, autocomplete, dates and editors | [Forms](docs/forms.md) · [React/Vue widgets](docs/REUSABLE-WIDGETS.md) |
 | Call Python or JavaScript directly | [API index](docs/API.md) |

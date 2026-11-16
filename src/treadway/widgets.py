@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .process import run_json_process
+from . import diagnostics as diag
 
 
 class WidgetOperationIncomplete(RuntimeError):
@@ -33,13 +34,14 @@ class WidgetLibrary:
                                   frameSelector=frame_selector)
         self.record_path = Path(record_path)
 
+    @diag.traced('browser', level='INFO')
     def _run(self, operation, **arguments):
-        from robot.api import logger
+        if operation != 'inspect':
+            diag.checkpoint()
         transport = run_json_process(
             ["node", str(Path(__file__).with_name("browser") / "widget-runner.js")],
             input_data=json.dumps(dict(self.configuration, operation=operation,
-                                       arguments=arguments)),
-            on_stderr=lambda line: logger.console("Widget: " + line),
+                                       arguments=arguments, _diagnostics=diag.bridge_configuration())),
             timeout_seconds=65)
         envelope = transport["payload"]
         self.last_result = envelope

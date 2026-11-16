@@ -303,3 +303,60 @@ test('TOTP staging persists privately, confirms once and refuses another identit
   assert.equal(fs.existsSync(ref), false);
   assert.throws(() => store.seedFor(ctx.email, 'OTHERSEEDVALUE'), /totp_credential_conflict/);
 });
+
+test('upstream SSO authorizes an expired app session without password or TOTP resolution',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'treadway-sso-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  let authorized=false, accounts=0, credentials=0;
+  const session={cdp:{send:async method=>{
+    if(method==='Page.navigate'){authorized=true;return {};}
+    return {result:{value:ARRIVED}};
+  }}};
+  const result=await new EntraLogin(session,{appOrigin:APP,evidenceRoot:dir,
+    account:async()=>{accounts++;return {username:'member@example.invalid'};},
+    credentials:async()=>{credentials++;throw new Error('password provider unavailable');},
+    verifyPrincipal:async()=>authorized?{state:'valid',principal:{id:'member'}}:{state:'invalid'},
+    beforeSubmit:async()=>{throw new Error('must not submit credentials');}}).run();
+  assert.equal(result.status,'verified',JSON.stringify(result));
+  assert.equal(accounts,1);assert.equal(credentials,0);
+});
+
+test('foreign challenge and password screens never resolve lazy credential sources',async()=>{
+  for(const kind of ['totp','password']) {
+    const io=fake(foreign(kind==='totp'?CODE:PW));let reads=0;
+    io.challenge=async()=>{reads++;};io.password=async()=>{reads++;return 'private';};
+    if(kind==='totp')await assert.rejects(runPrep(io,ctx),stops('untrusted_idp_origin'));
+    else await assert.rejects(runFinish(io,ctx),stops('untrusted_idp_origin'));
+    assert.equal(reads,0);
+  }
+});
+
+test('lazy credential resolution restores the failing flow phase',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'treadway-lazy-phase-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const purposes=[];
+  const session={cdp:{send:async(method,options)=>{
+    if(method==='Page.captureScreenshot')return {data:Buffer.from('synthetic-image').toString('base64')};
+    const expression=options.expression||'';
+    if(expression.includes('const b='))return expression.includes('let es=')?{result:{}}:{result:{value:{ok:true}}};
+    if(!expression.includes('const inspect='))return {result:{value:{ready:true}}};
+    return {result:{value:{...PW,documentId:'synthetic-document'}}};
+  }}};
+  const receipt=await new EntraLogin(session,{appOrigin:APP,evidenceRoot:dir,
+    account:async()=>({username:ctx.email}),
+    credentials:async purpose=>{purposes.push(purpose);return {username:ctx.email,password:ctx.password};},
+    verifyPrincipal:async()=>({state:'invalid'}),beforeSubmit:async()=>true}).run();
+  assert.deepEqual(purposes,['password']);
+  assert.equal(receipt.status,'browser_receipt_incomplete');
+  assert.equal(receipt.diagnostic.phase,'finish');
+});
+
+test('a redirect while resolving lazy secrets is rechecked before field entry',async()=>{
+  for(const kind of ['password','totp']) {
+    const io=fake(kind==='password'?PW:CODE);
+    io.password=async()=>{io.set(foreign(PW));return 'synthetic';};
+    io.challenge=async()=>{io.set(foreign(CODE));};
+    await assert.rejects(runPrep(io,ctx),stops('untrusted_idp_origin'));
+    assert.deepEqual(io.calls,[]);
+  }
+});

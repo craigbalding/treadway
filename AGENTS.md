@@ -1,6 +1,8 @@
 # Working on Treadway
 
-Purpose: reliable workflow execution for agents.
+Purpose: high-assurance web workflow execution for humans and agents, including
+operational automation and application testing. Preserve the operator's objective,
+required guarantees and evidence when authoring or optimising a flow.
 
 - Keep the shared library independent of any application, model provider or
   consuming service. Application-specific integrations belong outside the core.

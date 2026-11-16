@@ -1,13 +1,15 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const vm=require('node:vm');
-const {ActorBrowser}=require('../src/treadway/browser/actors.js');
-function fixture(principal='user-a') {
+const path=require('node:path');
+const {ActorBrowser}=require(path.join(process.env.FORM_BROWSER_MODULE_ROOT || path.join(__dirname,'../src/treadway/browser'),'actors.js'));
+function fixture(principal='user-a',responder=null) {
   const requests=[];
   const session={cdp:{send:async(method,params)=>{
     const context={location:{origin:'http://fixture.invalid'},AbortController,setTimeout,clearTimeout,TextDecoder,Uint8Array,
       fetch:async(path,options)=>{
         requests.push({path,options});
+        if(responder)return responder(path,options);
         return new Response(JSON.stringify(path==='/session'?{principal}:{error:'self_approval'}),{status:path==='/session'?200:403});
       }};
     return {result:{value:await vm.runInNewContext(params.expression,context)}};
@@ -37,4 +39,44 @@ test('truncated responses remain incomplete rather than proving denial',async()=
   const {browser}=fixture();browser.maxBodyBytes=1;
   const result=await browser.request('/approve',{verify:false});
   assert.equal(result.complete,false);assert.equal(result.bodyTruncated,true);
+});
+
+test('failed principal probe retains phase, response and identity distinction',async()=>{
+  for(const [principal,state] of [['user-b','wrong'],[null,'unknown']]) {
+    const {browser}=fixture(principal);
+    await assert.rejects(browser.request('/approve',{method:'POST'}),error=>{
+      assert.equal(error.observation.phase,'probe');
+      assert.equal(error.observation.principalState,state);
+      assert.equal(error.observation.probeObservation.status,200);
+      assert.equal(error.observation.probeObservation.body.principal,principal);
+      return error.observation.dispatched===false;
+    });
+  }
+});
+
+test('401 headers and partial body survive a principal-probe body deadline',async()=>{
+  const {browser,requests}=fixture('user-a',(path,options)=>new Response(new ReadableStream({start(controller){
+    controller.enqueue(new TextEncoder().encode('{"error":"expired"'));
+    options.signal.addEventListener('abort',()=>controller.error(new DOMException('stalled','AbortError')));
+  }}),{status:401}));
+  await assert.rejects(browser.request('/approve',{method:'POST',timeoutMs:20}),error=>{
+    const observation=error.observation;
+    assert.equal(observation.dispatched,false);
+    assert.equal(observation.probeObservation.status,401);
+    assert.equal(observation.probeObservation.complete,false);
+    assert.equal(observation.probeObservation.text,'{"error":"expired"');
+    return true;
+  });
+  assert.equal(requests.length,1);
+});
+
+test('wrong identity dominates absent fields regardless of expectation order',async()=>{
+  for(const expected of [{'tenant.id':'tenant','user.id':'expected'},{'user.id':'expected','tenant.id':'tenant'}]) {
+    const {browser,requests}=fixture(null,()=>new Response(JSON.stringify({user:{id:'other'}})));
+    browser.expected=expected;
+    await assert.rejects(browser.request('/approve',{method:'POST'}),error=>{
+      assert.equal(error.observation.principalState,'wrong');return true;
+    });
+    assert.equal(requests.length,1);
+  }
 });

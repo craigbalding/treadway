@@ -11,6 +11,7 @@ const {AttemptEvidence} = require('./evidence.js');
 const {ActorBrowser} = require('./actors.js');
 const {captureEvidence} = require('./capture-evidence.js');
 const {captureCookies, LIMITS: COOKIE_LIMITS} = require('./cookies.js');
+const diagnostics = require('./diagnostics.js');
 const fillSource = fs.readFileSync(path.join(__dirname, 'browser-fill.function.js'), 'utf8');
 const readinessSource = fs.readFileSync(path.join(__dirname, 'browser-readiness.function.js'), 'utf8');
 
@@ -81,7 +82,7 @@ function createPrincipalVerifier(session, {origin, actor, generation, probe, exp
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60000)
     throw new Error('bounded_principal_probe_timeout_required');
   const browser = new ActorBrowser(session, {name: actor, generation, origin, probe, expected});
-  return async () => {
+  const verify = async () => {
     const started = Date.now();
     const metadata = (value = {}, error = null) => ({
       status: Number.isInteger(value.status) && value.status >= 100 && value.status <= 599 ? value.status : null,
@@ -114,6 +115,14 @@ function createPrincipalVerifier(session, {origin, actor, generation, probe, exp
     }
     return {state: 'valid', principal, observation: safe};
   };
+  return async () => {
+    diagnostics.emit('principal_probe_started',{},'DEBUG');
+    const result = await verify();
+    diagnostics.emit('principal_probe_finished',{principal:result.state==='valid'?'expected':
+      result.state==='mismatch'?'wrong':'unknown',http_status:result.observation?.status,
+      complete:result.observation?.complete},'DEBUG');
+    return result;
+  };
 }
 
 async function bounded(callback, milliseconds, code) {
@@ -127,11 +136,12 @@ async function bounded(callback, milliseconds, code) {
 
 class EntraLogin {
   constructor(session, {appOrigin, signinUrl, idpOrigins = ['https://login.microsoftonline.com', 'https://mysignins.microsoft.com'],
-    credentials, verifyPrincipal, principal, beforeSubmit, totpStore, codeProvider, prepMs = 90000,
+    account, credentials, verifyPrincipal, principal, beforeSubmit, totpStore, codeProvider, prepMs = 90000,
     transitionMs = 30000, postSubmitMs = 150000, evidenceRoot, screenshotMask = 'none', exportCookies = false, onDiagnostic} = {}) {
     if (!verifyPrincipal && principal) verifyPrincipal = createPrincipalVerifier(session, {...principal, origin: appOrigin});
     if (!session?.cdp || !httpsOrigin(appOrigin) || !Array.isArray(idpOrigins) || !idpOrigins.length || !idpOrigins.every(httpsOrigin) ||
-        typeof credentials !== 'function' || typeof verifyPrincipal !== 'function' || typeof beforeSubmit !== 'function')
+        typeof credentials !== 'function' || account !== undefined && typeof account !== 'function'
+        || typeof verifyPrincipal !== 'function' || typeof beforeSubmit !== 'function')
       throw new Error('explicit_entra_session_origins_credentials_verifier_and_submission_guard_required');
     if (signinUrl && ![appOrigin, ...idpOrigins].includes(new URL(signinUrl).origin)) throw new Error('signin_origin_differs');
     if (![prepMs, transitionMs, postSubmitMs].every(n => Number.isSafeInteger(n) && n > 0 && n <= 300000)) throw new Error('bounded_entra_deadlines_required');
@@ -142,7 +152,7 @@ class EntraLogin {
         (typeof principal?.actor !== 'string' || !principal.actor || typeof principal?.generation !== 'string' || !principal.generation)))
       throw new Error('cookie_export_actor_generation_required');
     this.session = session;
-    this.options = {appOrigin, signinUrl: signinUrl || appOrigin, idpOrigins: [...idpOrigins], credentials, verifyPrincipal,
+    this.options = {appOrigin, signinUrl: signinUrl || appOrigin, idpOrigins: [...idpOrigins], account, credentials, verifyPrincipal,
       beforeSubmit, totpStore, codeProvider, prepMs, transitionMs, postSubmitMs, evidenceRoot, screenshotMask,
       exportCookies, cookieBinding: principal && {actor: principal.actor, generation: principal.generation},
       principalTimeoutMs: principal?.timeoutMs === undefined ? 10000 : principal.timeoutMs + 1000, onDiagnostic};
@@ -252,6 +262,7 @@ class EntraLogin {
         transitions.push({atMs: Date.now() - started, screen});
         if (transitions.length > 32) transitions.shift();
         journal.record({kind: 'screen_observed', atMs: Date.now() - started, screen: privateScreen()});
+        diagnostics.emit('browser_screen',{stage:screen.stage},'INFO');
         screenshotDue = true;
       }
       if (screenshotDue && last.ready === 'complete') await capture();
@@ -276,6 +287,10 @@ class EntraLogin {
       const entry = {operation: kind, stage: b.stage, atMs: Date.now() - started, dispatch: 'unknown'};
       if (kind !== 'readSeed') actions.push(entry);
       if (kind !== 'readSeed') journal.record({kind: 'action_started', action: entry});
+      if (kind !== 'readSeed') {
+        diagnostics.checkpoint();
+        diagnostics.emit('browser_action_started',{stage:b.stage,dispatch:'possibly_started'},'INFO');
+      }
       if (kind !== 'readSeed') screenshotDue = true;
       let result;
       try { result = await evaluate(expression, Math.min(3000, remaining)); }
@@ -287,9 +302,11 @@ class EntraLogin {
       entry.dispatch = result?.clicked === false ? 'absent' : 'acknowledged';
       if (kind !== 'readSeed') screenshotDue = true;
       if (kind !== 'readSeed') journal.record({kind: 'action_observed', action: entry});
+      if (kind !== 'readSeed') diagnostics.emit('browser_action_finished',{stage:b.stage,outcome:'completed'},'INFO');
       return kind === 'readSeed' ? remember(result?.secret) : kind === 'fill' ? result : result?.clicked ? 'clicked' : 'absent';
     };
     const finishResult = async result => {
+      diagnostics.contractMismatch(result.status);
       if (last && screenshotDue) {
         try {await capture();}
         catch {result = {...result, status: 'diagnostic_capture_incomplete'}; diagnostic.finalCapture = 'incomplete';}
@@ -315,6 +332,7 @@ class EntraLogin {
         phase = 'authentication_state';
         journal.record({kind: 'authentication_verified', reused: result.reused === true});
         journal.record({kind: 'cookie_export_started'});
+        diagnostics.emit('cookie_export_started');
         try {
           const snapshot = await captureCookies(this.session, {origin: o.appOrigin, ...o.cookieBinding});
           // Keep raw credentials exclusively in the private artifact, never the receipt.
@@ -327,11 +345,13 @@ class EntraLogin {
           result.authenticationState = {required: true, complete: true, status: 'captured', artifact,
             cookieCount: snapshot.cookies.length, limits: snapshot.limits};
           journal.record({kind: 'cookie_export_completed', state: result.authenticationState});
+          diagnostics.emit('cookie_export_finished',{complete:true});
         } catch {
           result.status = 'authentication_state_incomplete';
           result.authenticationState = {required: true, complete: false, status: 'unknown', limits: [...COOKIE_LIMITS]};
           result.nextStep = 'Authentication was verified, but required browser state export is incomplete. Preserve the profile and retry observation/export; do not force another login.';
           journal.record({kind: 'cookie_export_incomplete', outcome: 'unknown'});
+          diagnostics.emit('cookie_export_finished',{complete:false,outcome:'unknown'},'WARNING');
         }
       }
       return finishResult(result);
@@ -369,15 +389,35 @@ class EntraLogin {
           return await finishResult({status: 'principal_not_verified', verification: existing?.state || 'unknown'});
       }
       if (o.idpOrigins.includes(initial.origin)) config.signinUrl = null;
-      phase = 'credentials'; credential = await call(() => o.credentials(), 'credential_resolution_deadline');
-      if (!credential || typeof credential.username !== 'string' || typeof credential.password !== 'string') throw new EntraStop('credentials_unavailable');
+      // New integrations identify the account without reading password/MFA sources.
+      // Legacy callbacks retain their combined interface, including redaction.
+      phase = o.account ? 'account' : 'credentials';
+      credential = await call(() => o.account ? o.account() : o.credentials(), 'credential_resolution_deadline');
+      if (!credential || typeof credential.username !== 'string' || !credential.username) throw new EntraStop('credentials_unavailable');
       remember(credential.password); remember(credential.totpSecret);
-      redactionReady = true;
+      redactionReady = !o.account;
       config.email = credential.username; config.password = credential.password; config.hasTotp = !!credential.totpSecret;
+      const loaded = new Set();
+      const load = async kind => {
+        if (!loaded.has(kind) && o.account) {
+          const previousPhase = phase;
+          phase = 'credentials';
+          const supplied = await call(() => o.credentials(kind), 'credential_resolution_deadline');
+          if (!supplied || supplied.username !== credential.username) throw new EntraStop('credential_account_differs');
+          remember(supplied.password); remember(supplied.totpSecret);
+          credential = {...credential, ...supplied}; redactionReady = true;
+          phase = previousPhase;
+        }
+        loaded.add(kind);
+        config.password = credential.password; config.hasTotp = !!credential.totpSecret;
+        if (kind === 'password' && typeof credential.password !== 'string') throw new EntraStop('credentials_unavailable');
+        return credential.password;
+      };
       const io = {
+        password: () => load('password'), challenge: stage => stage === 'totp' && o.codeProvider ? undefined : load('totp'),
         inspect, bind: (snap, bound) => {binding = {...bound, documentId: snap.documentId, origin: snap.origin, username: config.email,
           config: {appOrigin: o.appOrigin, afterPasswordSubmit: bound.afterPasswordSubmit}};},
-        waitReady: async opts => {
+        waitReady: opts => diagnostics.wait(async () => {
           const timeoutMs = Math.max(1, Math.floor(opts.timeoutMs));
           let result;
           try {result = await evaluate(`(${readinessSource})(${JSON.stringify({...opts, timeoutMs: Math.max(1, timeoutMs - 100)})})`, timeoutMs);}
@@ -390,7 +430,7 @@ class EntraLogin {
             throw new EntraStop('READINESS_TIMEOUT');
           }
           return result;
-        },
+        }),
         fill: (sel, val) => action('fill', val, sel), click: sel => action('click', null, sel),
         clickTile: email => action('tile', email), clickText: re => action('text', {source: re.source, flags: re.flags}),
         navigate: async url => {

@@ -3,9 +3,11 @@
 // independently evaluate persistence; these methods do neither.
 const {evalJS}=require('./cdp.js');
 const {FormAssessor}=require('./form-assessor.js');
+const diagnostics=require('./diagnostics.js');
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
-async function waitForObservation(description,observe,{windowMs=15000,intervalMs=150,emit=()=>{},record=()=>{}}={}){
+async function waitForObservation(...args){return diagnostics.wait(()=>observeWithinWindow(...args));}
+async function observeWithinWindow(description,observe,{windowMs=15000,intervalMs=150,emit=()=>{},record=()=>{}}={}){
   if(typeof description!=='string'||!description||typeof observe!=='function')throw new Error('explicit_observation_required');
   if(!Number.isInteger(windowMs)||windowMs<1||windowMs>120000||!Number.isInteger(intervalMs)||intervalMs<1)throw new Error('bounded_observation_window_required');
   emit('waiting',{condition:description,windowMs});

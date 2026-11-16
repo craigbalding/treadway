@@ -60,7 +60,10 @@ def test_skill_can_be_exported_independently(tmp_path):
                                            ('walkthrough', 'Hand the same item'),
                                            ('sessions', 'A profile label is not a principal'),
                                            ('credentials', 'Credentials and optional vaults'),
-                                           ('entra', 'Sign in with Microsoft Entra')])
+                                           ('entra', 'Sign in with Microsoft Entra'),
+                                           ('recovery', 'Maintain authentication during repeated mutations'),
+                                           ('diagnostics', 'Debug a flow and its machinery'),
+                                           ('optimisation', "Optimise a flow for the operator's objective")])
 def test_installed_reference_is_accessible(capsys, topic, content):
     main(['guide', topic])
     assert content in capsys.readouterr().out
@@ -164,3 +167,35 @@ def test_feedback_timeout_stops_actor_browsers_even_without_robot_teardown(tmp_p
                 for entry in owner.sessions():
                     if entry['running']:
                         owner.stop(BrowserSession(**entry['session']))
+
+
+def test_exported_recovery_walkthrough_runs_all_100_bindings_without_browser(tmp_path):
+    project = tmp_path / 'recovery walkthrough'
+    main(['new', str(project)])
+    environment = dict(os.environ)
+    environment.pop('CHROME_BIN', None)
+    environment.pop('ROBOT_OPTIONS', None)
+    result = subprocess.run([sys.executable, '-m', 'robot', '--pythonpath', '.',
+        '--outputdir', 'artifacts/recovery', '--log', 'NONE', '--report', 'NONE', 'session_recovery.robot'],
+        cwd=project, env=environment, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    import json
+    receipts = list((project/'artifacts').glob('session-recovery-*/operations/*.json'))
+    records = [json.loads(path.read_text()) for path in receipts]
+    assert len(records) == 100 and all(r['state'] == 'confirmed' for r in records)
+    assert sum(r['dispatches'] for r in records) == 100
+    assert sum(r['renewals'] for r in records) == 1
+    assert not list(project.rglob('DevToolsActivePort'))
+
+
+def test_export_omits_runtime_state_and_dependencies(tmp_path):
+    from treadway.authoring import copy_new
+    source = tmp_path/'source'
+    source.mkdir()
+    (source/'flow.robot').write_text('synthetic flow')
+    for name in ('artifacts', 'node_modules', '.venv', '.git', '__pycache__'):
+        (source/name).mkdir()
+        (source/name/'state').write_text('synthetic runtime state')
+    destination = tmp_path/'export'
+    copy_new(source, destination)
+    assert [path.name for path in destination.iterdir()] == ['flow.robot']

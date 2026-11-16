@@ -224,3 +224,24 @@ JavaScript cookie export is opt-in through `exportCookies`. When using a custom
 verifier, also provide the explicit actor/generation binding in `principal`.
 Set `principal.timeoutMs` to configure the shared JavaScript probe's bounded
 observation window. The surrounding flow and phase deadlines still apply.
+
+## Upstream SSO after an application session expires
+
+The native entry point now resolves account identification separately from
+password/TOTP fields. It can follow the configured application authorization
+route and reuse upstream browser SSO without requiring an available password
+provider. Password retrieval occurs only at a trusted observed password screen;
+TOTP retrieval occurs only for a supported trusted challenge or enrollment.
+An explicitly supplied external code provider need not resolve a stored TOTP seed.
+Actual application-principal verification and complete required state export
+still apply after this authorization.
+
+JavaScript integrations use `account: async () => ({username})` together with
+`credentials: async purpose => ...`, where purpose is `password` or `totp` and
+the result includes the same username. The older combined `credentials()`
+interface remains supported; it resolves all supplied fields before sign-in.
+Use the split interface to avoid that eager resolution.
+
+This integration performs browser sign-in/SSO; it does not implement an OAuth
+refresh-token cache or an arbitrary application's refresh exchange. Configure
+those supported mechanisms through the application's [authentication owner](SESSION-RECOVERY.md).

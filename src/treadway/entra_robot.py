@@ -11,6 +11,7 @@ from robot.api.deco import keyword
 from .browsers import BrowserManager, private_json
 from .credentials import CredentialResolver
 from .process import run_json_process
+from . import diagnostics as diag
 
 
 class EntraLibrary:
@@ -27,6 +28,7 @@ class EntraLibrary:
         return self.last_result
 
     @keyword
+    @diag.traced('browser', level='INFO')
     def sign_in_with_entra(self, identity):
         """Run one bounded login, detecting MFA challenge/setup automatically.
 
@@ -34,6 +36,7 @@ class EntraLibrary:
         It never retries a login. The profile is stable for this configuration,
         application and identity; another identity gets a separate profile.
         """
+        diag.checkpoint()
         from robot.libraries.BuiltIn import BuiltIn
         self.last_result = None
         output = Path(BuiltIn().get_variable_value('${OUTPUT DIR}', str(Path.home() / '.local/state/treadway/attempts')))
@@ -51,6 +54,7 @@ class EntraLibrary:
             nonlocal phase
             phase = next_phase
             phases.append(phase)
+            diag.emit('browser_started', level='DEBUG', phase=phase)
             private_json(attempt / f'{len(phases):02d}-{phase}.json', {'phase': phase, 'state': 'started'})
 
         try:
@@ -81,6 +85,7 @@ class EntraLibrary:
                 owned = True
             enter('flow_configuration')
             payload = {'connection': {'cdpHost': '127.0.0.1', 'cdpPort': session.port, 'targetId': session.target_id},
+                       '_diagnostics': diag.bridge_configuration(),
                        'credentialSource': {'python': sys.executable, 'refs': str(refs), 'identity': identity},
                        'allowSubmission': True,
                        'totpRoot': str(root / 'totp' / binding),
@@ -134,13 +139,17 @@ class EntraLibrary:
         return receipt
 
 
-def _credential_worker(refs, identity):
+def _credential_worker(refs, identity, purpose='all'):
     """Private subprocess output, invoked lazily only after reuse is unavailable."""
     try:
         source = CredentialResolver.from_file(refs)
         actor = source.identity(identity)
-        result = {'username': source.read(identity, 'username'), 'password': source.read(identity, 'password')}
-        if 'totp_secret' in actor.credentials:
+        if purpose not in {'all', 'account', 'password', 'totp'}:
+            raise ValueError('explicit_credential_purpose_required')
+        result = {'username': source.read(identity, 'username')}
+        if purpose in {'all', 'password'}:
+            result['password'] = source.read(identity, 'password')
+        if purpose in {'all', 'totp'} and 'totp_secret' in actor.credentials:
             result['totpSecret'] = source.read(identity, 'totp_secret')
         sys.stdout.write(json.dumps(result))
         return 0
@@ -154,7 +163,7 @@ if __name__ == '__main__':
         raise SystemExit('explicit_credential_worker_arguments_required')
     try:
         request = json.load(sys.stdin)
-        status = _credential_worker(request['refs'], request['identity'])
+        status = _credential_worker(request['refs'], request['identity'], request.get('purpose', 'all'))
     except Exception:
         sys.stdout.write('{"error":"credential_resolution_incomplete"}')
         status = 1

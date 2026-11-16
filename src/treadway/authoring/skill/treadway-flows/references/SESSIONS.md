@@ -205,3 +205,10 @@ and B-owned positive controls precede those attempts. `collaborative_flow.py`
 owns domain rules and independent SQLite observations; `actors.cjs` composes
 installed session-bound browser APIs. Cleanup uses each resource creator's
 session, verifies absence independently, and stops only owned browsers.
+
+## Explicit renewal and repeated mutations
+
+For application-owned renewal and durable continuation of repeated mutations,
+see [session recovery](SESSION-RECOVERY.md). This opt-in operation preserves the
+single-dispatch HTTP transport and keeps renewal permission separate from
+mutation replay permission.

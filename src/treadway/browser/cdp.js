@@ -9,6 +9,7 @@
 const fs = require("fs");
 const path = require("path");
 const { createCdpProxy } = require("./cdp-proxy");
+const diagnostics = require('./diagnostics.js');
 
 // ---------------------------------------------------------------------------
 // CDP client wrapper (command/event multiplexer over raw WebSocket)
@@ -31,6 +32,7 @@ function makeCdpClient(ws, { commandTimeoutMs = 30000 } = {}) {
     if (!item) return; // A late reply cannot resolve a different command.
     clearTimeout(item.timer);
     pending.delete(id);
+    item.finishDiagnostic?.(error);
     if (error) item.reject(error);
     else item.resolve(result);
   }
@@ -109,7 +111,7 @@ function makeCdpClient(ws, { commandTimeoutMs = 30000 } = {}) {
           Object.assign(error, { code: "CDP_COMMAND_TIMEOUT", method, commandId: id, timeoutMs, outcome: "unknown" });
           settle(id, error);
         }, timeoutMs);
-        pending.set(id, { resolve, reject, timer, sessionId });
+        pending.set(id, { resolve, reject, timer, sessionId, finishDiagnostic:diagnostics.command(method) });
         try {
           ws.send(JSON.stringify({ id, method, params, ...(sessionId ? {sessionId} : {}) }), (error) => {
             if (error) settle(id, new Error("CDP send failed before response; command outcome unknown"));

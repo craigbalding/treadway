@@ -63,6 +63,9 @@ async function syntheticRoutes(cdp, enrollment = true) {
           if(!accepted)status=401;
           if (accepted && submission.kind === 'totp') state.authenticated = true;
           type = 'text/plain'; body = 'ok';
+        } else if (url.origin === IDP && state.sso) {
+          state.authenticated = true;status=302;body='';
+          extraHeaders=[{name:'Location',value:APP+'/home'}];
         } else if (url.origin === IDP) body = loginPage(state.enrollment);
         else {status = 404; body = 'unknown synthetic route';}
         await cdp.send('Fetch.fulfillRequest', {requestId: request.requestId, responseCode: status,
@@ -141,7 +144,10 @@ test('real sandboxed browser uses the same Entra flow for login, enrollment and 
     const suite = path.join(evidenceRoot, 'flow.robot');
     fs.writeFileSync(suite, `*** Settings ***\nLibrary    treadway.entra_robot.EntraLibrary    ${config}\n*** Test Cases ***\nReuse\n    \${result}=    Sign In With Entra    member\n    Should Be Equal    \${result}[status]    verified\n`);
     const robotOutput = path.join(evidenceRoot, 'robot');
-    await execFile(process.env.TREADWAY_PYTHON || 'python3', ['-m', 'robot', '--outputdir', robotOutput, '--output', 'output.json', suite],
+    const diagnosticRoot=path.join(evidenceRoot,'diagnostics');
+    await execFile(process.env.TREADWAY_PYTHON || 'python3', ['-m', 'robot', '--listener',
+      'treadway.diagnostics_robot.DiagnosticsListener:'+diagnosticRoot+':DEBUG:true',
+      '--outputdir', robotOutput, '--output', 'output.json', suite],
       {timeout: 20000, env: {...process.env, PYTHONPATH: path.dirname(path.dirname(browserRoot))}});
     const nativeResult = fs.readFileSync(path.join(robotOutput, 'output.json'), 'utf8');
     assert.equal(nativeResult.includes('synthetic-browser-password'), false);
@@ -190,7 +196,10 @@ test('native fresh login resolves credentials privately and exports complete bro
     const suite = path.join(evidenceRoot, 'fresh.robot');
     fs.writeFileSync(suite, `*** Settings ***\nLibrary    treadway.entra_robot.EntraLibrary    ${config}\n*** Test Cases ***\nFresh\n    \${result}=    Sign In With Entra    member\n    Should Be Equal    \${result}[status]    verified\n    Should Be True    \${result}[authenticationState][complete]\n`);
     const robotOutput = path.join(evidenceRoot, 'robot');
-    await execFile(process.env.TREADWAY_PYTHON || 'python3', ['-m', 'robot', '--outputdir', robotOutput, '--output', 'output.json', suite],
+    const diagnosticRoot=path.join(evidenceRoot,'diagnostics');
+    await execFile(process.env.TREADWAY_PYTHON || 'python3', ['-m', 'robot', '--listener',
+      'treadway.diagnostics_robot.DiagnosticsListener:'+diagnosticRoot+':DEBUG:true',
+      '--outputdir', robotOutput, '--output', 'output.json', suite],
       {timeout: 45000, env: {...process.env, PYTHONPATH: path.dirname(path.dirname(browserRoot)),
         ENTRA_BROWSER_USERNAME: 'member@example.invalid', ENTRA_BROWSER_PASSWORD: 'synthetic-browser-password',
         ENTRA_BROWSER_TOTP: 'JBSWY3DPEHPK3PXP'}});
@@ -209,5 +218,47 @@ test('native fresh login resolves credentials privately and exports complete bro
     assert.equal(snapshot.cookies.some(c=>c.name==='preference'), true);
     assert.equal(snapshot.actor, 'member');
     assert.equal(snapshot.generation, fixture.browserSession.generation);
+    const diagnosticRun=fs.readdirSync(diagnosticRoot)[0];
+    const statistics=JSON.parse(fs.readFileSync(path.join(diagnosticRoot,diagnosticRun,'summary.json')));
+    assert.equal(statistics.telemetry_complete,true,JSON.stringify(statistics));
+    assert(statistics.events.cdp_finished>0);
+    assert(statistics.events.browser_action_finished>0);
+    assert.equal(statistics.events.cookie_export_finished,1);
+    const diagnosticEvents=fs.readFileSync(path.join(diagnosticRoot,diagnosticRun,'events.jsonl'),'utf8');
+    for(const secret of ['synthetic-browser-password','JBSWY3DPEHPK3PXP','synthetic-private-token','synthetic-root-cookie'])
+      assert.equal(diagnosticEvents.includes(secret),false);
     complete = true;
+  });
+
+test('native expired app session renews via upstream SSO without password or seed access',
+  {skip:!process.env.CHROME_BIN,timeout:45000},async t=>{
+    const fixture=await widgetFixture('react');
+    const evidenceRoot=fs.mkdtempSync(path.join(os.tmpdir(),'treadway-sso-acceptance-'));
+    let complete=false;
+    t.after(async()=>{await fixture.close();if(complete)fs.rmSync(evidenceRoot,{recursive:true,force:true});
+      else t.diagnostic('Retained synthetic SSO evidence: '+evidenceRoot);});
+    const synthetic=await syntheticRoutes(fixture.session.cdp,false);synthetic.sso=true;
+    const refs=path.join(evidenceRoot,'identities.json');
+    fs.writeFileSync(refs,JSON.stringify({providers:{env:{type:'environment'}},identities:{member:{
+      expected:{'user.email':'member@example.invalid'},credentials:{
+        username:{provider:'env',name:'SSO_USERNAME'},password:{provider:'env',name:'UNAVAILABLE_SSO_PASSWORD'},
+        totp_secret:{provider:'env',name:'UNAVAILABLE_SSO_SEED'}}}}}),{mode:0o600});
+    const config=path.join(evidenceRoot,'entra.json');
+    fs.writeFileSync(config,JSON.stringify({credentials:refs,application:{origin:APP,principal_probe:'/principal',idp_origins:[IDP]},
+      browser:{root:path.join(fixture.root,'browsers'),existing_session:fixture.browserSession.name,generation:fixture.browserSession.generation}}));
+    const suite=path.join(evidenceRoot,'sso.robot');
+    fs.writeFileSync(suite,`*** Settings ***\nLibrary    treadway.entra_robot.EntraLibrary    ${config}\n*** Test Cases ***\nSSO\n    \${result}=    Sign In With Entra    member\n    Should Be Equal    \${result}[status]    verified\n    Should Be True    \${result}[authenticationState][complete]\n`);
+    const env={...process.env,PYTHONPATH:path.dirname(path.dirname(browserRoot)),SSO_USERNAME:'member@example.invalid'};
+    delete env.UNAVAILABLE_SSO_PASSWORD;delete env.UNAVAILABLE_SSO_SEED;
+    const diagnosticRoot=path.join(evidenceRoot,'diagnostics');
+    await execFile(process.env.TREADWAY_PYTHON||'python3',['-m','robot','--listener',
+      'treadway.diagnostics_robot.DiagnosticsListener:'+diagnosticRoot+':DEBUG:true',
+      '--outputdir',path.join(evidenceRoot,'robot'),suite],{timeout:30000,env});
+    assert.equal(synthetic.authenticated,true);assert.deepEqual(synthetic.submitted,[]);assert.deepEqual(synthetic.transportErrors,[]);
+    const diagnosticRun=fs.readdirSync(diagnosticRoot)[0];
+    const statistics=JSON.parse(fs.readFileSync(path.join(diagnosticRoot,diagnosticRun,'summary.json')));
+    assert.equal(statistics.telemetry_complete,true,JSON.stringify(statistics));
+    assert(statistics.events.cdp_finished>0);
+    assert.equal(statistics.events.browser_action_started||0,0);
+    complete=true;
   });

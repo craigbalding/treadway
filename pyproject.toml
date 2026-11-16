@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "treadway"
 version = "0.2.0"
-description = "Reliable workflow execution for agents"
+description = "High-assurance web workflows for humans and agents"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -23,6 +23,7 @@ dev = ["robotframework==7.5.1", "pytest>=8,<10", "ruff==0.14.8"]
 treadway = "treadway.authoring:main"
 treadway-preflight = "treadway.preflight:main"
 treadway-browser = "treadway.browsers:main"
+treadway-optimise = "treadway.optimisation:main"
 
 [tool.setuptools]
 include-package-data = false

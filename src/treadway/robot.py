@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from .process import run_json_process
+from . import diagnostics as diag
 
 
 class FormOperationIncomplete(RuntimeError):
@@ -24,12 +25,14 @@ class FormLibrary:
                                   frameSelector=frame_selector)
         self.record_path = Path(record_path)
 
+    @diag.traced('browser', level='INFO')
     def _run(self, operation, **arguments):
+        if operation in {'apply', 'attempt'}:
+            diag.checkpoint()
         command = ["node", str(Path(__file__).with_name("browser") / "form-assessor.js")]
-        from robot.api import logger
         transport = run_json_process(command,
-            input_data=json.dumps(dict(self.configuration, operation=operation, **arguments)),
-            on_stderr=lambda line: logger.console("Form: " + line), timeout_seconds=65)
+            input_data=json.dumps(dict(self.configuration, operation=operation,
+                                       _diagnostics=diag.bridge_configuration(), **arguments)), timeout_seconds=65)
         result = transport["payload"]
         self.last_result = result
         self.last_transport = transport

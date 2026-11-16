@@ -153,3 +153,16 @@ def test_private_credential_worker_resolves_only_on_explicit_invocation(tmp_path
     assert result.returncode == 1
     assert json.loads(result.stdout) == {'error': 'credential_resolution_incomplete'}
     assert not result.stderr
+
+
+def test_account_and_totp_lookup_do_not_require_or_read_password(tmp_path, monkeypatch, capsys):
+    from treadway.entra_robot import _credential_worker
+    config = configuration(tmp_path)
+    refs = json.loads(config.read_text())['credentials']
+    monkeypatch.setenv('ENTRA_TEST_USERNAME', 'member@example.invalid')
+    monkeypatch.delenv('ENTRA_TEST_PASSWORD', raising=False)
+    for purpose in ('account', 'totp'):
+        assert _credential_worker(refs, 'member', purpose) == 0
+        assert json.loads(capsys.readouterr().out) == {'username': 'member@example.invalid'}
+    assert _credential_worker(refs, 'member', 'password') == 1
+    assert json.loads(capsys.readouterr().out) == {'error': 'credential_resolution_incomplete'}

@@ -4,11 +4,12 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {connect, createCdpProxy} = require('./cdp.js');
-const {EntraLogin, totp} = require('./entra.js');
+const {EntraLogin} = require('./entra.js');
 const {EntraStop} = require('./entra-flow.js');
 const {execFile} = require('node:child_process');
+const diagnostics = require('./diagnostics.js');
 
-function resolvePrivateCredentials(source) {
+function resolvePrivateCredentials(source, purpose) {
   return new Promise((resolve, reject) => {
     const child = execFile(source.python, ['-m', 'treadway.entra_robot', '--resolve-credentials'],
       {timeout: 10000, maxBuffer: 262144}, (error, stdout) => {
@@ -16,7 +17,7 @@ function resolvePrivateCredentials(source) {
         try {resolve(JSON.parse(stdout));} catch {reject(new Error('credential_resolution_incomplete'));}
       });
     child.stdin.on('error', () => {});
-    child.stdin.end(JSON.stringify({refs: source.refs, identity: source.identity}));
+    child.stdin.end(JSON.stringify({refs: source.refs, identity: source.identity, purpose}));
   });
 }
 
@@ -70,38 +71,40 @@ function seedStore(root) {
 }
 
 async function main() {
+  const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
+  const input = JSON.parse(Buffer.concat(chunks).toString());
+  return diagnostics.withDiagnostics(input._diagnostics,()=>executeMain(input));
+}
+async function executeMain(input) {
   let session, phase = 'input';
   try {
-    const chunks = []; for await (const chunk of process.stdin) chunks.push(chunk);
-    const input = JSON.parse(Buffer.concat(chunks).toString());
     phase = 'connect';
     session = await connect(createCdpProxy(input.connection), input.connection.targetId, {commandTimeoutMs: 5000});
     phase = 'credential_store';
     const store = seedStore(input.totpRoot);
     let credentials;
-    const resolve = async () => {
+    const resolve = async (purpose = 'password') => {
       let supplied = input.credentials;
       if (!supplied && input.credentialSource) {
         const source = input.credentialSource;
         try {
-          supplied = await resolvePrivateCredentials(source);
+          supplied = await resolvePrivateCredentials(source, purpose);
         } catch {throw new EntraStop('credential_resolution_incomplete');}
       }
       if (!supplied || typeof supplied.username !== 'string') throw new EntraStop('credentials_unavailable');
       let seed;
-      try {seed = store.seedFor(supplied.username, supplied.totpSecret);}
+      try {if(purpose === 'totp')seed = store.seedFor(supplied.username, supplied.totpSecret);}
       catch (error) {
         if (['private_totp_store_required', 'totp_store_identity_differs', 'totp_credential_conflict', 'totp_enrollment_pending'].includes(error.message))
           throw new EntraStop(error.message);
         throw error;
       }
-      credentials = {...supplied, ...(seed ? {totpSecret: seed} : {})};
+      credentials = {...credentials, ...supplied, ...(seed ? {totpSecret: seed} : {})};
       return credentials;
     };
     phase = 'flow_configuration';
-    const flow = new EntraLogin(session, {...input.options, credentials: resolve,
+    const flow = new EntraLogin(session, {...input.options, account: () => resolve('account'), credentials: resolve,
       beforeSubmit: async () => input.allowSubmission === true,
-      codeProvider: () => {const seed = store.seedFor(credentials.username, credentials.totpSecret); return seed ? totp(seed) : null;},
       totpStore: store});
     phase = 'flow'; const receipt = await flow.run();
     process.stdout.write(JSON.stringify(receipt));

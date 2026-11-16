@@ -9,6 +9,20 @@ import queue
 import subprocess
 import threading
 import time
+from functools import wraps
+
+from . import diagnostics as diag
+
+
+def _trace_process(function):
+    @wraps(function)
+    def invoke(*args, **kwargs):
+        with diag.span('process') as trace:
+            result = function(*args, **kwargs)
+            trace.update(outcome='completed' if result['failure'] is None else 'unknown',
+                         exit_code=result['exitCode'])
+            return result
+    return invoke
 
 
 class JsonProcessIncomplete(RuntimeError):
@@ -30,6 +44,7 @@ def require_completed_process(result):
     return result["payload"]
 
 
+@_trace_process
 def run_json_process(command, *, input_data=None, timeout_seconds=65, on_stderr=None,
                      preserve_newlines=False):
     """Return payload, exitCode, failure and stderrLines without hiding failures.
@@ -52,6 +67,18 @@ def run_json_process(command, *, input_data=None, timeout_seconds=65, on_stderr=
     started = time.monotonic()
     result = {"payload": None, "exitCode": None, "failure": None,
               "stderrLines": [], "progressErrors": []}
+    run = diag.current_run()
+
+    def stderr_line(line):
+        line = line.rstrip('\n')
+        result['stderrLines'].append(line)
+        if run:
+            run.accept_bridge(line)
+        if on_stderr is not None:
+            try:
+                on_stderr(line)
+            except Exception as error:
+                result['progressErrors'].append(type(error).__name__)
     try:
         process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True, start_new_session=os.name == "posix")
@@ -108,12 +135,7 @@ def run_json_process(command, *, input_data=None, timeout_seconds=65, on_stderr=
             elif name == "stdout":
                 output.append(line)
             else:
-                result["stderrLines"].append(line.rstrip("\n"))
-                if on_stderr is not None:
-                    try:
-                        on_stderr(line.rstrip("\n"))
-                    except Exception as error:
-                        result["progressErrors"].append(type(error).__name__)
+                stderr_line(line)
         if result["failure"] != "process_deadline":
             remaining = max(0.001, timeout_seconds - (time.monotonic() - started))
             try:
@@ -139,7 +161,7 @@ def run_json_process(command, *, input_data=None, timeout_seconds=65, on_stderr=
         if name == "stdout" and line is not None:
             output.append(line)
         elif name == "stderr" and line is not None:
-            result["stderrLines"].append(line.rstrip("\n"))
+            stderr_line(line)
         elif name in ("pipe_error", "input_error"):
             result["failure"] = result["failure"] or name
     result["stdout"] = "".join(output)

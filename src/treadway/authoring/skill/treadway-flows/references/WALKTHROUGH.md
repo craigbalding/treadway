@@ -142,3 +142,21 @@ small local contract first, then run the affected suite. See
 [the recipes](RECIPES.md) for mapping a new component and
 [the authoring guide](AUTHORING.md) for observer visibility and intentional input
 variations. Keep application-specific selectors and semantics in the consumer.
+
+## Maintain authentication across 100 REST mutations
+
+`session_recovery.robot` runs without a browser. After exporting the project:
+
+```sh
+python -m robot --pythonpath . --outputdir artifacts/recovery session_recovery.robot
+```
+
+Open `session_recovery.py` alongside the suite. The native `FOR` supplies each
+binding to `OperationExecutor`. The fixture invalidates its application session
+after write 37; the declared authentication owner renews that same HTTP session.
+Write 63 commits but loses its acknowledgement. An independent SQLite observer
+confirms it, so the executor does not repeat the write. The final keyword requires
+100 distinct persisted records, exactly 100 writes and one refresh. Reentering
+binding 38 returns its previous completion receipt without target traffic.
+See [session recovery](SESSION-RECOVERY.md) before adapting the owner or replay
+contract to an application.

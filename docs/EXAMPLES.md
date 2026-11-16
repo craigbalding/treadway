@@ -29,3 +29,7 @@ The exported `.agents/skills/treadway-flows/` gives agents the same walkthroughs
 and authoring references. See [setup and authoring](AUTHORING.md) and
 [the feedback loop](FAST-FEEDBACK.md).
 The [session guide](BROWSER-SESSIONS.md) explains the actor examples and APIs.
+
+For session expiry during repeated REST mutations, run the shipped
+`session_recovery.robot` suite. The [recovery walkthrough](../src/treadway/authoring/skill/treadway-flows/references/SESSION-RECOVERY.md)
+uses a disposable local application and requires no browser or external service.

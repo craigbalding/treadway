@@ -65,6 +65,15 @@ async function waitFor(io, predicate, timeoutMs) {
 }
 
 const BODY = `((document.body&&document.body.innerText)||'')`;
+function nextStagePredicate(ctx, previous) {
+  // Use the same classifier for progress: SSO may bypass password entirely.
+  return `(()=>{const has=(inputs,pred)=>(inputs||[]).some(pred);const classify=${classifyStage.toString()};
+    const visible=e=>!!e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';
+    const stage=classify({origin:location.origin,path:location.pathname,body:${BODY},
+      inputs:[...document.querySelectorAll('input')].filter(visible).map(e=>({type:e.type,name:e.name,id:e.id,im:e.getAttribute('inputmode')})),
+      links:[...document.querySelectorAll('button,a,[role=button],input[type=submit]')].filter(visible).map(e=>({id:e.id,txt:e.innerText||e.value||''}))},
+      ${JSON.stringify({appOrigin:ctx.appOrigin})});return stage!=='unknown'&&stage!==${JSON.stringify(previous)};})()`;
+}
 const P = {
   passwordAppeared: `!!document.querySelector('input[name=passwd]')`,
   leftPassword: rh => `location.host===${JSON.stringify(rh)} || !document.querySelector('input[name=passwd]') || /account or password is incorrect|didn.?t work|verify your identity|enter the code|authenticator app|stay signed in|pick an account/i.test(${BODY})`,
@@ -75,6 +84,7 @@ const P = {
 async function runPrep(io, ctx) {
   const out = { phase: 'prep', steps: [] };
   const deadline = io.now() + (ctx.prepMs || 90000);
+  const completed = new Set();
   if (ctx.signinUrl) await io.navigate(ctx.signinUrl);
   while (io.now() < deadline) {
     try {
@@ -84,10 +94,15 @@ async function runPrep(io, ctx) {
     const stage = classifyStage(snap, ctx);
     if (STOP_STAGES.has(stage)) return { ...out, status: 'blocked', stage };
     if (stage === 'app_host') return { ...out, status: 'already_app' };
-    if (stage === 'totp' || stage === 'kmsi' || stage.startsWith('registration_'))
+    if (stage === 'totp' || stage === 'kmsi' || stage.startsWith('registration_')) {
+      await current(io, ctx, stage, deadline);
+      if (stage !== 'kmsi') await io.challenge?.(stage);
+      await current(io, ctx, stage, deadline);
       return { ...out, status: 'challenge', stage };
+    }
 
     if (stage === 'email') {
+      if (completed.has(stage)) return { ...out, status: 'email_revisited' };
       out.steps.push('email');
       await ready(io, ['input[name=loginfmt]'], deadline);
       await current(io, ctx, stage, deadline);
@@ -99,8 +114,10 @@ async function runPrep(io, ctx) {
         const c = await io.click(SUBMIT);
         if (c === 'uncertain') return { ...out, status: 'email_submit_uncertain' };  // ack lost -> stop
         if (c === 'absent') return { ...out, status: 'email_next_absent' };
-        // Observe the SPECIFIC expected transition: the password field appears.
-        advanced = await waitFor(io, P.passwordAppeared, Math.min(ctx.transitionMs || 30000, deadline - io.now()));
+        completed.add(stage);
+        // SSO may advance directly to a challenge or the application.
+        advanced = await waitFor(io, nextStagePredicate(ctx, 'email'),
+          Math.min(ctx.transitionMs || 30000, deadline - io.now()));
         if (advanced) break;
         const b = (await io.inspect()).body || '';
         if (/doesn.?t exist|couldn.?t find|can.?t find an account|no account/i.test(b))
@@ -115,12 +132,14 @@ async function runPrep(io, ctx) {
     }
 
     if (stage === 'picker') {
+      if (completed.has(stage)) return { ...out, status: 'picker_revisited' };
       out.steps.push('picker');
       await current(io, ctx, stage, deadline);
       const c = await io.clickTile(ctx.email);
       if (c === 'uncertain') return { ...out, status: 'picker_uncertain' };
       if (c === 'absent') return { ...out, status: 'picker_no_tile' };
-      if (!await waitFor(io, P.passwordAppeared + ` || location.origin===${JSON.stringify(ctx.appOrigin)}`, Math.min(ctx.transitionMs || 30000, deadline - io.now())))
+      completed.add(stage);
+      if (!await waitFor(io, nextStagePredicate(ctx, 'picker'), Math.min(ctx.transitionMs || 30000, deadline - io.now())))
         return { ...out, status: 'picker_no_transition' };          // stop, do not re-click
       continue;
     }
@@ -128,6 +147,8 @@ async function runPrep(io, ctx) {
     if (stage === 'password') {
       if (!requireIdp(snap, ctx)) return { ...out, status: 'untrusted_idp_origin', origin: snap && snap.origin };
       await ready(io, ['input[name=passwd]'], deadline);
+      await current(io, ctx, stage, deadline);
+      if (io.password) ctx.password = await io.password();
       await current(io, ctx, stage, deadline);
       await io.fill('input[name=passwd]', ctx.password);
       await ready(io, [SUBMIT], deadline);
@@ -153,6 +174,8 @@ async function runFinish(io, ctx) {
   let snap = await io.inspect();
   const firstStage = classifyStage(snap, ctx);
   if (firstStage === 'password') {
+  await current(io, ctx, 'password', deadline);
+  if (io.password) ctx.password = await io.password();
   await current(io, ctx, 'password', deadline);
   await io.fill('input[name=passwd]', ctx.password);                       // recheck equality
   await ready(io, [SUBMIT], deadline);
@@ -191,6 +214,8 @@ async function runFinish(io, ctx) {
     if (st === 'locked' || st === 'password_change')
       return { ...out, status: 'blocked', stage: st };
     if (st.startsWith('registration_')) {
+      await current(io, ctx, st, deadline, true);
+      await io.challenge?.(st);
       if (!io.stageTotp || !io.confirmTotp) return { ...out, status: 'totp_store_required', stage: st };
       if (ctx.hasTotp && !registration.secret) return { ...out, status: 'existing_totp_registration_conflict', stage: st };
       await current(io, ctx, st, deadline, true);
@@ -234,6 +259,8 @@ async function runFinish(io, ctx) {
     if (st === 'totp' && !totpSubmitted) {
       if (!requireIdp(snap, ctx)) return { ...out, status: 'untrusted_idp_origin', origin: snap && snap.origin };
       if (io.now() >= deadline) return { ...out, status: 'totp_deadline' };
+      await current(io, ctx, st, deadline, true);
+      await io.challenge?.(st);
       await ready(io, ['input[type=tel],input[type=text]'], deadline);
       const left = 30 - (Math.floor(io.now() / 1000) % 30);
       if (left < 6) {

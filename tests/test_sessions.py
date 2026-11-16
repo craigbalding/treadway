@@ -57,7 +57,7 @@ def test_cookie_jars_are_separate_and_wrong_actor_never_dispatches(app):
     a, b = [HttpSession(actor=name, origin=origin) for name in ("a", "b")]
     a.request("/login")
     assert a.attempt("/resource", probe="/session", expected={"principal": "a"}).status == 200
-    with pytest.raises(RuntimeError, match="principal_differs"):
+    with pytest.raises(RuntimeError, match="principal_unknown"):
         b.attempt("/resource", probe="/session", expected={"principal": "a"})
     assert [path for path, _ in calls].count("/resource") == 1
     assert b.request("/session").json() == {"principal": None}
@@ -113,3 +113,61 @@ def test_partial_http_response_and_credential_errors_never_look_complete(app):
         with pytest.raises(ValueError, match="same_origin"):
             session.request(path)
     assert len(calls) == 1
+
+
+def test_failure_retains_probe_and_distinguishes_missing_from_wrong(app):
+    from treadway.sessions import HttpFailure
+    origin, calls = app
+    session = HttpSession(actor='a', origin=origin)
+    with pytest.raises(HttpFailure) as failure:
+        session.attempt('/resource', probe='/blocked', expected={'principal': 'a'})
+    assert failure.value.phase == 'probe'
+    assert failure.value.dispatch == 'not_started'
+    assert failure.value.observation.status == 428
+    assert failure.value.observation.header('X-Trace') == 'first'
+    with pytest.raises(HttpFailure) as failure:
+        session.attempt('/resource', probe='/session', expected={'principal': 'a'})
+    assert failure.value.principal == 'unknown'  # explicit null requires app classification
+    assert all(path != '/resource' for path, _ in calls)
+
+
+def test_header_acquisition_once_and_failed_prerequisite_never_dispatches(app):
+    from treadway.sessions import HttpFailure
+    origin, calls = app
+    reads = []
+    session = HttpSession(actor='a', origin=origin,
+                          credential_headers=lambda: reads.append(True) or {})
+    session.request('/login')
+    reads.clear()
+    session.attempt('/resource', probe='/session', expected={'principal': 'a'})
+    assert reads == [True]
+    def refuse():
+        raise RuntimeError('private prerequisite detail')
+    with pytest.raises(HttpFailure) as failure:
+        session.attempt('/resource', probe='/session', expected={'principal': 'a'}, before_dispatch=refuse)
+    assert failure.value.phase == 'prerequisite'
+    assert failure.value.dispatch == 'not_started'
+    assert failure.value.observation.status == 200
+    assert 'private prerequisite' not in str(failure.value)
+    assert [path for path, _ in calls].count('/resource') == 1
+
+
+def test_credentials_failure_is_definitely_before_dispatch(app):
+    from treadway.sessions import HttpFailure
+    origin, calls = app
+    def unavailable():
+        raise RuntimeError('secret value')
+    session = HttpSession(actor='a', origin=origin, credential_headers=unavailable)
+    with pytest.raises(HttpFailure) as failure:
+        session.request('/resource')
+    assert failure.value.phase == 'credentials' and failure.value.dispatch == 'not_started'
+    assert not calls and 'secret value' not in str(failure.value)
+
+
+def test_wrong_identity_dominates_missing_fields_in_any_order():
+    from types import SimpleNamespace
+    from treadway.sessions import principal_state
+    for values in ({'tenant.id': 'tenant', 'user.id': 'expected'},
+                   {'user.id': 'expected', 'tenant.id': 'tenant'}):
+        observation = SimpleNamespace(complete=True, status=200, json=lambda: {'user': {'id': 'other'}})
+        assert principal_state(observation, values) == 'wrong'

@@ -1,9 +1,29 @@
 ---
 name: treadway-flows
-description: Author, extend and diagnose Treadway flows using native Robot composition and shared browser operations. Use for Treadway adapters, widget mappings, persistence checks and flow regressions.
+description: Author, diagnose and optimise high-assurance web workflows for the operator's objective using native Robot composition and shared operations. Use for operational automation, application testing, adapters, persistence and recovery.
 ---
 
 # Treadway flow authoring
+
+Establish the operator's objective and required assurance: performing work and
+testing application behaviour are both supported. Use the intended identities,
+preserve transaction state and retain evidence of the actual outcome. Application
+bindings define the business rules and authoritative observers.
+
+To optimise an existing flow, use [objective-directed optimisation](references/OPTIMISATION.md).
+First establish what the operator wants to accomplish and the required guarantees
+and evidence. For testing, identify the specific behaviour and boundary under
+test. Reuse proven application knowledge to omit unnecessary work. Keep
+intentional negative inputs and session conditions; a faster execution that
+changes the objective is not a valid candidate. Produce ordinary Python/Robot
+code, named evidence obligations and a measured comparison. The offline helpers
+analyse retained records; they never execute a proposed flow.
+
+For live flow/machinery diagnostics, run statistics and material contract changes,
+use [the diagnostics guide](references/DIAGNOSTICS.md). Enable one run scope or
+native Robot listener. Inspect observed facts and private evidence; a timeout
+alone does not prove the application changed. Keep uncertain effects unresolved
+until the calibrated observer establishes them.
 
 Reuse an existing calibrated domain keyword when it already expresses the intent.
 A new scenario can often be only a `.robot` file. For a new operation, keep its
@@ -44,6 +64,13 @@ For Microsoft Entra sign-in, use the [shared login flow](references/ENTRA.md).
 Configure application and identity bindings; one entry point detects session
 reuse, password, TOTP and first-login setup. Preserve complete required state
 and first-attempt evidence. Do not force a fresh login to trigger state export.
+
+For repeated authenticated REST mutations, use the [recovery guide](references/SESSION-RECOVERY.md)
+and `session_recovery.robot`. Configure the application's authentication owner;
+keep IdP and application renewal separate. Reuse its SDK's credential acquisition.
+Do not infer refresh endpoints, treat a 401 as replay permission, overwrite newer
+HTTP state with an old browser export, or repair original resource bindings.
+Use stable operation IDs and explicit effect reconciliation for uncertain writes.
 
 Establish and verify the normal application flow before deriving testing
 variations. Keep reusable execution mechanics in the shared flow and put the

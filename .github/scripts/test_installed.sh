@@ -30,5 +30,6 @@ python run.py check
 for suite in flow.robot handoff.robot collaboration.robot; do
   python run.py test --suite "$suite"
 done
+python -m robot --pythonpath . --outputdir artifacts/session-recovery session_recovery.robot
 # Leave scratch in place on failure so the runner log identifies the evidence.
 rm -rf -- "$scratch"
