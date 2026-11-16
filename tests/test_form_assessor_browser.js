@@ -224,8 +224,11 @@ test('real Chromium and React form interactions', { skip: !enabled, timeout:6000
       await reset();
       const suite=path.join(root,'adapter.robot'),journal=path.join(root,'attempts.jsonl');
       fs.writeFileSync(suite,`*** Settings ***\nLibrary    treadway.robot.FormLibrary    127.0.0.1    ${port}    ${target.id}    ${journal}    scope=#application\n\n*** Test Cases ***\nObserve Draft Save\n    \${form}=    Inspect Form    redact_values=True\n    \${save}=    Get Form Action    \${form}    Save draft\n    \${result}=    Attempt Form Action    \${form}    \${save}[ref]    window_ms=200\n    Should Be Equal    \${result}[actionDispatch]    dispatched\n    Should Be Equal    \${result}[completion]    unconfirmed\n    \${history}=    Read Form Attempt History\n    Should Not Be Empty    \${history}[entries]\n`);
-      const {stdout}=await promisify(execFile)(process.env.FORM_ROBOT_PYTHON,['-m','robot','--outputdir',path.join(root,'robot-output'),suite],{timeout:20000,cwd:root});
-      assert.match(stdout,/action_started/);assert.match(stdout,/action_finished/);
+      const listener=`treadway.diagnostics_robot.DiagnosticsListener:${path.join(root,'diagnostics')}:INFO`;
+      const {stdout,stderr}=await promisify(execFile)(process.env.FORM_ROBOT_PYTHON,['-m','robot','--listener',listener,'--outputdir',path.join(root,'robot-output'),suite],{timeout:20000,cwd:root});
+      assert.equal((stderr.match(/browser_action_started/g)||[]).length,1);
+      assert.equal((stderr.match(/browser_action_finished/g)||[]).length,1);
+      assert.doesNotMatch(stdout,/browser_action_(?:started|finished)/);
       const records=fs.readFileSync(journal,'utf8').trim().split('\n').map(line=>JSON.parse(line));
       assert.equal(records[0].kind,'action_intent');assert.equal(records.at(-1).kind,'action_result');
       assert.equal(fs.statSync(journal).mode&0o777,0o600);
