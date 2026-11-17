@@ -247,6 +247,8 @@ def test_profile_survives_clean_release_and_next_generation_verifies_before_retu
         with pytest.raises(BrowserStateIncomplete, match='initial_setup_required'):
             browsers.acquire_provider_identity('member', state, principal=principal)
         member = browsers.acquire_provider_identity('member', state, principal=principal, initial_setup=True)
+        engine = browsers.engine_identity(member)
+        assert len(engine['identity']) == 64 and engine['scope'] == 'connected-browser'
         command(browsers, member, 'Runtime.evaluate', {'expression': 'save:retained-profile'})
         command(browsers, member, 'Storage.setCookies', {'cookies': [{'name': 'session', 'value': 'synthetic-member'}]})
         assert browsers.verify_provider_identity(member)['verified'] is True
@@ -257,6 +259,7 @@ def test_profile_survives_clean_release_and_next_generation_verifies_before_retu
         facts = inspect_browser_run(browsers.evidence, project_id=browsers.project_id, run_id=browsers.run_id)
         assert facts['journalComplete'] is True
         assert facts['actors'][0]['mode'] == 'provider-session'
+        assert facts['actors'][0]['engineObservations'] == [{'identity': engine['identity'], 'scope': 'connected-browser'}]
         assert facts['actors'][0]['cleanup']['profileReleased'] is True
     with runtime(tmp_path) as browsers:
         member = browsers.acquire_provider_identity('member', state, principal=principal)

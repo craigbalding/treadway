@@ -163,6 +163,22 @@ class BrowserWorker {
   }
   prepareReconnect(handle, options) { return browserlessReconnect.prepare(this, this.lookup(handle), options); }
   reconnect(handle, options) { return browserlessReconnect.reconnect(this, this.lookup(handle), options); }
+  async engineIdentity(handle) {
+    const actor = this.lookup(handle);
+    if (actor.state !== 'ready' || actor.client || actor.driveLease || actor.uncertain) throw failure('remote_actor_busy');
+    const response = await actor.cdp.send('Browser.getVersion', {}, {
+      timeoutMs: Math.max(1, Math.min(this.acquireMs, Math.ceil(actor.deadline - performance.now())))});
+    if (actor.state !== 'ready' || performance.now() >= actor.deadline) throw failure('remote_engine_identity_incomplete');
+    const details = {};
+    for (const key of ['protocolVersion', 'product', 'revision', 'userAgent', 'jsVersion']) {
+      if (typeof response[key] !== 'string' || !/^[ -~]{1,2000}$/.test(response[key])) throw failure('remote_engine_identity_incomplete');
+      details[key] = response[key];
+    }
+    const identity = crypto.createHash('sha256').update(JSON.stringify(details)).digest('hex');
+    this.record({kind: 'engine_observed', actor: actor.name, generation: actor.generation, identity, details});
+    return {version: 'treadway.browser-engine-observation/1', identity, scope: 'connected-browser',
+      evidence: {reference: 'events.jsonl', actor: actor.name, generation: actor.generation}};
+  }
   detachPage(actor, sessionId) {
     const existing = actor.attachments.get(sessionId);
     if (existing?.then) return existing;
@@ -324,6 +340,9 @@ class BrowserWorker {
             }
             socket.once('close', () => { for (const remove of removers) remove(); });
             authenticated = true; socket.reconciliation = value.reconciliation === true;
+            // The handshake timer must not shorten an authenticated actor's
+            // explicit lifetime. Commands and actor teardown have their own bounds.
+            socket.setTimeout(0);
             write({ready: true, target: {id: actor.targetRef, type: 'page', browserContextId: actor.contextRef},
               capabilities: {remote: true, ownership: actor.mode, observationOnly: actor.permission === 'observe',
                 originClear: false, targetMonitoring: false, fileTransfers: false}});
@@ -410,6 +429,7 @@ async function main() {
         else if (input.operation === 'reserve') write({id: input.id, result: worker.reserve(input.connection)});
         else if (input.operation === 'unreserve') write({id: input.id, result: worker.unreserve(input.connection)});
         else if (input.operation === 'inspect') write({id: input.id, result: worker.inspect(input.connection)});
+        else if (input.operation === 'engine_identity') write({id: input.id, result: await worker.engineIdentity(input.connection)});
         else if (input.operation === 'reconcile') write({id: input.id, result: worker.reconcile(input.connection, input.arguments)});
         else if (input.operation === 'prepare_reconnect') write({id: input.id, result: await worker.prepareReconnect(input.connection, input.arguments)});
         else if (input.operation === 'reconnect') write({id: input.id, result: await worker.reconnect(input.connection, input.arguments)});

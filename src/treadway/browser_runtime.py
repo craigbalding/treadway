@@ -617,6 +617,13 @@ class BrowserRuntime:
         from .browserless_sessions import create
         return create(self, identity, ttl_seconds=ttl_seconds, headless=headless)
 
+    def engine_identity(self, session):
+        """Observe this existing remote connection's engine; never launch a probe browser."""
+        self._owned(session)
+        if session.provider != 'browserless':
+            raise ValueError('remote_engine_observation_required')
+        return self._rpc(operation='engine_identity', connection=session.connection())
+
     def acquire_provider_identity(self, actor, identity, *, principal, initial_setup=False, landing_url=None, verify_seconds=10):
         from .browserless_sessions import acquire
         return acquire(self, actor, identity, principal=principal, initial_setup=initial_setup,

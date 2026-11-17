@@ -17,6 +17,41 @@ async function owner(t, projectId = 'project-a', runId = 'run-one', options = {}
   t.after(async () => { await worker.shutdown(); fs.rmSync(root, {recursive: true, force: true}); });
   return worker;
 }
+
+test('engine observation uses the actor connection and retains private provenance without another allocation', async t => {
+  const service = await protocolFixture(t);
+  const worker = await owner(t);
+  const {connection} = await worker.acquire({actor: 'member', endpoint: service.endpoint});
+  const before = service.upgrades.length;
+  const observed = await worker.engineIdentity(connection);
+  assert.match(observed.identity, /^[a-f0-9]{64}$/);
+  assert.equal(observed.scope, 'connected-browser');
+  assert.equal(service.upgrades.length, before);
+  assert.equal((await worker.engineIdentity(connection)).identity, observed.identity);
+  const lease = worker.reserve(connection);
+  await assert.rejects(worker.engineIdentity({...connection, ...lease}), /actor_busy/);
+  worker.unreserve({...connection, ...lease});
+  service.controls.engineVersion = {protocolVersion: '1.3', product: 'Chrome/124.0.0.0',
+    revision: 'another-revision', userAgent: 'synthetic-browser', jsVersion: '12.4'};
+  assert.notEqual((await worker.engineIdentity(connection)).identity, observed.identity);
+  const events = fs.readFileSync(path.join(worker.root, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(events.filter(event => event.kind === 'engine_observed').length, 3);
+  await worker.release(connection);
+  await assert.rejects(worker.engineIdentity(connection), /actor_busy/);
+});
+
+test('authenticated attachments use the actor lifetime rather than the handshake inactivity timer', async t => {
+  const service = await protocolFixture(t);
+  const worker = await owner(t, 'project-a', 'run-one', {sessionMs: 5000});
+  const {connection} = await worker.acquire({actor: 'member', endpoint: service.endpoint});
+  const browser = await connectSession(connection);
+  t.after(() => browser.close());
+  const socket = [...worker.sockets][0];
+  assert.equal(socket.timeout, 0);
+  assert.equal(await browser.eval('read'), '');
+  await worker.release(connection);
+  assert.equal(worker.lookup(connection).state, 'released');
+});
 async function operationProcess(connection, expression) {
   const code = `const {connectSession}=require('./src/treadway/browser/connection');
     let input='';process.stdin.on('data',c=>input+=c);process.stdin.on('end',async()=>{

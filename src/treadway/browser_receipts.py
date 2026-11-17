@@ -56,7 +56,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
     issue = None
     known = {'acquisition_intent', 'context_acquired', 'profile_acquired', 'acquisition_ready', 'acquisition_incomplete',
              'cleanup_intent', 'cleanup_result', 'transport_lost', 'client_lost',
-             'command_dispatch', 'command_replied', 'command_unknown', 'application_reconciled'}
+             'command_dispatch', 'command_replied', 'command_unknown', 'application_reconciled', 'engine_observed'}
     reconnect_events = {'reconnect_prepare_intent', 'reconnect_provider_replied', 'reconnect_prepared',
         'reconnect_prepare_incomplete', 'reconnect_intent', 'reconnect_ready', 'reconnect_incomplete',
         'reconnect_principal_incomplete'}
@@ -82,7 +82,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
                 if key in actors or stopped or mode not in {'fresh', 'borrowed', 'provider-session'}:
                     raise ValueError()
                 actors[key] = {'actor': key[0], 'generation': key[1], 'mode': mode, 'allocation': 'unknown',
-                               'contextAcquired': False, 'commands': {}, 'cleanup': None, 'reconnections': []}
+                               'contextAcquired': False, 'commands': {}, 'cleanup': None, 'reconnections': [], 'engineObservations': []}
                 continue
             actor = actors[key]
             if kind in reconnect_events:
@@ -103,6 +103,16 @@ def inspect_browser_run(directory, *, project_id, run_id):
                         valid = False
                     fact.update(evidence=evidence, evidenceValid=valid)
                 actor['reconnections'].append(fact)
+            elif kind == 'engine_observed':
+                details = event['details']
+                keys = ['protocolVersion', 'product', 'revision', 'userAgent', 'jsVersion']
+                if (not isinstance(details, dict) or set(details) != set(keys)
+                        or any(not isinstance(details[key], str) or not re.fullmatch(r'[ -~]{1,2000}', details[key]) for key in keys)):
+                    raise ValueError()
+                digest = hashlib.sha256(json.dumps({key: details[key] for key in keys}, separators=(',', ':')).encode()).hexdigest()
+                if digest != event['identity']:
+                    raise ValueError()
+                actor['engineObservations'].append({'identity': digest, 'scope': 'connected-browser'})
             elif kind == 'context_acquired':
                 actor['contextAcquired'] = True
             elif kind == 'acquisition_ready':

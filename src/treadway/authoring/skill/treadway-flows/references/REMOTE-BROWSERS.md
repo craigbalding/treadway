@@ -55,6 +55,12 @@ Concurrent runs share the project identifier, while their actor generations,
 contexts and pages stay separate. Browserless credentials do not identify an
 application user. Verify the actual principal inside dependent operations.
 
+For engine provenance, explicitly call `browsers.engine_identity(member)` outside
+`drive()`. It observes the existing connection's reported product, revision,
+protocol, user-agent and JavaScript version, retains them privately, and returns
+a digest and evidence reference. It opens no probe browser. Reported metadata
+does not attest the provider's binary or deployment configuration.
+
 ## Run the generated example remotely
 
 The generated project still runs its own disposable app and observes its local
@@ -74,6 +80,10 @@ The optimisation example accepts `--browser-config`, `--fixture-host` and
 `--browser-app-url`. Its URL may contain the literal `{port}`, which is replaced
 with each disposable fixture's selected port. Browserless must be able to reach
 those ports. Local HTTP observers continue to run from the runner.
+Browser calibration and timed runs bind their evidence to the connected engine's
+reported identity. An HTTP-only candidate records that no browser was used and
+allocates no browser just to gather metadata. Changed engine observations prevent
+reusing a browser calibration as if the environment were unchanged.
 
 ## Save a login for another run
 

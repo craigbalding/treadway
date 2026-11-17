@@ -61,7 +61,9 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true, s
         const contextId = params.browserContextId ?? browser.defaultContextId;
         if (!browser.contexts.has(contextId)) error = {code: -1, message: 'wrong context'};
         else { const targetId = 'page-'+crypto.randomUUID(); browser.targets.set(targetId, {targetId, type: 'page', browserContextId: contextId}); result = {targetId}; }
-      } else if (method === 'Target.getTargetInfo') result = {targetInfo: browser.targets.get(params.targetId)};
+      } else if (method === 'Browser.getVersion') result = controls.engineVersion || {
+        protocolVersion: '1.3', product: 'Chrome/123.0.0.0', revision: 'synthetic-revision', userAgent: 'synthetic-browser', jsVersion: '12.3'};
+      else if (method === 'Target.getTargetInfo') result = {targetInfo: browser.targets.get(params.targetId)};
       else if (method === 'Target.attachToTarget') {
         if (!browser.targets.has(params.targetId)) error = {code: -1, message: 'target gone'};
         else { const sessionId = 'attached-'+crypto.randomUUID(); browser.sessions.set(sessionId, params.targetId); result = {sessionId}; }

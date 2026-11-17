@@ -145,6 +145,14 @@ class Context:
             else:
                 self.browser_call(actor, None, self.root, operation='session')
 
+    def engine_identity(self):
+        if not self.browser_config:
+            return None
+        observations = {actor: self.manager.engine_identity(browser) for actor, browser in self.browsers.items()}
+        private_json(self.root/'engine-observations.json', observations)
+        return ({'boundary': 'browser', 'engines': sorted({value['identity'] for value in observations.values()})}
+                if observations else {'boundary': 'http', 'browser': 'not_used'})
+
     def close(self):
         errors = []
         try:
@@ -263,6 +271,8 @@ def run_sample(root, objective, variant, mode, pair, challenge, *, context=None,
                         raise RuntimeError('objective_evidence_incomplete')
                 record['fixture_counts'] = {key: context.fixture.state[key]-initial[key] for key in ('writes', 'refreshes')}
                 record['fixture_counts']['lost'] = context.fixture.state['lost'] and not initial['lost']
+                record['engine_identity'] = context.engine_identity()
+                record['implementation_digest'] = implementation_digest(context.browser_config, record['engine_identity'])
                 record['outcome'] = 'completed'
             finally:
                 if owned:
@@ -282,14 +292,14 @@ def run_sample(root, objective, variant, mode, pair, challenge, *, context=None,
     return directory, record
 
 
-def implementation_digest(browser_config=None):
+def implementation_digest(browser_config=None, engine_identity=None):
     package = Path(treadway.__file__).parent
     runtime = {str(path.relative_to(package)): hashlib.sha256(path.read_bytes()).hexdigest()
                for path in [*package.glob('*.py'), *(package/'browser').glob('*.js'), *(package/'browser').glob('package*.json')]}
     browser = None
     if browser_config:
         browser = {'configuration': hashlib.sha256(Path(browser_config).read_bytes()).hexdigest(),
-                   'engineIdentity': 'not_measured'}
+                   'engineIdentity': engine_identity if engine_identity is not None else 'not_measured'}
     elif os.environ.get('CHROME_BIN'):
         executable = Path(os.environ['CHROME_BIN']).resolve()
         stat = executable.stat()
@@ -355,6 +365,9 @@ def challenge_contracts(root, objective, subject='http', *, browser_options=None
                     'facts': {'receipt': receipt, 'writes': context.fixture.state['writes'], 'attempts': len(context.fixture.state['attempts'])}}
                 if not passed:
                     raise AssertionError('synthetic_browser_challenge_failed:'+name)
+            digest = implementation_digest(context.browser_config, context.engine_identity())
+            for gate in gates.values():
+                gate['implementation_digest'] = digest
         finally:
             context.close()
         return {'duration_ms': (time.monotonic()-tick)*1000, 'gates': gates}
@@ -407,7 +420,9 @@ def challenge_contracts(root, objective, subject='http', *, browser_options=None
             if name != 'lost-response':
                 passed = passed and fixture.state['writes'] == 0
             gates[name] = {'version': 'treadway.challenge/1', 'id': name, 'subject': subject, 'objective_digest': fingerprint(objective),
-                           'implementation_digest': implementation_digest(), 'environment': ENVIRONMENT,
+                           'implementation_digest': implementation_digest((browser_options or {}).get('browser_config'),
+                               {'boundary': 'http', 'browser': 'not_used'} if (browser_options or {}).get('browser_config') else None),
+                           'environment': ENVIRONMENT,
                            'state': 'satisfied' if passed else 'contradicted', 'complete': True,
                            'facts': {'receipt': receipt, 'writes': fixture.state['writes'], 'attempts': len(fixture.state['attempts'])}}
             if not passed:
@@ -492,13 +507,15 @@ def main(argv=None):
     profiles = [directory for directory in root.glob('*/diagnostics/*') if directory.is_dir()]
     private_json(root/'profile.json', summarise_profile(profiles))
     # Explicit provenance points at this run's observations, never at captured secrets.
-    calibrated_digest = records[0]['implementation_digest']
-    current_digest = implementation_digest(args.browser_config)
-    observed_knowledge = (all(record['outcome'] == 'completed' and record['implementation_digest'] == calibrated_digest for record in records)
+    candidate_records = [record for record in records if record['variant'] == 'candidate']
+    calibrated = candidate_records[0]
+    calibrated_digest = calibrated['implementation_digest']
+    current_digest = implementation_digest(args.browser_config, calibrated.get('engine_identity'))
+    observed_knowledge = (all(record['outcome'] == 'completed' and record['implementation_digest'] == calibrated_digest for record in candidate_records)
                           and current_digest == calibrated_digest)
     private_json(root/'knowledge.json', {'version': 'treadway.knowledge/1', 'application': ENVIRONMENT,
         'scope': 'owned-fixture', 'calibrated_at': datetime.now(timezone.utc).isoformat(),
-        'implementation_digest': calibrated_digest, 'claims': [
+        'implementation_digest': calibrated_digest, 'engine_identity': calibrated.get('engine_identity'), 'claims': [
             {'operation': 'owner-write' if args.objective == 'persistence' else 'browser-owner-validation',
              'state': 'observed' if observed_knowledge else 'unverified',
              'mapping': 'optimisation_fixture.OwnerFixture.executor' if args.objective == 'persistence' else 'optimisation_browser.execute',

@@ -26,6 +26,46 @@ def example(tmp_path, monkeypatch):
     return module, project
 
 
+def test_remote_http_candidate_and_its_challenges_share_provenance_without_starting_a_browser(example, tmp_path, monkeypatch):
+    module, project = example
+    config = project/'browser.json'
+    config.write_text(json.dumps({'browser': {'provider': 'browserless', 'endpoint_env': 'TREADWAY_UNUSED_REMOTE_URL'}}))
+    monkeypatch.delenv('TREADWAY_UNUSED_REMOTE_URL', raising=False)
+    monkeypatch.setattr(module.BrowserRuntime, '_start_worker', lambda *args, **kwargs: pytest.fail('HTTP candidate started a browser worker'))
+    objective = module.testing_objective('persistence', 1)
+    options = {'browser_config': config}
+    gates = module.challenge_contracts(tmp_path/'challenges', objective, browser_options=options)
+    _, record = module.run_sample(tmp_path/'samples', objective, 'candidate', 'cold', 'sample-1', gates, browser_options=options)
+    assert record['outcome'] == 'completed'
+    assert record['engine_identity'] == {'boundary': 'http', 'browser': 'not_used'}
+    assert {gate['implementation_digest'] for gate in gates['gates'].values()} == {record['implementation_digest']}
+
+
+def test_remote_engine_drift_changes_the_calibration_binding(example):
+    module, project = example
+    config = project/'browser.json'
+    config.write_text('{"browser":{"provider":"browserless","endpoint_env":"TREADWAY_UNUSED_REMOTE_URL"}}')
+    first = {'boundary': 'browser', 'engines': ['1'*64]}
+    changed = {'boundary': 'browser', 'engines': ['2'*64]}
+    assert module.implementation_digest(config, first) != module.implementation_digest(config, changed)
+    assert module.implementation_digest(config, first) != module.implementation_digest(config)
+
+
+def test_same_engine_across_actors_preserves_calibration_but_a_different_engine_does_not(example, tmp_path):
+    from types import SimpleNamespace
+    module, project = example
+    config = project/'browser.json'
+    config.write_text('{"browser":{"provider":"browserless","endpoint_env":"TREADWAY_UNUSED_REMOTE_URL"}}')
+    context = module.Context(tmp_path/'context', 2, browser_config=config)
+    context.manager = SimpleNamespace(engine_identity=lambda identity: {'identity': identity})
+    context.browsers = {'member-a': '1'*64}
+    first = context.engine_identity()
+    context.browsers['member-b'] = '1'*64
+    assert context.engine_identity() == first
+    context.browsers['member-b'] = '2'*64
+    assert context.engine_identity() != first
+
+
 def test_objective_selects_omissions_and_describe_stays_passive(example, monkeypatch):
     module, project = example
     monkeypatch.setattr(socket, 'create_connection', lambda *a, **k: pytest.fail('passive inspection contacted application'))

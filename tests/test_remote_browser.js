@@ -133,6 +133,10 @@ try:
   item='item-1',owner='unknown-owner',revision=1,objective='validation',direct=True)
  assert refused['validation']=='Unknown owner' and refused['dispatched'] is False
  assert context.fixture.state['writes']==0
+ engine=context.engine_identity()
+ assert engine['boundary']=='browser' and len(engine['engines'])==1 and len(engine['engines'][0])==64
+ from optimise_flow import implementation_digest
+ assert implementation_digest(config,engine)!=implementation_digest(config,{'boundary':'http','browser':'not_used'})
 finally:
  context.close()
 print(json.dumps(result))
