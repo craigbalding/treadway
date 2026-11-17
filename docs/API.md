@@ -1,7 +1,7 @@
 # API index
 
 Python modules live under `treadway`; CommonJS browser modules ship under
-`treadway/browser`. [Installation](INSTALLING.md) covers their Node dependency.
+`treadway/browser`. [Installation](INSTALLING.md) covers their Node dependencies.
 Choose the task guide for a working example, or the reference for exact contracts.
 
 ## Browser operations

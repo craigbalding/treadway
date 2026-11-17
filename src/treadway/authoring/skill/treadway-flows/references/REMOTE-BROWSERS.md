@@ -19,8 +19,13 @@ query parameters and authentication are preserved. Optional `headers_env` names
 an environment variable containing a JSON object of handshake headers. Never put
 the actual URL or header values in source, Robot arguments or logs.
 
-Remote connections use the configured HTTP proxy. TLS verification and configured
-CAs remain enabled. The remote browser needs its own route to your application;
+Remote connections respect `HTTP_PROXY` for WS/HTTP endpoints and `HTTPS_PROXY`
+for WSS/HTTPS endpoints, with standard `NO_PROXY` and `ALL_PROXY` handling from
+`proxy-from-env`. Selected HTTP and HTTPS proxies use CONNECT; an unsuccessful
+proxy attempt never falls back to direct access. With no applicable proxy, normal
+direct connections are supported. Loopback endpoints retain their local route.
+TLS verifies the supplied endpoint's host and configured CAs. The remote browser
+needs its own route to your application;
 your runner's loopback address is not generally reachable from Browserless.
 
 ## Drive an actor

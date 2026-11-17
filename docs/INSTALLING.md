@@ -21,7 +21,7 @@ python run.py check
 ```
 
 Expect `"passed": true`. The Python wheel includes browser-control JavaScript;
-`npm ci` installs its locked `ws` dependency. Repeat that step after upgrading the
+`npm ci` installs its locked `ws` and `proxy-from-env` dependencies. Repeat that step after upgrading the
 wheel. Python installation alone does not install Node or Chrome.
 
 Then [run the browser example](EXAMPLES.md). If Node reports `Cannot find module

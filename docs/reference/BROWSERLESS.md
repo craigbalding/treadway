@@ -217,10 +217,12 @@ Robot arguments/reports, diagnostics, exception strings, receipts or argv. Displ
 a configured safe alias, protocol, phase and structured error code. Sanitization
 includes upstream error bodies, WebSocket close reasons and nested transport errors.
 
-Use the existing remote HTTP-proxy requirement. Extend `cdp-proxy.js` for full
-`ws`/`wss` URLs, HTTPS where later management APIs require it, CONNECT, TLS hostname
-verification and the configured CA environment. TLS goes through the tunnel with the
-endpoint hostname as SNI. Remote policy failures do not authorize direct access,
+Use `proxy-from-env` for standard HTTP/HTTPS proxy selection, exclusions and
+environment precedence. With no applicable proxy, direct connections are supported.
+Retain Node's bounded HTTP CONNECT parser and TLS implementation for HTTP/HTTPS
+proxies, exact endpoint hostname verification and the configured CA environment.
+DNS endpoints use their hostname as SNI; numeric endpoints use IP-SAN verification
+without IP SNI. Remote policy failures do not authorize a fallback to direct access,
 disabled verification, changed proxy settings or a local browser fallback. Redirects are
 disabled by default. Provider-returned URLs need an explicit accepted authority policy,
 including approved fleet hosts; never forward credentials to an arbitrary returned

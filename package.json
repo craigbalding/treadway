@@ -15,6 +15,7 @@
     "test:browserless:service": "node --test tests/test_browserless_service.js"
   },
   "dependencies": {
+    "proxy-from-env": "2.1.0",
     "ws": "8.22.1"
   },
   "devDependencies": {

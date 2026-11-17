@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "dependencies": {
+    "proxy-from-env": "2.1.0",
     "ws": "8.22.1"
   },
   "engines": {

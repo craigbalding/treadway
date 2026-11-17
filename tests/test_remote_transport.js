@@ -9,7 +9,8 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const {once} = require('node:events');
 const {WebSocketServer} = require('ws');
-const {connectEndpoint, parseEndpoint, handshakeHeaders} = require('../src/treadway/browser/remote-transport');
+const browserRoot = process.env.FORM_BROWSER_MODULE_ROOT || path.join(__dirname, '../src/treadway/browser');
+const {connectEndpoint, parseEndpoint, selectProxy, handshakeHeaders} = require(path.join(browserRoot, 'remote-transport'));
 
 async function listen(t, server) {
   const sockets = new Set();
@@ -18,18 +19,18 @@ async function listen(t, server) {
   t.after(async () => { for (const socket of sockets) socket.destroy(); await new Promise(resolve => server.close(resolve)); });
   return server;
 }
-function certificate(t) {
+function certificate(t, san = 'DNS:browser.invalid,DNS:localhost,IP:127.0.0.1') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-transport-'));
   t.after(() => fs.rmSync(root, {recursive: true, force: true}));
   const key = path.join(root, 'key.pem'), cert = path.join(root, 'cert.pem');
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1',
     '-keyout', key, '-out', cert, '-subj', '/CN=browser.invalid',
-    '-addext', 'subjectAltName=DNS:browser.invalid,DNS:localhost,IP:127.0.0.1'], {stdio: 'ignore'});
+    '-addext', 'subjectAltName='+san], {stdio: 'ignore'});
   return {key: fs.readFileSync(key), cert: fs.readFileSync(cert)};
 }
-async function proxy(t, destination) {
+async function proxy(t, destination, tlsKeys) {
   const seen = [];
-  const server = await listen(t, http.createServer());
+  const server = await listen(t, tlsKeys ? https.createServer(tlsKeys) : http.createServer());
   server.on('connect', (request, socket, head) => {
     seen.push({authority: request.url, auth: request.headers['proxy-authorization']});
     const upstream = net.connect(destination.address().port, '127.0.0.1', () => {
@@ -40,7 +41,7 @@ async function proxy(t, destination) {
     socket.on('error', () => upstream.destroy()); socket.on('close', () => upstream.destroy());
     upstream.on('error', () => socket.destroy());
   });
-  return {seen, url: `http://fixture-user:fixture-pass@127.0.0.1:${server.address().port}`};
+  return {seen, url: `${tlsKeys ? 'https' : 'http'}://fixture-user:fixture-pass@127.0.0.1:${server.address().port}`};
 }
 
 test('scheme conversion preserves opaque prefix and repeated encoded query; configuration is passive', () => {
@@ -54,7 +55,93 @@ test('scheme conversion preserves opaque prefix and repeated encoded query; conf
   }
   assert.throws(() => handshakeHeaders({Authorization: 'one', authorization: 'two'}), /remote_headers_invalid/);
   assert.throws(() => handshakeHeaders({Host: 'other.invalid'}), /remote_headers_invalid/);
-  assert.throws(() => connectEndpoint('wss://browser.invalid/?token=synthetic', {proxyUrl: ''}), /remote_http_proxy_required/);
+  assert.throws(() => connectEndpoint('wss://browser.invalid/?token=synthetic', {proxyUrl: ''}), /remote_proxy_invalid/);
+});
+
+test('environment routing delegates HTTP(S) semantics and can select direct without changing the process environment', () => {
+  const requested = [];
+  const resolveProxy = url => { requested.push(url); return ''; };
+  assert.equal(selectProxy(new URL('wss://browser.invalid/opaque?token=synthetic'), {resolveProxy}), null);
+  assert.equal(selectProxy(new URL('ws://browser.invalid/opaque'), {resolveProxy}), null);
+  assert.deepEqual(requested, ['https://browser.invalid/opaque?token=synthetic', 'http://browser.invalid/opaque']);
+  const selected = selectProxy(new URL('ws://127.0.0.1:1'), {proxyUrl: 'https://proxy.invalid:8443'});
+  assert.equal(selected.protocol, 'https:');
+  assert.equal(selectProxy(new URL('wss://browser.invalid'), {resolveProxy: () => 'http://proxy.invalid'}).hostname, 'proxy.invalid');
+  for (const value of ['socks5://proxy.invalid', 'https://proxy.invalid/path', 'http://proxy.invalid/?secret=fixture']) {
+    assert.throws(() => selectProxy(new URL('wss://browser.invalid'), {proxyUrl: value}), /remote_proxy_invalid/);
+  }
+});
+
+test('proxied IP TLS verification checks the supplied IPv4 or IPv6 identity instead of localhost', async t => {
+  for (const [host, san] of [['192.0.2.123', 'IP:192.0.2.123'], ['[2001:db8::123]', 'IP:2001:db8::123']]) {
+    for (const valid of [false, true]) {
+      const keys = certificate(t, valid ? san : 'DNS:localhost');
+      const endpoint = await listen(t, https.createServer(keys));
+      const wss = new WebSocketServer({server: endpoint});
+      t.after(() => wss.close());
+      const tunnel = await proxy(t, endpoint);
+      const attempt = connectEndpoint(`wss://${host}/owned?token=synthetic`, {proxyUrl: tunnel.url, ca: keys.cert});
+      if (valid) {
+        const socket = await attempt.catch(error => assert.fail(`matching certificate rejected for ${host}: ${error.code}`));
+        socket.terminate();
+      } else {
+        await assert.rejects(attempt, error => error.code === 'remote_tls_failed' && error.allocation === 'not_dispatched');
+      }
+      assert.equal(tunnel.seen[0].authority, host+':443');
+    }
+  }
+});
+
+test('HTTPS proxy and explicit loopback routing preserve independent target authentication', async t => {
+  const keys = certificate(t);
+  const endpoint = await listen(t, https.createServer(keys));
+  const wss = new WebSocketServer({server: endpoint});
+  t.after(() => wss.close());
+  const received = [];
+  wss.on('connection', (_ws, request) => received.push(request.headers.authorization));
+  const tunnel = await proxy(t, endpoint, keys);
+  const socket = await connectEndpoint(`wss://127.0.0.1:${endpoint.address().port}/owned`, {
+    proxyUrl: tunnel.url, ca: keys.cert, headers: {Authorization: 'Bearer synthetic-target'}});
+  assert.deepEqual(received, ['Bearer synthetic-target']);
+  assert.equal(tunnel.seen[0].auth, 'Basic '+Buffer.from('fixture-user:fixture-pass').toString('base64'));
+  socket.terminate();
+});
+
+test('HTTPS proxy identity is checked independently of the requested target', async t => {
+  const keys = certificate(t, 'DNS:browser.invalid');
+  const endpoint = await listen(t, https.createServer(keys));
+  const wss = new WebSocketServer({server: endpoint});
+  t.after(() => wss.close());
+  const tunnel = await proxy(t, endpoint, keys);
+  await assert.rejects(connectEndpoint('wss://browser.invalid/owned?token=synthetic', {proxyUrl: tunnel.url, ca: keys.cert}),
+    error => error.code === 'remote_proxy_failed' && error.phase === 'proxy' && error.allocation === 'not_dispatched');
+  assert.equal(tunnel.seen.length, 0);
+});
+
+test('oversized CONNECT headers and aborted pending CONNECT close their sockets within the attempt', {timeout: 5000}, async t => {
+  let connects = 0;
+  const oversized = await listen(t, http.createServer());
+  oversized.on('connect', (_request, socket) => {
+    connects++; socket.on('end', () => socket.end());
+    socket.write('HTTP/1.1 200 Connection Established\r\nX-Overflow: '+'x'.repeat(20000)+'\r\n\r\n');
+  });
+  await assert.rejects(connectEndpoint('wss://browser.invalid/private?token=synthetic', {
+    proxyUrl: `http://127.0.0.1:${oversized.address().port}`}),
+  error => error.code === 'remote_proxy_failed' && error.phase === 'proxy' && error.allocation === 'not_dispatched');
+  assert.equal(connects, 1);
+  const pending = await listen(t, http.createServer());
+  let closed;
+  const arrived = new Promise(resolve => pending.once('connect', (_request, socket) => {
+    socket.on('end', () => socket.end());
+    closed = once(socket, 'close'); resolve();
+  }));
+  const controller = new AbortController();
+  const attempt = connectEndpoint('wss://browser.invalid/private?token=synthetic', {
+    proxyUrl: `http://127.0.0.1:${pending.address().port}`, signal: controller.signal});
+  await arrived;
+  controller.abort();
+  await assert.rejects(attempt, error => error.code === 'remote_connect_cancelled');
+  await closed;
 });
 
 test('loopback launch preserves URL and secret headers without an HTTP discovery request', async t => {
