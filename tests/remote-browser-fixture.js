@@ -10,13 +10,24 @@ const {createCdpProxy} = require(path.join(browserRoot, 'cdp'));
 
 async function remoteBrowserFixture(framework = 'react', options = {}) {
   const fixture = await widgetFixture(framework, options);
-  const clients = new Set();
+  const clients = new Set(), connections = [];
   const relay = http.createServer();
   const sockets = new WebSocketServer({server: relay});
-  sockets.on('connection', async front => {
+  sockets.on('connection', async (front, request) => {
+    connections.push(request.url);
     clients.add(front); let upstream, pending = [];
     front.on('error', () => {});
-    front.on('message', data => upstream ? upstream.send(data.toString()) : pending.push(data));
+    front.on('message', data => {
+      if (options.reconnectSupport) {
+        const value = JSON.parse(data.toString());
+        if (value.method === 'Browserless.reconnect' && typeof value.sessionId === 'string') {
+          front.send(JSON.stringify({id: value.id, sessionId: value.sessionId,
+            result: {error: null, browserWSEndpoint: `ws://127.0.0.1:${relay.address().port}/reconnect/exact?existing=synthetic`}}));
+          return;
+        }
+      }
+      if (upstream) upstream.send(data.toString()); else pending.push(data);
+    });
     front.on('close', () => { upstream?.terminate(); clients.delete(front); });
     try {
       upstream = await createCdpProxy({cdpHost: '127.0.0.1', cdpPort: fixture.cdpPort}).cdpConnect(fixture.browserSession.browser_path);
@@ -27,7 +38,7 @@ async function remoteBrowserFixture(framework = 'react', options = {}) {
     } catch { front.terminate(); }
   });
   relay.listen(0, '127.0.0.1'); await once(relay, 'listening');
-  return {...fixture, endpoint: `http://127.0.0.1:${relay.address().port}/chromium?token=synthetic`,
+  return {...fixture, connections, endpoint: `http://127.0.0.1:${relay.address().port}/chromium?token=synthetic`,
     async close(options) {
       for (const client of clients) client.terminate();
       sockets.close(); await new Promise(resolve => relay.close(resolve));

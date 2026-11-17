@@ -2,7 +2,7 @@
 const {protocolFixture} = require('./remote-protocol-fixture');
 const cleanups = [];
 protocolFixture({after: cleanup => cleanups.push(cleanup)}, {capacity: process.argv[2] ? Number(process.argv[2]) : Infinity,
-  sharedBrowser: process.argv[3] === 'shared'}).then(fixture => {
+  sharedBrowser: ['shared', 'reconnect'].includes(process.argv[3]), reconnectSupport: process.argv[3] === 'reconnect'}).then(fixture => {
   process.stdout.write(JSON.stringify({endpoint: fixture.endpoint}) + '\n');
   process.stdin.resume();
   process.stdin.on('end', async () => { for (const cleanup of cleanups) await cleanup(); });

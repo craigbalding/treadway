@@ -255,14 +255,57 @@ implicitly. Lost transport or unconfirmed detach leaves the resource
 recovery-required; snapshot recovery cannot establish a fence for a borrowed
 browser. Do not delete its state manifest to force reuse.
 
+## Reconnect to the same live browser
+
+The run's worker already keeps a browser connected between operation processes.
+Reconnect is an optional provider feature for a deliberate disconnect or later
+transport loss. Enable it explicitly in fresh mode:
+
+```json
+{"browser":{"provider":"browserless","endpoint_env":"TREADWAY_BROWSERLESS_URL","reconnect":{"auth_env":"TREADWAY_BROWSERLESS_TOKEN"}}}
+```
+
+Omit `auth_env` when the returned URL needs no added token. When configured, the
+token is resolved only during preparation and added as a query parameter if
+absent. An existing different or duplicate token causes refusal. Returned URLs
+and provider replies stay in private run files; method results contain references.
+
+```python
+prepared = browsers.prepare_reconnect(member, timeout_seconds=30)
+# Continue the flow, or deliberately reconnect using only that capability:
+result = browsers.reconnect(member, principal=principal, timeout_seconds=10)
+```
+
+Call these outside `drive()` after closing the operation's connection. Preparation
+requires a healthy actor; it calls `Browserless.reconnect` once. Reconnect consumes
+that prepared capability once, closes the old connection, and validates the same
+context, page and actual application user before normal driving is available.
+It keeps the original generation and session deadline. Prior unknown actions stay
+quarantined; successful reconnect does not authorize replay.
+
+By default, a returned endpoint must use the original WebSocket origin. If your
+deployment returns a different routing origin, explicitly list it in
+`reconnect.allowed_origins`, for example `["wss://route.example.invalid"]`.
+TLS downgrades are refused. Original handshake headers are sent only to the
+original origin. No endpoint discovery, redirect or launch fallback is attempted.
+
+Provider support and authentication vary. An unavailable extension, missing
+capability, expired deadline, changed target or changed user stops the operation.
+Additional reconnect authentication is supported only when embedded in the
+returned URL; unrecognized contracts are refused. A prepared capability cannot
+resume a dead worker or recover a borrowed browser. These paths have been checked
+with protocol fixtures and real Chromium behind an emulated reconnect relay;
+Browserless cloud reconnect has not been verified. See the [provider's session
+contract](https://docs.browserless.io/baas/session-management/standard-sessions).
+
 ## Current capability boundaries
 
 Fresh contexts support existing page interactions, actual-user checks,
 context-scoped cookies, selected saved state and screenshots. Remote file
 transfers, origin clearing and global target monitoring are refused before
-dispatch. Borrowing requires the explicit attachment above. Reconnect and provider
-persistence require their own capabilities; they must not be inferred from a launch
-URL or a local profile flag.
+dispatch. Borrowing and reconnect require the explicit capabilities above. Provider
+persistence remains separate; it must not be inferred from a launch URL or a local
+profile flag.
 
 The client session deadline cannot extend the provider's lifetime. Cleanup reports
 context disposal separately from provider process termination. Remote Chrome

@@ -71,7 +71,8 @@ function makeCdpClient(ws, { commandTimeoutMs = 30000 } = {}) {
         if (ws.treadwayIPC && typeof msg.error.code === 'string' && /^(?:remote_|ipc_)[a-z_]+$/.test(msg.error.code)) {
           settle(msg.id, Object.assign(new Error(msg.error.code), {code: msg.error.code,
             ...(['unknown', 'not_dispatched'].includes(msg.error.outcome) ? {outcome: msg.error.outcome} : {})}));
-        } else settle(msg.id, new Error(`CDP ${msg.error.code}: ${msg.error.message}`));
+        } else settle(msg.id, Object.assign(new Error(`CDP ${msg.error.code}: ${msg.error.message}`),
+          {code: 'CDP_PROTOCOL_ERROR', protocolCode: msg.error.code}));
       } else {
         settle(msg.id, null, msg.result);
       }

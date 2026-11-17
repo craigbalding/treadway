@@ -81,7 +81,7 @@ async function principal(session, input, remaining) {
   const result = await actor.request(input.principal.probe, {verify: false, timeoutMs: Math.max(1, remaining() - 1000)});
   if (!result.complete || result.status !== 200 || !Object.entries(input.principal.expected).every(([key, expected]) => {
     let value = result.body; for (const part of key.split('.')) value = value?.[part]; return value === expected;
-  })) fail('browser_state_actual_principal_differs');
+  })) throw Object.assign(new Error('browser_state_actual_principal_differs'), {observation: result});
   return {status: result.status, observed: result.body};
 }
 async function value(session, expression, remaining) {
@@ -168,7 +168,7 @@ async function restoreState(session, snapshot, input) {
     }
   }
 }
-module.exports = {captureState, restoreState, validateSnapshot, validateBinding};
+module.exports = {captureState, restoreState, validateSnapshot, validateBinding, verifyPrincipal: principal};
 
 if (require.main === module) (async () => {
   const fs = require('node:fs'); const {connectSession} = require('./connection'); let session;

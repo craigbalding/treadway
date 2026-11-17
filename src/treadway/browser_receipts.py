@@ -56,6 +56,9 @@ def inspect_browser_run(directory, *, project_id, run_id):
     known = {'acquisition_intent', 'context_acquired', 'acquisition_ready', 'acquisition_incomplete',
              'cleanup_intent', 'cleanup_result', 'transport_lost', 'client_lost',
              'command_dispatch', 'command_replied', 'command_unknown', 'application_reconciled'}
+    reconnect_events = {'reconnect_prepare_intent', 'reconnect_provider_replied', 'reconnect_prepared',
+        'reconnect_prepare_incomplete', 'reconnect_intent', 'reconnect_ready', 'reconnect_incomplete',
+        'reconnect_principal_incomplete'}
     for line in lines[1:]:
         if not line.endswith(b'\n'):
             complete, issue = False, 'browser_run_torn_tail'
@@ -70,7 +73,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
                     raise ValueError()
                 stopped = True
                 continue
-            if kind not in known or not _identifier(event.get('actor')) or not _identifier(event.get('generation')):
+            if kind not in known | reconnect_events or not _identifier(event.get('actor')) or not _identifier(event.get('generation')):
                 raise ValueError()
             key = (event['actor'], event['generation'])
             if kind == 'acquisition_intent':
@@ -78,10 +81,28 @@ def inspect_browser_run(directory, *, project_id, run_id):
                 if key in actors or stopped or mode not in {'fresh', 'borrowed'}:
                     raise ValueError()
                 actors[key] = {'actor': key[0], 'generation': key[1], 'mode': mode, 'allocation': 'unknown',
-                               'contextAcquired': False, 'commands': {}, 'cleanup': None}
+                               'contextAcquired': False, 'commands': {}, 'cleanup': None, 'reconnections': []}
                 continue
             actor = actors[key]
-            if kind == 'context_acquired':
+            if kind in reconnect_events:
+                fact = {'kind': kind}
+                if 'reference' in event:
+                    if not _identifier(event['reference']):
+                        raise ValueError()
+                    fact['reference'] = event['reference']
+                if 'evidence' in event:
+                    evidence = event['evidence']
+                    if (not isinstance(evidence, dict) or not isinstance(evidence.get('reference'), str)
+                            or not re.fullmatch(r'reconnect-(?:provider|observation)-[0-9a-f-]{36}\.json', evidence['reference'])
+                            or not isinstance(evidence.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', evidence['sha256'])):
+                        raise ValueError()
+                    try:
+                        valid = hashlib.sha256(_read(directory / evidence['reference'], 1024 * 1024)).hexdigest() == evidence['sha256']
+                    except (OSError, ValueError, RuntimeError):
+                        valid = False
+                    fact.update(evidence=evidence, evidenceValid=valid)
+                actor['reconnections'].append(fact)
+            elif kind == 'context_acquired':
                 actor['contextAcquired'] = True
             elif kind == 'acquisition_ready':
                 actor['allocation'] = 'ready'

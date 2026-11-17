@@ -5,9 +5,10 @@ Treadway flows remotely. Several projects and concurrent runs can use the same
 instance without sharing browser state or interfering with each other's cleanup.
 
 Fresh sessions, selected saved state and explicit borrowed attachment are
-implemented. Fresh/state paths have passed checks against Browserless OSS
+implemented. Explicit same-generation reconnect is also implemented. Fresh/state paths have passed checks against Browserless OSS
 2.63.1 as a local npm service; borrowed attachment has passed through a real
-Chromium relay. Reconnect and provider persistence remain separate work. See the
+Chromium relay; reconnect uses a relay that emulates the provider extension.
+Provider persistence remains separate work. See the
 [usage guide](REMOTE-BROWSERS.md) and [acceptance record](reference/BROWSERLESS-ACCEPTANCE.md)
 for current commands and the limits of those results.
 
@@ -85,8 +86,7 @@ identity checks. Keep local browser APIs working. Validate the same flows throug
 an installed package and a pinned self-hosted Browserless deployment; verify cloud
 behavior separately before claiming it.
 
-Saved-state reuse and borrowed sessions use explicit capabilities. Add reconnection
-under its own lifecycle contract.
+Saved-state reuse, borrowed sessions and reconnect use explicit capabilities.
 Persistent identities need exclusive access to the actual remote profile/session,
 including when different projects refer to it. Multi-host writers need a real
 shared coordination mechanism; a local lock cannot provide that guarantee.

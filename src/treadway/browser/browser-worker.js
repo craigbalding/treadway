@@ -8,6 +8,7 @@ const readline = require('node:readline');
 const {performance} = require('node:perf_hooks');
 const {connectEndpoint, RemoteTransportError} = require('./remote-transport');
 const {makeCdpClient} = require('./cdp');
+const browserlessReconnect = require('./browserless-reconnect');
 
 const MAX_LINE = 16 * 1024 * 1024;
 const READ_ONLY = new Set(['Page.enable', 'Page.getFrameTree', 'Page.getLayoutMetrics', 'Page.captureScreenshot',
@@ -85,7 +86,7 @@ class BrowserWorker {
     return actor;
   }
   async acquire({actor: name, endpoint, headers, proxyUrl, ca, budgetMs = this.acquireMs,
-    mode = 'fresh', borrowed} = {}) {
+    mode = 'fresh', borrowed, reconnect} = {}) {
     if (!this.started || this.closed || !identifier(name)) throw failure('remote_acquisition_invalid');
     if (!bounded(budgetMs, 1, this.acquireMs)) throw failure('remote_acquisition_deadline_invalid');
     if (this.actors.has(name)) throw failure('remote_actor_already_acquired');
@@ -93,8 +94,11 @@ class BrowserWorker {
       mode === 'borrowed' && (!borrowed || borrowed.scope !== 'context' || !['observe', 'drive'].includes(borrowed.permission) ||
         !['contextId', 'targetId'].every(key => typeof borrowed[key] === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(borrowed[key]))))
       throw failure('remote_borrowed_binding_required');
+    const reconnectPolicy = browserlessReconnect.validatePolicy(reconnect);
+    if (mode !== 'fresh' && reconnectPolicy) throw failure('remote_reconnect_mode_unsupported');
     const actor = {name, generation: crypto.randomUUID(), targetRef: crypto.randomUUID(), contextRef: crypto.randomUUID(),
       mode, permission: borrowed?.permission || 'drive', attachments: new Map(), attaching: 0,
+      reconnectPolicy, initialEndpoint: endpoint, transportOptions: {headers, proxyUrl, ca},
       state: 'acquiring', receipts: new Map(), receiptBytes: 0, pending: new Set(), uncertain: false, abort: new AbortController()};
     this.actors.set(name, actor);
     const deadline = performance.now() + budgetMs;
@@ -109,8 +113,9 @@ class BrowserWorker {
       };
       if (mode === 'fresh') {
         actor.contextCreationSent = true;
-        actor.contextId = (await command('Target.createBrowserContext', {disposeOnDetach: true})).browserContextId;
+        actor.contextId = (await command('Target.createBrowserContext', {disposeOnDetach: !reconnectPolicy})).browserContextId;
         if (typeof actor.contextId !== 'string' || !actor.contextId) throw failure('remote_context_unavailable');
+        actor.scopeConfirmed = true;
         this.record({kind: 'context_acquired', actor: name, generation: actor.generation, contextId: actor.contextId});
         actor.targetId = (await command('Target.createTarget', {url: 'about:blank', browserContextId: actor.contextId})).targetId;
         if (typeof actor.targetId !== 'string' || !actor.targetId) throw failure('remote_target_unavailable');
@@ -121,18 +126,13 @@ class BrowserWorker {
       if (targetInfo?.targetId !== actor.targetId || targetInfo.type !== 'page' || targetInfo.browserContextId !== actor.contextId) {
         throw failure('remote_target_context_differs');
       }
+      actor.scopeConfirmed = true;
       actor.state = 'ready'; actor.deadline = performance.now() + this.sessionMs;
       actor.timer = setTimeout(() => this.release(this.handle(actor)).catch(() => {}), this.sessionMs);
-      actor.ws.on('close', () => {
-        if (actor.state === 'ready') {
-          actor.state = 'transport_lost'; actor.uncertain = actor.uncertain || actor.pending.size > 0;
-          this.record({kind: 'transport_lost', actor: name, generation: actor.generation});
-          actor.client?.destroy();
-        }
-      });
+      this.watchTransport(actor, actor.ws);
       this.record({kind: 'acquisition_ready', actor: name, generation: actor.generation, targetId: actor.targetId});
       return {connection: this.handle(actor), capabilities: {freshContext: mode === 'fresh', ownership: mode,
-        observationOnly: actor.permission === 'observe', screenshots: true,
+        observationOnly: actor.permission === 'observe', reconnect: !!reconnectPolicy, screenshots: true,
         cookieScope: 'context', originClear: false, targetMonitoring: false, fileTransfers: false}};
     } catch (error) {
       const reason = safeError(error, 'remote_acquisition_incomplete');
@@ -142,6 +142,17 @@ class BrowserWorker {
       throw Object.assign(failure(reason.code), reason);
     }
   }
+  watchTransport(actor, socket) {
+    socket.on('close', () => {
+      if (socket !== actor.ws || socket === actor.intentionalClose ||
+          !['ready', 'preparing_reconnect', 'reconnecting'].includes(actor.state)) return;
+      actor.state = 'transport_lost'; actor.uncertain = actor.uncertain || actor.pending.size > 0;
+      this.record({kind: 'transport_lost', actor: actor.name, generation: actor.generation});
+      actor.client?.destroy();
+    });
+  }
+  prepareReconnect(handle, options) { return browserlessReconnect.prepare(this, this.lookup(handle), options); }
+  reconnect(handle, options) { return browserlessReconnect.reconnect(this, this.lookup(handle), options); }
   detachPage(actor, sessionId) {
     const existing = actor.attachments.get(sessionId);
     if (existing?.then) return existing;
@@ -166,7 +177,7 @@ class BrowserWorker {
         const attaching = actor.attaching > 0;
         const replies = await Promise.all([...actor.attachments.keys()].map(id => this.detachPage(actor, id)));
         attachmentDetached = !attaching && actor.attaching === 0 && priorState !== 'transport_lost' && replies.every(value => value === true);
-      } else if (actor.cdp && actor.contextId && priorState !== 'transport_lost') {
+      } else if (actor.cdp && actor.contextId && actor.scopeConfirmed && priorState !== 'transport_lost') {
         try {
           await actor.cdp.send('Target.disposeBrowserContext', {browserContextId: actor.contextId}, {timeoutMs: this.cleanupMs});
           contextDisposed = true;
@@ -382,6 +393,8 @@ async function main() {
         else if (input.operation === 'unreserve') write({id: input.id, result: worker.unreserve(input.connection)});
         else if (input.operation === 'inspect') write({id: input.id, result: worker.inspect(input.connection)});
         else if (input.operation === 'reconcile') write({id: input.id, result: worker.reconcile(input.connection, input.arguments)});
+        else if (input.operation === 'prepare_reconnect') write({id: input.id, result: await worker.prepareReconnect(input.connection, input.arguments)});
+        else if (input.operation === 'reconnect') write({id: input.id, result: await worker.reconnect(input.connection, input.arguments)});
         else if (input.operation === 'shutdown') { write({id: input.id, result: await worker.shutdown()}); lines.close(); }
         else throw failure('remote_control_operation_invalid');
       } catch (error) { write({id: input.id, error: safeError(error)}); }

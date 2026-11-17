@@ -5,12 +5,14 @@ const crypto = require('node:crypto');
 const {once} = require('node:events');
 const {WebSocketServer} = require('ws');
 
-async function protocolFixture(t, {capacity = Infinity, contextSupport = true, sharedBrowser = false} = {}) {
-  const browsers = [], seen = [], writes = [];
+async function protocolFixture(t, {capacity = Infinity, contextSupport = true, sharedBrowser = false, reconnectSupport = false} = {}) {
+  const browsers = [], seen = [], writes = [], upgrades = [];
+  const controls = {principal: 'member'};
   const sharedContexts = new Map(), sharedTargets = new Map();
   const server = http.createServer((_req, res) => { res.writeHead(500); res.end('global discovery forbidden'); });
   const wss = new WebSocketServer({noServer: true});
   server.on('upgrade', (req, socket, head) => {
+    upgrades.push({url: req.url, authorization: req.headers.authorization});
     if (browsers.filter(b => b.open).length >= capacity) { socket.end('HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\n\r\n'); return; }
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
   });
@@ -38,6 +40,11 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true, s
       else if (method === 'Target.disposeBrowserContext') {
         browser.contexts.delete(params.browserContextId);
         for (const [key, value] of browser.targets) if (value.browserContextId === params.browserContextId) browser.targets.delete(key);
+      } else if (method === 'Browserless.reconnect') {
+        if (!reconnectSupport || controls.unsupportedExtension) error = {code: -32601, message: 'not implemented'};
+        else if (controls.dropReconnectReply) return;
+        else result = {error: controls.reconnectError || null, browserWSEndpoint: controls.reconnectEndpoint ||
+          `ws://127.0.0.1:${server.address().port}/reconnect/exact?existing=%2B+&x=1&x=2`};
       } else if (method === 'Page.getFrameTree') result = {frameTree: {frame: {id: 'frame-' + target?.targetId, url: 'about:blank'}}};
       else if (method === 'Storage.getCookies') {
         result = {cookies: browser.contexts.get(params.browserContextId)?.cookies ?? [{name: 'unrelated-default', value: 'must-not-export'}]};
@@ -47,6 +54,8 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true, s
         else current.cookies = params.cookies;
       } else if (method === 'Runtime.evaluate') {
         if (!context) error = {code: -1, message: 'page attachment required'};
+        else if (params.expression.includes('async function browserRequest')) result = {
+          result: {value: {complete: true, status: 200, body: {principal: controls.principal}}}};
         else if (params.expression.startsWith('save:')) {
           context.value = params.expression.slice(5); writes.push(context.value); result = {result: {value: true}};
         } else if (params.expression === 'lose-reply') { context.value = 'committed'; writes.push('committed'); return; }
@@ -57,6 +66,6 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true, s
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(async () => { for (const browser of browsers) browser.ws.terminate(); wss.close(); await new Promise(r => server.close(r)); });
-  return {endpoint: `http://127.0.0.1:${server.address().port}/tenant/chromium?token=synthetic`, browsers, seen, writes};
+  return {endpoint: `http://127.0.0.1:${server.address().port}/tenant/chromium?token=synthetic`, browsers, seen, writes, controls, upgrades};
 }
 module.exports = {protocolFixture};

@@ -46,6 +46,33 @@ def _seconds(value, maximum):
     return float(value)
 
 
+def _reconnect_policy(value):
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) - {'allowed_origins', 'auth_env'}
+            or not isinstance(value.get('allowed_origins', []), list) or len(value.get('allowed_origins', [])) > 8):
+        raise ValueError('remote_reconnect_policy_invalid')
+    origins = value.get('allowed_origins', [])
+    for origin in origins:
+        try:
+            if not isinstance(origin, str):
+                raise ValueError()
+            parsed = urlsplit(origin)
+            host = parsed.hostname
+            authority = '[' + host + ']' if ':' in host else host
+            if parsed.port is not None and parsed.port != (443 if parsed.scheme == 'wss' else 80):
+                authority += ':' + str(parsed.port)
+            if parsed.scheme not in {'ws', 'wss'} or not host or origin != parsed.scheme + '://' + authority:
+                raise ValueError()
+        except (TypeError, ValueError):
+            raise ValueError('remote_reconnect_policy_invalid') from None
+    if len(set(origins)) != len(origins):
+        raise ValueError('remote_reconnect_policy_invalid')
+    if 'auth_env' in value and (not isinstance(value['auth_env'], str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', value['auth_env'])):
+        raise ValueError('browser_secret_reference_invalid')
+    return {'allowedOrigins': list(origins)}
+
+
 def _private_directory(directory):
     directory = Path(directory).absolute()
     for component in (*reversed(directory.parents), directory):
@@ -122,7 +149,7 @@ class BrowserRuntime:
         if provider == 'local' and set(config) - {'provider', 'binding', 'acquire_seconds', 'session_seconds', 'cleanup_seconds'}:
             raise ValueError('local_browser_configuration_invalid')
         if provider == "browserless":
-            allowed = {"provider", "binding", "endpoint_env", "attachment_env", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds"}
+            allowed = {"provider", "binding", "endpoint_env", "attachment_env", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds", "reconnect"}
             mode = config.get('mode', 'fresh')
             if set(config) - allowed or mode not in {'fresh', 'borrowed'}:
                 raise ValueError("remote_browser_capability_unsupported")
@@ -133,6 +160,9 @@ class BrowserRuntime:
                 value = config.get(key)
                 if (key == required or value is not None) and (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)):
                     raise ValueError("browser_secret_reference_invalid")
+        self.reconnect_policy = _reconnect_policy(config.get('reconnect'))
+        if self.reconnect_policy is not None and (provider != 'browserless' or config.get('mode', 'fresh') != 'fresh'):
+            raise ValueError('remote_reconnect_mode_unsupported')
         self.configuration = config
         self.provider = provider
         self.provider_binding = config.get('binding', config.get('endpoint_env', config.get('attachment_env', 'local')))
@@ -257,6 +287,7 @@ class BrowserRuntime:
                 if remaining <= 0:
                     raise BrowserRuntimeIncomplete("remote_acquisition_deadline", evidence=self.evidence)
                 result = self._rpc(operation="acquire", arguments={"actor": actor, "endpoint": endpoint, "headers": headers,
+                    **({'reconnect': self.reconnect_policy} if self.reconnect_policy is not None else {}),
                     "budgetMs": max(1, min(int(self.acquire_seconds * 1000), int(remaining * 1000)))},
                     timeout=remaining + self.cleanup_seconds + 1)
             connection = result["connection"]
@@ -568,6 +599,52 @@ class BrowserRuntime:
         if session.provider != 'browserless':
             raise ValueError('remote_receipt_inspection_required')
         return self._rpc(operation='inspect', connection=session.connection())
+
+    def prepare_reconnect(self, session, *, timeout_seconds=30):
+        """Explicitly reserve provider reconnect time; retain its URL privately.
+
+        This does not disconnect, extend the original session deadline or make
+        the capability usable after worker death. The provider must support it.
+        """
+        self._owned(session)
+        if self.reconnect_policy is None or session.provider != 'browserless':
+            raise ValueError('remote_reconnect_not_enabled')
+        milliseconds = max(1, int(_seconds(timeout_seconds, 60) * 1000))
+        token = None
+        reference = self.configuration['reconnect'].get('auth_env')
+        if reference:
+            try:
+                token = EnvironmentProvider().read(CredentialRef('env', reference))
+            except Exception:
+                raise BrowserRuntimeIncomplete('remote_reconnect_credentials_unavailable') from None
+        return self._rpc(operation='prepare_reconnect', connection=session.connection(),
+            arguments={'timeoutMs': milliseconds, 'token': token}, timeout=self.acquire_seconds + self.cleanup_seconds + 1)
+
+    def reconnect(self, session, *, principal, timeout_seconds=10):
+        """Consume a prepared capability once and revalidate the same page/user.
+
+        No launch fallback or command replay. Unknown earlier actions remain
+        quarantined even after the original browser is reached again.
+        """
+        self._owned(session)
+        if self.reconnect_policy is None or session.provider != 'browserless':
+            raise ValueError('remote_reconnect_not_enabled')
+        timeout = _seconds(timeout_seconds, 60)
+        principal = json.loads(json.dumps(principal, allow_nan=False))
+        if not isinstance(principal, dict) or not principal.get('expected'):
+            raise ValueError('remote_reconnect_principal_binding_required')
+        if session._identity_lease is not None:
+            session._identity_lease._current()
+            if principal != session._identity_principal:
+                raise ValueError('browser_identity_principal_binding_differs')
+        try:
+            return self._rpc(operation='reconnect', connection=session.connection(),
+                arguments={'timeoutMs': max(1, int(timeout * 1000)), 'principal': principal},
+                timeout=timeout + 2 * self.cleanup_seconds + 1)
+        except BaseException:
+            if session._identity_lease is not None:
+                session._identity_failed = True
+            raise
 
     def record_reconciliation(self, session, *, request_ref, outcome, evidence):
         """Retain an application's independent observation of one unknown effect.

@@ -14,11 +14,54 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = {"browser": {"provider": "browserless", "endpoint_env": "TREADWAY_FIXTURE_ENDPOINT", "mode": "fresh"}}
 
 
+def test_reconnect_configuration_is_passive_and_rejects_ambiguous_authorities(tmp_path):
+    BrowserRuntime(tmp_path/'runtime', configuration={**CONFIG['browser'], 'reconnect': {'auth_env': 'MISSING_TOKEN'}})
+    for policy in [True, {'unknown': True}, {'allowed_origins': ['wss://browser.example.invalid/path']},
+                   {'allowed_origins': [None]}, {'allowed_origins': ['wss://browser.example.invalid', 'wss://browser.example.invalid']},
+                   {'auth_env': 'not an environment name'}]:
+        with pytest.raises(ValueError):
+            BrowserRuntime(tmp_path/'runtime', configuration={**CONFIG['browser'], 'reconnect': policy})
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('endpoint', ['reconnect'], indirect=True)
+def test_explicit_reconnect_through_python_retains_generation_and_readable_receipts(tmp_path, endpoint):
+    from treadway.cdp import CdpSocket, CommandSession
+    from treadway.browser_receipts import inspect_browser_run
+
+    with BrowserRuntime(tmp_path/'run', configuration={**CONFIG['browser'], 'reconnect': {}}, project_root=tmp_path/'project') as runtime:
+        member = runtime.acquire('member')
+        with runtime.drive(member):
+            socket = CdpSocket(connection=member.connection())
+            try:
+                CommandSession(socket).command('Runtime.evaluate', {'expression': 'save:retained'})
+            finally:
+                socket.close()
+        prepared = runtime.prepare_reconnect(member, timeout_seconds=3)
+        assert prepared['prepared'] is True and 'endpoint' not in prepared
+        actual = runtime.reconnect(member, principal={'origin': 'https://app.example.invalid',
+            'probe': '/principal', 'expected': {'principal': 'member'}})
+        assert actual['generation'] == member.generation and actual['principalVerified'] is True
+        with runtime.drive(member):
+            socket = CdpSocket(connection=member.connection())
+            try:
+                assert CommandSession(socket).command('Runtime.evaluate', {'expression': 'read'})['result']['value'] == 'retained'
+            finally:
+                socket.close()
+        runtime.release(member)
+        observed = inspect_browser_run(runtime.evidence, project_id=runtime.project_id, run_id=runtime.run_id)
+        assert observed['journalComplete'] is True
+        actor, = observed['actors']
+        facts = [fact for fact in actor['reconnections'] if fact['kind'] == 'reconnect_ready']
+        assert len(facts) == 1 and facts[0]['evidenceValid'] is True
+        assert actor['unresolvedEffects'] == []
+
+
 @pytest.fixture
 def endpoint(monkeypatch, request):
     option = getattr(request, 'param', 'Infinity')
-    child = subprocess.Popen(["node", str(ROOT / "tests/remote-protocol-server.js"), 'Infinity' if option == 'shared' else str(option),
-                              'shared' if option == 'shared' else 'separate'],
+    child = subprocess.Popen(["node", str(ROOT / "tests/remote-protocol-server.js"), 'Infinity' if option in {'shared', 'reconnect'} else str(option),
+                              option if option in {'shared', 'reconnect'} else 'separate'],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     value = json.loads(child.stdout.readline())["endpoint"]
     monkeypatch.setenv("TREADWAY_FIXTURE_ENDPOINT", value)
