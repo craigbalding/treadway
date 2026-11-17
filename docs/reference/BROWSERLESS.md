@@ -1,12 +1,15 @@
 # Browserless implementation reference
 
-**Proposed design, 2026-11-17.** No remote provider has been implemented or verified by
-this design task. Start with [the short overview](../BROWSERLESS-DESIGN.md) for operator
-configuration and the recommended first release.
+This reference records the design reviewed on 2026-11-17. Fresh sessions, selected
+saved state, borrowed attachment and explicit reconnect are now implemented.
+Use [the task guide](../REMOTE-BROWSERS.md) for actual APIs and commands, and the
+[acceptance record](BROWSERLESS-ACCEPTANCE.md) for tested paths and limitations.
+Provider persistence and final review remain in progress.
 
 The design was reviewed against Treadway commit
 `203adc8ffe1e7fb99903ed981a2f891c8ad9bafa`, official Browserless documentation and the
-pinned public source linked below. API names are proposals.
+pinned public source linked below. Interface sketches below describe design
+requirements; the task guide names the implemented APIs.
 
 ## Why a live worker is necessary
 
@@ -16,7 +19,7 @@ stable browser handle. [Connection
 endpoints](https://docs.browserless.io/overview/connection-urls), [session
 lifecycle](https://docs.browserless.io/baas/session-management).
 
-Today, `robot.py`, `widgets.py`, `entra_robot.py` and `cdp.py` invoke Node runners that
+Before provider integration, `robot.py`, `widgets.py`, `entra_robot.py` and `cdp.py` invoked Node runners that
 establish their own CDP connections. Simply replacing host and port with a Browserless
 URL would permit one Robot step to inspect one browser and the next to mutate another.
 Keep the existing subprocess boundaries, but give them a provider-neutral connection

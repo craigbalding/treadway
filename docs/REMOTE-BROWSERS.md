@@ -2,7 +2,7 @@
 
 Use an operator-supplied Browserless endpoint while retaining Treadway's actor
 sessions, shared interactions and evidence. Choose the provider explicitly;
-each project/run/actor receives its own fresh browser context and page.
+fresh mode gives each project/run/actor its own browser context and page.
 
 Follow [Browserless setup and usage](../src/treadway/authoring/skill/treadway-flows/references/REMOTE-BROWSERS.md)
 for configuration, Python operations, generated examples and failure inspection.
