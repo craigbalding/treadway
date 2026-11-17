@@ -380,9 +380,42 @@ Release asks this profile's dedicated browser to close and requires both the CDP
 acknowledgement and connection closure. `profileReleased` and `profileRetained`
 report this separately from context disposal. To permanently delete a cleanly
 released profile, explicitly call `browsers.forget_provider_identity(identity)`.
-It sends one request to the recorded deletion URL. An active or abandoned lease
-blocks deletion. A missing response remains unknown and blocks automatic reuse;
-do not delete manifests to bypass it.
+It sends one request to the recorded deletion URL. Active leases block deletion.
+A missing response remains unknown and blocks automatic reuse; do not delete
+manifests to bypass it.
+
+For recovery after an owner exits, save the prior binding while that actor is
+available:
+
+```python
+previous_run = {
+    "run_id": browsers.run_id, "actor": member.name,
+    "generation": member.generation,
+}
+```
+
+After the owner exits, explicitly delete its abandoned profile with:
+
+```python
+deleted = browsers.forget_provider_identity(
+    identity, force=True, previous_run=previous_run,
+)
+```
+
+This uses the recorded Session API deletion URL with its documented `force=true`
+parameter. It permanently deletes that profile, including saved login state.
+Both local resource locks and the exact previous run must match. A live lock
+holder, changed generation, conflicting URL parameter, missing response or
+asynchronous acceptance cannot establish a fence. No other browser is selected.
+
+Confirmed deletion and the previous flow's outcome remain separate. If
+`recoveryRequired` is true, inspect and independently reconcile the retained
+unknown effects as described above. Then call
+`browsers.recover_provider_identity(identity, previous_run=previous_run)`; this
+checks retained deletion proof and application observations without contacting
+the service. Recovery never resumes the deleted generation. Creating and signing
+in to another profile remains an explicit operation. An incomplete creation
+response without a recorded capability cannot use this recovery path.
 
 Treadway leases both the named identity and the actual provider session ID, so
 aliases cannot bypass exclusion under the same trusted state root. Local file
@@ -398,7 +431,9 @@ Credentials are not forwarded to another origin.
 
 The Session API contract is tested with an emulated service. Real Chromium
 checks verify separate processes, persisted state and unrelated-browser survival.
-Cloud and Enterprise Session API behavior remains unverified. See the
+Forced deletion and recovery use HTTP contract fixtures; hosted termination
+behavior remains unverified. Cloud and Enterprise Session API behavior remains
+unverified. See the
 [provider's persistence guide](https://docs.browserless.io/baas/session-management/persisting-state)
 for availability and profile semantics.
 

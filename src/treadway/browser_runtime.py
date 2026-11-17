@@ -626,9 +626,13 @@ class BrowserRuntime:
         from .browserless_sessions import verify
         return verify(self, session, timeout_seconds=timeout_seconds)
 
-    def forget_provider_identity(self, identity):
+    def forget_provider_identity(self, identity, *, force=False, previous_run=None):
         from .browserless_sessions import forget
-        return forget(self, identity)
+        return forget(self, identity, force=force, previous_run=previous_run)
+
+    def recover_provider_identity(self, identity, *, previous_run):
+        from .browserless_sessions import recover
+        return recover(self, identity, previous_run=previous_run)
 
     def prepare_reconnect(self, session, *, timeout_seconds=30):
         """Explicitly reserve provider reconnect time; retain its URL privately.

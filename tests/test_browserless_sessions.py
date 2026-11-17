@@ -49,7 +49,10 @@ def service(monkeypatch):
 
         def do_DELETE(self):
             seen.append((self.command, self.path, None))
-            self.send_response(204)
+            if controls.get('lose_delete_reply'):
+                self.close_connection = True
+                return
+            self.send_response(controls.get('delete_status', 204))
             self.end_headers()
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -286,3 +289,113 @@ def test_changed_principal_binding_refuses_before_starting_a_new_browser(tmp_pat
             browsers.acquire_provider_identity('member', state, principal={**principal, 'expected': {'principal': 'another-member'}})
         assert browsers.process is None
         browsers.forget_provider_identity(state)
+
+
+def abandoned_profile(tmp_path, browsers, state, *, unknown=False):
+    directory = tmp_path/'previous-run'
+    directory.mkdir(mode=0o700)
+    previous = {'run_id': 'previous-run', 'actor': 'member', 'generation': 'previous-generation'}
+    leases = [state.acquire(browsers.project_id), canonical_identity(state, 'synthetic-session').acquire(browsers.project_id)]
+    for lease in leases:
+        lease.record_run(directory=directory, project_id=browsers.project_id, run_id=previous['run_id'],
+                         actor=previous['actor'], mode='provider-session')
+        lease.record_generation(previous['generation'])
+        lease.release(uncertain=True)
+    actor = {'actor': previous['actor'], 'generation': previous['generation']}
+    events = [{'kind': 'worker_started', 'projectId': browsers.project_id, 'runId': previous['run_id']},
+        {'kind': 'acquisition_intent', 'mode': 'provider-session', **actor}, {'kind': 'acquisition_ready', **actor}]
+    if unknown:
+        events.append({'kind': 'command_dispatch', 'requestRef': 'client:1', 'method': 'Runtime.evaluate', **actor})
+    events.append({'kind': 'worker_stopped'})
+    path = directory/'events.jsonl'
+    path.write_text(''.join(json.dumps(value)+'\n' for value in events))
+    path.chmod(0o600)
+    return previous, directory
+
+
+def test_forced_profile_deletion_requires_exact_abandoned_run_and_nonstealing_locks(tmp_path, service):
+    seen, _ = service
+    state = identity(tmp_path)
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        owner = state.acquire(browsers.project_id)
+        try:
+            with pytest.raises(BrowserStateIncomplete, match='in_use'):
+                browsers.forget_provider_identity(state, force=True,
+                    previous_run={'run_id': 'previous-run', 'actor': 'member', 'generation': 'previous-generation'})
+        finally:
+            owner.release(profile_released=True, uncertain=False)
+        previous, _ = abandoned_profile(tmp_path, browsers, state)
+        with pytest.raises(BrowserStateIncomplete, match='previous_run_differs'):
+            browsers.forget_provider_identity(state, force=True, previous_run={**previous, 'generation': 'another-generation'})
+        assert len(seen) == 1
+        result = browsers.forget_provider_identity(state, force=True, previous_run=previous)
+        assert result['profileDeleted'] is True and result['recoveryRequired'] is False
+        assert seen[-1][1] == '/stop/synthetic-session?token=synthetic-stop&x=%2B+&force=true'
+        assert browsers.process is None
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        browsers.forget_provider_identity(state)
+
+
+def test_deleted_profile_stays_blocked_until_independent_effect_reconciliation(tmp_path, service):
+    from treadway.browser_receipts import inspect_browser_run, record_browser_reconciliation
+    seen, _ = service
+    state = identity(tmp_path)
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        previous, directory = abandoned_profile(tmp_path, browsers, state, unknown=True)
+        result = browsers.forget_provider_identity(state, force=True, previous_run=previous)
+        assert result['profileDeleted'] is True and result['recoveryRequired'] is True
+        with pytest.raises(BrowserStateIncomplete, match='recovery_required'):
+            browsers.create_provider_identity(state, ttl_seconds=180)
+        with pytest.raises(BrowserStateIncomplete, match='effect_reconciliation_required'):
+            browsers.recover_provider_identity(state, previous_run=previous)
+        with pytest.raises(BrowserStateIncomplete, match='already_fenced_use_recovery'):
+            browsers.forget_provider_identity(state, force=True, previous_run=previous)
+        assert [item[0] for item in seen] == ['POST', 'DELETE']
+        observed = inspect_browser_run(directory, project_id=browsers.project_id, run_id=previous['run_id'])
+        source = tmp_path/'application-observer.json'
+        source.write_text('{"resource":"synthetic-item","effect":"applied"}')
+        source.chmod(0o600)
+        record_browser_reconciliation(directory, project_id=browsers.project_id, run_id=previous['run_id'],
+            actor=previous['actor'], generation=previous['generation'], request_ref='client:1',
+            journal_sha256=observed['journalSha256'], outcome='applied', evidence=source)
+        assert browsers.recover_provider_identity(state, previous_run=previous) == {
+            'recovered': True, 'profileDeleted': True, 'previousGenerationResumed': False}
+        assert len(seen) == 2 and browsers.process is None
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        browsers.forget_provider_identity(state)
+
+
+@pytest.mark.parametrize('lost_reply', [True, False])
+def test_missing_or_changed_profile_deletion_proof_cannot_authorize_recovery(tmp_path, service, lost_reply):
+    _, controls = service
+    state = identity(tmp_path)
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        previous, _ = abandoned_profile(tmp_path, browsers, state, unknown=True)
+        controls['lose_delete_reply'] = lost_reply
+        if lost_reply:
+            with pytest.raises(ProviderSessionIncomplete):
+                browsers.forget_provider_identity(state, force=True, previous_run=previous)
+        else:
+            browsers.forget_provider_identity(state, force=True, previous_run=previous)
+            proof, = state.root.rglob('provider-fence-*.json')
+            proof.write_text('{}')
+        with pytest.raises(BrowserStateIncomplete, match='remote_fence_required'):
+            browsers.recover_provider_identity(state, previous_run=previous)
+        with pytest.raises(BrowserStateIncomplete, match='recovery_required'):
+            state.acquire(browsers.project_id)
+
+
+def test_asynchronous_deletion_acceptance_is_not_a_remote_fence(tmp_path, service):
+    _, controls = service
+    state = identity(tmp_path)
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        previous, _ = abandoned_profile(tmp_path, browsers, state)
+        controls['delete_status'] = 202
+        with pytest.raises(ProviderSessionIncomplete, match='forget_incomplete'):
+            browsers.forget_provider_identity(state, force=True, previous_run=previous)
+        with pytest.raises(BrowserStateIncomplete, match='remote_fence_required'):
+            browsers.recover_provider_identity(state, previous_run=previous)

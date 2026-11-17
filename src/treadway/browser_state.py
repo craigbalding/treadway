@@ -130,7 +130,7 @@ class BrowserIdentity:
         """Acquire once, before restore/login/drive. Never steal an old owner."""
         return self._acquire(project_id)
 
-    def _acquire(self, project_id, *, recovery=False):
+    def _acquire(self, project_id, *, recovery=False, allow_released=False):
         binding = self.binding(project_id)
         root = _directory(self.root)
         directory = _directory(root / hashlib.sha256(self.resource.encode()).hexdigest())
@@ -152,7 +152,8 @@ class BrowserIdentity:
                     raise BrowserStateIncomplete('browser_identity_manifest_incomplete') from None
                 if not isinstance(record, dict) or record.get('version') != 'treadway.browser-identity/1' or record.get('binding') != binding:
                     raise BrowserStateIncomplete('browser_identity_binding_differs')
-                if recovery and record.get('state') not in {'leased', 'recovery_required', 'recovering'}:
+                if recovery and record.get('state') not in ({'leased', 'recovery_required', 'recovering', 'released'}
+                                                          if allow_released else {'leased', 'recovery_required', 'recovering'}):
                     raise BrowserStateIncomplete('browser_identity_recovery_not_required')
                 if not recovery and record.get('state') != 'released':
                     raise BrowserStateIncomplete('browser_identity_recovery_required')

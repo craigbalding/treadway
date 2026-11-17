@@ -10,10 +10,11 @@ import base64
 import hashlib
 from http.cookiejar import CookieJar
 import json
+from pathlib import Path
 import re
 import time
 from urllib.error import HTTPError
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 from urllib.request import Request
 import uuid
 
@@ -209,6 +210,7 @@ def create(runtime, identity, *, ttl_seconds, headless=True):
         lease._record['providerInitialized'] = False
         lease._record.pop('providerPrincipalBinding', None)
         lease._record.pop('lastProviderVerification', None)
+        lease._record.pop('providerFence', None)
         _write(lease.directory / 'identity.json', lease._record)
         canonical = canonical_identity(identity, response['id']).acquire(project_id)
         canonical.require_storage_kind('provider-session', initialize=True)
@@ -326,32 +328,148 @@ def verify(runtime, session, *, timeout_seconds=10):
     return _verify(runtime, session, timeout_seconds=timeout_seconds)
 
 
-def forget(runtime, identity):
-    """Delete one released provider profile using only its recorded stop URL."""
+def _prior_binding(previous_run):
+    if (not isinstance(previous_run, dict) or set(previous_run) != {'run_id', 'actor', 'generation'}
+            or any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,200}', value)
+                   for value in previous_run.values())):
+        raise ValueError('explicit_previous_provider_run_binding_required')
+    return dict(previous_run)
+
+
+def _prior_execution(lease, project_id, previous_run):
+    execution = lease._record.get('execution')
+    if (not isinstance(execution, dict) or execution.get('provider') != 'browserless'
+            or execution.get('mode') != 'provider-session' or execution.get('projectId') != project_id
+            or execution.get('runId') != previous_run['run_id'] or execution.get('actor') != previous_run['actor']
+            or execution.get('generation') != previous_run['generation']
+            or not isinstance(execution.get('directory'), str) or not Path(execution['directory']).is_absolute()):
+        raise BrowserStateIncomplete('browserless_session_previous_run_differs')
+    return execution
+
+
+def _force_url(url):
+    values = [value for key, value in parse_qsl(urlsplit(url).query, keep_blank_values=True) if key == 'force']
+    if values:
+        if values != ['true']:
+            raise BrowserStateIncomplete('browserless_session_force_parameter_conflicts')
+        return url
+    return url + ('&' if '?' in url else '?') + 'force=true'
+
+
+def _effects(execution, previous_run):
+    from .browser_receipts import inspect_browser_run
+    observed = inspect_browser_run(execution['directory'], project_id=execution['projectId'], run_id=execution['runId'])
+    actors = [item for item in observed['actors'] if item['actor'] == previous_run['actor']
+              and item['generation'] == previous_run['generation'] and item['mode'] == 'provider-session']
+    if not observed['journalComplete'] or len(actors) != 1:
+        raise BrowserStateIncomplete('browserless_session_run_evidence_incomplete')
+    return observed, actors[0]['unresolvedEffects']
+
+
+def _clear_profile(lease):
+    lease._record['providerSession'] = None
+    lease._record['providerInitialized'] = False
+    _write(lease.directory / 'identity.json', lease._record)
+
+
+def forget(runtime, identity, *, force=False, previous_run=None):
+    """Delete a released profile, or explicitly fence its exact abandoned run."""
     from .browser_runtime import _seconds, _project_identity
     _check(runtime, identity)
+    if type(force) is not bool or (not force and previous_run is not None):
+        raise ValueError('explicit_provider_forget_mode_required')
+    previous_run = _prior_binding(previous_run) if force else None
     deadline = time.monotonic() + _seconds(runtime.acquire_seconds, 3600)
     project_id = _project_identity(runtime.project_root, deadline)
-    lease = identity.acquire(project_id)
-    canonical, clean = None, True
+    lease = identity._acquire(project_id, recovery=force)
+    canonical, clean, fenced = None, not force, False
     try:
         capability, _, _ = read_capability(lease)
-        canonical = canonical_identity(identity, capability['session']['id']).acquire(project_id)
+        execution = _prior_execution(lease, project_id, previous_run) if force else None
+        if force and lease._record.get('providerFence') is not None:
+            raise BrowserStateIncomplete('browserless_session_already_fenced_use_recovery')
+        canonical = canonical_identity(identity, capability['session']['id'])._acquire(project_id,
+            recovery=force, allow_released=force)
         canonical.require_storage_kind('provider-session')
+        if force and _prior_execution(canonical, project_id, previous_run) != execution:
+            raise BrowserStateIncomplete('browserless_session_previous_run_differs')
         headers = _headers(runtime)
         if origin(capability['session']['stop']) != capability['apiOrigin']:
             headers = {}
         clean = False
-        status, _, evidence = _http(capability['session']['stop'], 'DELETE', headers=headers, deadline=deadline, directory=lease.directory)
-        if not 200 <= status < 300:
+        url = _force_url(capability['session']['stop']) if force else capability['session']['stop']
+        status, _, evidence = _http(url, 'DELETE', headers=headers, deadline=deadline, directory=lease.directory)
+        if status not in {200, 204}:
             raise ProviderSessionIncomplete('browserless_session_forget_incomplete', evidence=evidence['file'], status=status)
-        lease._record['providerSession'] = None
-        lease._record['providerInitialized'] = False
+        fenced = True
         lease._record['lastProviderForget'] = {'capability': capability, 'evidence': evidence}
+        if force:
+            proof = {'version': 'treadway.browserless-profile-fence/1', 'binding': lease.binding,
+                'execution': execution, 'capability': lease._record['providerSession'], 'evidence': evidence}
+            path = lease.directory / ('provider-fence-' + str(uuid.uuid4()) + '.json')
+            _write(path, proof)
+            lease._record['providerFence'] = {'file': path.name, 'sha256': hashlib.sha256(_read(path)).hexdigest()}
         _write(lease.directory / 'identity.json', lease._record)
+        unresolved = []
+        if force:
+            _, unresolved = _effects(execution, previous_run)
+        clean = not unresolved
+        if clean:
+            _clear_profile(lease)
+        return {'forgotten': True, 'profileDeleted': True, 'evidence': evidence['file'],
+                'runEvidence': 'retained', 'recoveryRequired': not clean, 'unresolvedEffects': unresolved}
+    finally:
+        if canonical is not None:
+            canonical.release(profile_released=fenced or clean, uncertain=not clean)
+        lease.release(profile_released=fenced or clean, context_disposed=clean, uncertain=not clean)
+
+
+def recover(runtime, identity, *, previous_run):
+    """Release a deleted profile's local lease after independent reconciliation."""
+    from .browser_runtime import _project_identity
+    _check(runtime, identity)
+    previous_run = _prior_binding(previous_run)
+    project_id = _project_identity(runtime.project_root, time.monotonic() + runtime.acquire_seconds)
+    lease = identity._acquire(project_id, recovery=True)
+    canonical, clean = None, False
+    try:
+        capability, _, _ = read_capability(lease)
+        execution = _prior_execution(lease, project_id, previous_run)
+        pointer = lease._record.get('providerFence')
+        try:
+            if not isinstance(pointer, dict) or not re.fullmatch(r'provider-fence-[0-9a-f-]{36}\.json', pointer['file']):
+                raise ValueError()
+            raw = _read(lease.directory / pointer['file'])
+            proof = json.loads(raw)
+            if (hashlib.sha256(raw).hexdigest() != pointer['sha256'] or proof['version'] != 'treadway.browserless-profile-fence/1'
+                    or proof['binding'] != lease.binding or proof['execution'] != execution
+                    or proof['capability'] != lease._record['providerSession']
+                    or not re.fullmatch(r'provider-http-[0-9a-f-]{36}\.json', proof['evidence']['file'])):
+                raise ValueError()
+            raw = _read(lease.directory / proof['evidence']['file'])
+            receipt = json.loads(raw)
+            if (hashlib.sha256(raw).hexdigest() != proof['evidence']['sha256'] or receipt['complete'] is not True
+                    or receipt['method'] != 'DELETE' or receipt['url'] != _force_url(capability['session']['stop'])
+                    or type(receipt['status']) is not int or receipt['status'] not in {200, 204} or receipt['outcome'] != 'replied'):
+                raise ValueError()
+        except (ValueError, TypeError, KeyError, OSError):
+            raise BrowserStateIncomplete('browserless_session_remote_fence_required') from None
+        canonical = canonical_identity(identity, capability['session']['id'])._acquire(project_id,
+            recovery=True, allow_released=True)
+        canonical.require_storage_kind('provider-session')
+        if _prior_execution(canonical, project_id, previous_run) != execution:
+            raise BrowserStateIncomplete('browserless_session_previous_run_differs')
+        observed, unresolved = _effects(execution, previous_run)
+        if unresolved:
+            raise BrowserStateIncomplete('browserless_session_effect_reconciliation_required')
+        path = lease.directory / ('recovery-' + str(uuid.uuid4()) + '.json')
+        _write(path, {'version': 'treadway.browserless-profile-recovery/1', 'binding': lease.binding,
+            'execution': execution, 'fence': pointer, 'journalSha256': observed['journalSha256'], 'actors': observed['actors']})
+        lease._record['lastRecovery'] = {'file': path.name, 'sha256': hashlib.sha256(_read(path)).hexdigest()}
+        _clear_profile(lease)
         clean = True
-        return {'forgotten': True, 'profileDeleted': True, 'evidence': evidence['file'], 'runEvidence': 'retained'}
+        return {'recovered': True, 'profileDeleted': True, 'previousGenerationResumed': False}
     finally:
         if canonical is not None:
             canonical.release(profile_released=clean, uncertain=not clean)
-        lease.release(profile_released=clean, context_disposed=clean, uncertain=not clean)
+        lease.release(profile_released=clean, uncertain=not clean)
