@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
+const net = require('node:net');
 const path = require('node:path');
 const {once} = require('node:events');
 const {execFile} = require('node:child_process');
@@ -42,12 +43,18 @@ test('engine observation uses the actor connection and retains private provenanc
 
 test('authenticated attachments use the actor lifetime rather than the handshake inactivity timer', async t => {
   const service = await protocolFixture(t);
-  const worker = await owner(t, 'project-a', 'run-one', {sessionMs: 5000});
+  const worker = await owner(t, 'project-a', 'run-one', {acquireMs: 1000, sessionMs: 5000});
   const {connection} = await worker.acquire({actor: 'member', endpoint: service.endpoint});
   const browser = await connectSession(connection);
   t.after(() => browser.close());
-  const socket = [...worker.sockets][0];
-  assert.equal(socket.timeout, 0);
+  const unauthenticated = net.connect(worker.socketPath);
+  unauthenticated.on('error', () => {});
+  t.after(() => unauthenticated.destroy());
+  await new Promise((resolve, reject) => {
+    const guard = setTimeout(() => { unauthenticated.destroy(); reject(new Error('unauthenticated handshake outlived acquisition budget')); }, 3000);
+    unauthenticated.once('close', () => { clearTimeout(guard); resolve(); });
+  });
+  // The authenticated socket has also been idle for that entire handshake budget.
   assert.equal(await browser.eval('read'), '');
   await worker.release(connection);
   assert.equal(worker.lookup(connection).state, 'released');

@@ -272,7 +272,7 @@ class BrowserWorker {
     this.sockets.add(socket); socket.on('error', () => {});
     socket.setEncoding('utf8');
     let buffer = '', actor, clientRef, pageSession, authenticated = false;
-    socket.setTimeout(65000, () => socket.destroy());
+    socket.setTimeout(this.acquireMs, () => socket.destroy());
     const write = value => {
       if (socket.writableLength > MAX_LINE) { socket.destroy(); return; }
       if (!socket.destroyed) socket.write(JSON.stringify(value) + '\n');
