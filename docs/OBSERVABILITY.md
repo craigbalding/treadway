@@ -1,18 +1,86 @@
-# Execution evidence
+# Screenshots and execution logs
 
-For the implemented Python/Robot live event interface, browser subprocess bridge,
-run statistics and flow-change guards, read the self-contained
-[diagnostics guide](../src/treadway/authoring/skill/treadway-flows/references/DIAGNOSTICS.md)
-or run `treadway guide diagnostics`. The generated project includes
-`python debug_recovery.py --level DEBUG` as a complete executable walkthrough.
+The shared Entra sign-in flow saves step screenshots and a record of each
+attempt. For other flows, you can enable live progress and run statistics from
+Python or Robot. Robot also provides its usual keyword logs and HTML reports.
 
-Use Robot Framework's execution model, result files and log viewer. Treadway
-supplies the observations needed to interpret a browser operation: current
-identity and target bindings, screen state, intended action, dispatch receipt,
-observed response, independent verification and cleanup. A runner's PASS or FAIL
-cannot establish all those facts on its own.
+## Screenshots
 
-## Existing facilities
+The Entra flow saves screenshots during successful and failed attempts. It
+takes a screenshot when it observes a new step or the result of an action, and
+tries to capture the last screen before returning a failure. Other flow adapters
+must arrange their own screenshot capture; enabling `RunDiagnostics` alone does
+not add screenshots.
+
+Open the directory named by `evidence.directory` in the Entra browser result:
+
+- `receipt.json` contains the final result and its suggested next step.
+- `events.jsonl` records screens, actions and screenshot captures in order.
+- `step-*.png` files show the captured screens.
+
+The result's `screenshots` list records each capture's status. A `captured`
+entry includes its file path, size and elapsed time. If the page changed during
+capture, the status is `screen_changed` and the image is discarded. Check this
+list when an expected image is missing.
+
+If setup failed before the browser flow started, the Robot result's
+`robotEvidence` path points to the setup receipt.
+
+Screenshot masking is optional and defaults to `none`. Choose `credentials`
+to mask input values and known secrets; during authenticator setup, this mode
+hides the whole enrollment screen. Structured diagnostic events exclude secret
+values independently of this setting. Keep screenshots and raw browser records
+private: they can contain account details, setup codes and application data.
+
+See the [Entra guide](ENTRA.md) for configuration and result fields.
+
+## Live progress and run statistics
+
+To try diagnostics with a complete local example:
+
+```sh
+treadway new my-flow
+cd my-flow
+python debug_recovery.py --level DEBUG
+```
+
+The example runs 100 mutations against a disposable local app. It renews an
+expired session and checks a committed write whose reply was lost. Progress
+goes to stderr; the final result and statistics go to stdout. A private run
+directory holds `events.jsonl`, `summary.json` and `coverage.json`. Use
+`--no-console` to retain these files without printing progress.
+
+For your own Python flow, wrap execution in `RunDiagnostics`. For a Robot suite,
+use `DiagnosticsListener` to send events to the terminal and Robot's normal log.
+The [diagnostics guide](../src/treadway/authoring/skill/treadway-flows/references/DIAGNOSTICS.md)
+has both configurations, custom output callbacks, timing details and checks for
+changes to flow code. It also ships with the package:
+
+```sh
+treadway guide diagnostics
+```
+
+## Investigating a failed attempt
+
+Read the result first, then follow its artifact paths. Compare the last observed
+screen with the action and response recorded in the event log. A timeout means
+Treadway stopped waiting; the application may still have accepted the action.
+Check the saved application state before deciding whether to retry a mutation.
+
+Keep the failed attempt when a later attempt succeeds. The Entra flow gives each
+attempt its own private directory so a retry cannot overwrite the first failure.
+Custom adapters should do the same.
+
+Check login, state export and cleanup separately. For example, an Entra result
+can confirm that the correct user is signed in while reporting that cookie
+export failed. Preserve that session and retry the export, rather than logging
+in again. A cleanup failure likewise does not undo a successful action.
+
+## Robot and related tools
+
+Robot's reports show which keywords ran and how long they took. The application
+checks in your flow establish whether the intended work succeeded. Use both when
+interpreting a result.
 
 | Facility | What it supplies | Remaining Treadway responsibility |
 | --- | --- | --- |
@@ -22,52 +90,6 @@ cannot establish all those facts on its own.
 | Robot native `Secret` | Masked credential values at keyword boundaries | Keep resolved credentials, enrollment seeds, codes and cookies out of ordinary state captures and messages |
 | Robot Framework Browser | Failure screenshots and Playwright tracing for its browser backend | Configure and retain artifacts; establish domain identity, action outcome and independent verification |
 | Robocorp Log | Python call/variable logging, compact files, HTML viewer and sensitive-value controls | Explicit domain observations; coverage for Node/CDP operations |
-
-Robot already supports JSON output in the pinned 7.5.1 environment. A local
-synthetic check exercised a failed keyword followed by a separate successful
-attempt: the native result API retained structured observations, failure text
-and timings, listener callbacks saw the failure, and a native `Secret` remained
-masked even at TRACE level. This does not establish arbitrary snapshot redaction;
-browser state still requires its own credential handling.
-
-Browser's default failure action takes a screenshot. Its documentation states
-that this hook is not applied to library methods called directly from Python.
-Adding it beside a different browser transport does not automatically give that
-transport the same failure evidence. Screenshots and traces can also contain
-credentials and private application data.
-
-The shared Entra flow captures private screenshots at observed step boundaries
-and on failure. Masking is optional and defaults to `none`; the explicit
-`credentials` mode masks fields and known secrets, including full setup screens.
-This is separate from structured-log redaction, which remains enabled. See the
-[Entra guide](ENTRA.md) for configuration and result fields.
-
-Robocorp Log is useful for Python diagnostics, but its documented log format is
-not a stable API. Its README also documents limitations with coroutine logging.
-These make it unsuitable as the sole machine-readable contract for an async
-Node browser integration. Its default rotating-file policy also needs explicit
-configuration when earlier attempt evidence must survive.
-
-## Integration contract
-
-1. Allocate a private, unique output directory before executing an attempt.
-   A successful retry gets a new directory and retains the failed attempt.
-2. Use Robot's native outputs for execution reports and result analysis. Emit
-   structured observations through its logging API and link private artifacts.
-3. Capture the last screen, expected transition, elapsed and remaining time,
-   underlying error category, actions dispatched and uncertain outcomes before
-   returning a failure. A timeout is an observation boundary; it does not cancel
-   an already-dispatched browser action.
-4. Retain in-progress browser observations when running outside Robot or when a
-   subprocess might terminate before its final result. This is a small durability
-   adapter, rather than another execution model or report viewer.
-5. Make the concise receipt an index into the retained evidence. Keep observed
-   facts, expected values and hypotheses distinct. Do not label a failure as
-   identity-specific or infer an infrastructure cause from a stage timeout.
-6. Keep authentication verification, required state export, runner completion and
-   cleanup separate. A valid principal probe does not prove that an exported
-   cookie jar is complete; a partial subprocess payload does not prove that the
-   runner completed. The same export contract applies to fresh and reused sessions.
 
 ## Primary references
 

@@ -111,8 +111,8 @@ explains focused checks and the browser acceptance steps.
 | Sign in with Entra, including TOTP and first-login setup | [Entra flow](docs/ENTRA.md) |
 | Continue repeated mutations across session expiry | [Session recovery](docs/SESSION-RECOVERY.md) |
 | Shorten a flow for the operator's objective and assurance requirements | [Flow optimisation](docs/FLOW-OPTIMISATION.md) |
-| Debug flow machinery, inspect run statistics and report contract changes | [Diagnostics](docs/OBSERVABILITY.md) |
-| Inspect step screenshots, retained attempts and native Robot results | [Execution evidence](docs/OBSERVABILITY.md) |
+| Debug flow machinery, inspect run statistics and report contract changes | [Diagnostics](docs/OBSERVABILITY.md#live-progress-and-run-statistics) |
+| Inspect step screenshots, retained attempts and native Robot results | [Screenshots and execution logs](docs/OBSERVABILITY.md#screenshots) |
 | Map forms, autocomplete, dates and editors | [Forms](docs/forms.md) · [React/Vue widgets](docs/REUSABLE-WIDGETS.md) |
 | Call Python or JavaScript directly | [API index](docs/API.md) |
 | Install a wheel and its locked Node dependency | [Installation](docs/INSTALLING.md) |
