@@ -53,7 +53,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
         raise BrowserEvidenceIncomplete('browser_run_binding_differs')
     actors, complete, stopped = {}, True, False
     issue = None
-    known = {'acquisition_intent', 'context_acquired', 'acquisition_ready', 'acquisition_incomplete',
+    known = {'acquisition_intent', 'context_acquired', 'profile_acquired', 'acquisition_ready', 'acquisition_incomplete',
              'cleanup_intent', 'cleanup_result', 'transport_lost', 'client_lost',
              'command_dispatch', 'command_replied', 'command_unknown', 'application_reconciled'}
     reconnect_events = {'reconnect_prepare_intent', 'reconnect_provider_replied', 'reconnect_prepared',
@@ -78,7 +78,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
             key = (event['actor'], event['generation'])
             if kind == 'acquisition_intent':
                 mode = event.get('mode', 'fresh')
-                if key in actors or stopped or mode not in {'fresh', 'borrowed'}:
+                if key in actors or stopped or mode not in {'fresh', 'borrowed', 'provider-session'}:
                     raise ValueError()
                 actors[key] = {'actor': key[0], 'generation': key[1], 'mode': mode, 'allocation': 'unknown',
                                'contextAcquired': False, 'commands': {}, 'cleanup': None, 'reconnections': []}
@@ -113,8 +113,11 @@ def inspect_browser_run(directory, *, project_id, run_id):
                     raise ValueError()
                 if 'attachmentDetached' in event and type(event['attachmentDetached']) is not bool:
                     raise ValueError()
+                if 'profileReleased' in event and type(event['profileReleased']) is not bool:
+                    raise ValueError()
                 actor['cleanup'] = {'contextDisposed': event['contextDisposed'], 'connectionClosed': event['connectionClosed'],
                                     'attachmentDetached': event.get('attachmentDetached') is True,
+                                    **({'profileReleased': event['profileReleased']} if 'profileReleased' in event else {}),
                                     'remoteTermination': event.get('remoteTermination') == 'confirmed'}
             elif kind in {'command_dispatch', 'command_replied', 'command_unknown', 'application_reconciled'}:
                 reference = event['requestRef']

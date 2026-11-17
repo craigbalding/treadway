@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {captureState, restoreState, validateSnapshot} = require('../src/treadway/browser/state-snapshot');
+const {captureState, restoreState, verifyState, validateSnapshot} = require('../src/treadway/browser/state-snapshot');
 
 const origin = 'https://app.example.invalid';
 const binding = {projectId: 'project-one', application: 'workboard', identityRef: 'member', providerBinding: 'browser-service',
@@ -37,6 +37,18 @@ test('capture includes required cookie and per-page Web Storage with actual prin
   assert.equal(result.sourceGeneration, 'generation-one');
   assert.equal(result.principal.observed.principal, 'member');
   assert.equal(calls.filter(call => call.method === 'Storage.getCookies').length, 1);
+});
+
+test('provider verification checks the actual user without importing or exporting state', async () => {
+  const {session, calls} = fixture();
+  const result = await verifyState(session, input);
+  assert.equal(result.verified, true);
+  assert.equal(result.principal.observed.principal, 'member');
+  assert.equal(calls.filter(call => call.method === 'navigate').length, 1);
+  assert.equal(calls.some(call => /^(?:Storage|DOMStorage)\./.test(call.method) || call.method === 'Page.addScriptToEvaluateOnNewDocument'), false);
+  const wrong = fixture({principal: 'another-member'});
+  await assert.rejects(verifyState(wrong.session, input), error => error.message === 'browser_state_actual_principal_differs'
+    && error.observation.body.principal === 'another-member');
 });
 
 test('unsupported state and wrong bindings are refused before restore dispatch', async () => {

@@ -298,14 +298,94 @@ with protocol fixtures and real Chromium behind an emulated reconnect relay;
 Browserless cloud reconnect has not been verified. See the [provider's session
 contract](https://docs.browserless.io/baas/session-management/standard-sessions).
 
+## Keep a provider profile between runs
+
+Use this when browser cache, persistent cookies and local storage must survive a
+browser restart. The operator must supply a Browserless **Session API** URL. This
+capability is distinct from a CDP launch endpoint and is not available in the
+tested open-source service. Treadway uses the returned connection and deletion
+URLs exactly; it never guesses an API path from a browser URL.
+
+Put the private URL in `TREADWAY_SESSION_API_URL` and use:
+
+```json
+{"browser":{"provider":"browserless","mode":"provider-session","binding":"shared-browser-service","session_api_env":"TREADWAY_SESSION_API_URL","acquire_seconds":20,"session_seconds":300}}
+```
+
+Use a `BrowserIdentity` as in the saved-login example, with the same application,
+user and provider bindings. Give provider profiles their own identity resource;
+snapshot identities and provider profiles cannot share a manifest. Keep the state
+root private and share it among all cooperating writers on the same host.
+
+Create and initialize the profile explicitly, once:
+
+```python
+with BrowserRuntime.from_file("profile-browser.json", root=Path("artifacts/browsers")) as browsers:
+    browsers.create_provider_identity(identity, ttl_seconds=3600)
+    member = browsers.acquire_provider_identity(
+        "member", identity, principal=principal, initial_setup=True,
+    )
+    with browsers.drive(member):
+        # Run the normal sign-in flow using member.connection().
+        sign_in(member.connection())  # Your application's flow.
+    browsers.verify_provider_identity(member)
+    cleanup = browsers.release(member)
+```
+
+`principal` is the same origin/probe/expected-user binding used for saved logins.
+The initial setup actor is available to sign in; it does not establish the user
+until verification succeeds. Later acquisitions verify the actual application
+user before returning an actor:
+
+```python
+with BrowserRuntime.from_file("profile-browser.json", root=Path("artifacts/browsers")) as browsers:
+    member = browsers.acquire_provider_identity(
+        "member", identity, principal=principal,
+        landing_url=principal["origin"] + "/",
+    )
+    with browsers.drive(member):
+        run_flow(member.connection())  # Your application's flow.
+    cleanup = browsers.release(member)
+```
+
+A new acquisition opens a new page and gets a new generation. Persistent profile
+state survives; page handles, tabs and session memory do not. Application login
+can still expire. A failed user check stops acquisition and retains its evidence;
+it does not trigger an implicit login or a replacement profile.
+
+Release asks this profile's dedicated browser to close and requires both the CDP
+acknowledgement and connection closure. `profileReleased` and `profileRetained`
+report this separately from context disposal. To permanently delete a cleanly
+released profile, explicitly call `browsers.forget_provider_identity(identity)`.
+It sends one request to the recorded deletion URL. An active or abandoned lease
+blocks deletion. A missing response remains unknown and blocks automatic reuse;
+do not delete manifests to bypass it.
+
+Treadway leases both the named identity and the actual provider session ID, so
+aliases cannot bypass exclusion under the same trusted state root. Local file
+locks do not coordinate different hosts. Do not share one profile across hosts
+without an external exclusion mechanism. The provider controls profile TTL;
+Treadway does not renew it automatically.
+
+Connection and deletion URLs remain in private capability files. If a provider
+returns a different routing origin, explicitly allow its HTTP origin in
+`session_allowed_origins`; HTTPS cannot downgrade to plaintext. Optional
+`headers_env` supplies headers to the creation API and same-origin returned URLs.
+Credentials are not forwarded to another origin.
+
+The Session API contract is tested with an emulated service. Real Chromium
+checks verify separate processes, persisted state and unrelated-browser survival.
+Cloud and Enterprise Session API behavior remains unverified. See the
+[provider's persistence guide](https://docs.browserless.io/baas/session-management/persisting-state)
+for availability and profile semantics.
+
 ## Current capability boundaries
 
 Fresh contexts support existing page interactions, actual-user checks,
 context-scoped cookies, selected saved state and screenshots. Remote file
 transfers, origin clearing and global target monitoring are refused before
-dispatch. Borrowing and reconnect require the explicit capabilities above. Provider
-persistence remains separate; it must not be inferred from a launch URL or a local
-profile flag.
+dispatch. Borrowing, reconnect and provider persistence require the explicit
+capabilities above; none is inferred from a launch URL or a local profile flag.
 
 The client session deadline cannot extend the provider's lifetime. Cleanup reports
 context disposal separately from provider process termination. Remote Chrome

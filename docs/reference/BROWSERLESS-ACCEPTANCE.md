@@ -5,7 +5,7 @@ These are separate checks with different claims:
 | Check | What it exercises |
 | --- | --- |
 | `npm run test:browserless` | Deterministic transport, worker, scope, deduplication and uncertainty contracts. No Browserless installation. |
-| `npm run test:browserless:browser` | Actual Chromium through a CDP relay, shared-browser context isolation, saved-identity restoration, borrowed-page observation/drive/detach, explicit reconnect, Python bridge/form operations and exported Robot edit/handoff examples. Requires `CHROME_BIN` and installed Python dependencies. |
+| `npm run test:browserless:browser` | Actual Chromium through a CDP relay, shared-browser context isolation, saved-identity restoration, borrowed-page observation/drive/detach, explicit reconnect, profile persistence across browser processes, Python bridge/form operations and exported Robot edit/handoff examples. Requires `CHROME_BIN` and installed Python dependencies. |
 | `npm run test:browserless:service` | Actual Browserless OSS 2.63.1, its Chromium launch route, scoped saved-state restoration, capacity refusal, lost write response and unrelated-client survival. Requires the separate service installation below. |
 
 On 2026-11-17 the service check passed using the published npm service, Node
@@ -25,6 +25,14 @@ Actual Chromium preserves the original context, target, cookies and storage;
 Python revalidates the application's user before driving resumes. Protocol tests
 cover rejected, expired and unobserved preparation replies, changed targets/users,
 authority refusal and an unknown write that remains quarantined after reconnect.
+
+The profile check emulates the Session API's creation and deletion endpoints and
+uses real Chromium for the browser lifecycle. Two different browser processes
+reuse one private profile; persistent cookies and localStorage survive, the
+application user is checked again, and an unrelated browser remains usable.
+The same flow passed from the installed wheel. Protocol checks cover exclusive
+writers, private capabilities, exact returned URLs, missing acknowledgements and
+explicit deletion. This does not verify a hosted Session API implementation.
 
 ## Prepare the pinned OSS service
 

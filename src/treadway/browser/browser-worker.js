@@ -9,6 +9,7 @@ const {performance} = require('node:perf_hooks');
 const {connectEndpoint, RemoteTransportError} = require('./remote-transport');
 const {makeCdpClient} = require('./cdp');
 const browserlessReconnect = require('./browserless-reconnect');
+const providerProfile = require('./provider-profile');
 
 const MAX_LINE = 16 * 1024 * 1024;
 const READ_ONLY = new Set(['Page.enable', 'Page.getFrameTree', 'Page.getLayoutMetrics', 'Page.captureScreenshot',
@@ -23,9 +24,10 @@ function safeError(error, fallback = 'remote_command_incomplete') {
     ...(Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? {status: error.status} : {}),
     ...(typeof error.phase === 'string' && /^[a-z_]+$/.test(error.phase) ? {phase: error.phase} : {}),
     ...(['not_dispatched', 'unknown', 'rejected'].includes(error.allocation) ? {allocation: error.allocation} : {}),
-    ...(error.cleanup && ['fresh', 'borrowed'].includes(error.cleanup.ownership) &&
+    ...(error.cleanup && ['fresh', 'borrowed', 'provider-session'].includes(error.cleanup.ownership) &&
       ['complete', 'contextDisposed', 'attachmentDetached', 'uncertainDispatches'].every(key => typeof error.cleanup[key] === 'boolean') ?
-      {cleanup: Object.fromEntries(['ownership', 'complete', 'contextDisposed', 'attachmentDetached', 'uncertainDispatches'].map(key => [key, error.cleanup[key]]))} : {})};
+      {cleanup: {...Object.fromEntries(['ownership', 'complete', 'contextDisposed', 'attachmentDetached', 'uncertainDispatches'].map(key => [key, error.cleanup[key]])),
+        ...(typeof error.cleanup.profileReleased === 'boolean' ? {profileReleased: error.cleanup.profileReleased} : {})}} : {})};
   return {code: fallback};
 }
 function bounded(value, minimum, maximum) { return Number.isSafeInteger(value) && value >= minimum && value <= maximum; }
@@ -86,18 +88,21 @@ class BrowserWorker {
     return actor;
   }
   async acquire({actor: name, endpoint, headers, proxyUrl, ca, budgetMs = this.acquireMs,
-    mode = 'fresh', borrowed, reconnect} = {}) {
+    mode = 'fresh', borrowed, reconnect, profile} = {}) {
     if (!this.started || this.closed || !identifier(name)) throw failure('remote_acquisition_invalid');
     if (!bounded(budgetMs, 1, this.acquireMs)) throw failure('remote_acquisition_deadline_invalid');
     if (this.actors.has(name)) throw failure('remote_actor_already_acquired');
-    if (!['fresh', 'borrowed'].includes(mode) || mode === 'fresh' && borrowed !== undefined ||
+    if (!['fresh', 'borrowed', 'provider-session'].includes(mode) || mode !== 'borrowed' && borrowed !== undefined ||
+      mode !== 'provider-session' && profile !== undefined ||
       mode === 'borrowed' && (!borrowed || borrowed.scope !== 'context' || !['observe', 'drive'].includes(borrowed.permission) ||
         !['contextId', 'targetId'].every(key => typeof borrowed[key] === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(borrowed[key]))))
       throw failure('remote_borrowed_binding_required');
     const reconnectPolicy = browserlessReconnect.validatePolicy(reconnect);
     if (mode !== 'fresh' && reconnectPolicy) throw failure('remote_reconnect_mode_unsupported');
+    const profileScope = mode === 'provider-session' ? providerProfile.authorize(profile, endpoint, this.projectId) : null;
     const actor = {name, generation: crypto.randomUUID(), targetRef: crypto.randomUUID(), contextRef: crypto.randomUUID(),
       mode, permission: borrowed?.permission || 'drive', attachments: new Map(), attaching: 0,
+      profileScope,
       reconnectPolicy, initialEndpoint: endpoint, transportOptions: {headers, proxyUrl, ca},
       state: 'acquiring', receipts: new Map(), receiptBytes: 0, pending: new Set(), uncertain: false, abort: new AbortController()};
     this.actors.set(name, actor);
@@ -119,11 +124,16 @@ class BrowserWorker {
         this.record({kind: 'context_acquired', actor: name, generation: actor.generation, contextId: actor.contextId});
         actor.targetId = (await command('Target.createTarget', {url: 'about:blank', browserContextId: actor.contextId})).targetId;
         if (typeof actor.targetId !== 'string' || !actor.targetId) throw failure('remote_target_unavailable');
+      } else if (mode === 'provider-session') {
+        actor.targetId = (await command('Target.createTarget', {url: 'about:blank'})).targetId;
+        if (typeof actor.targetId !== 'string' || !actor.targetId) throw failure('remote_target_unavailable');
+        this.record({kind: 'profile_acquired', actor: name, generation: actor.generation, resourceRef: profileScope.resourceRef});
       } else {
         actor.contextId = borrowed.contextId; actor.targetId = borrowed.targetId;
       }
       const {targetInfo} = await command('Target.getTargetInfo', {targetId: actor.targetId});
-      if (targetInfo?.targetId !== actor.targetId || targetInfo.type !== 'page' || targetInfo.browserContextId !== actor.contextId) {
+      if (mode === 'provider-session') actor.contextId = targetInfo?.browserContextId ?? null;
+      if (targetInfo?.targetId !== actor.targetId || targetInfo.type !== 'page' || (targetInfo.browserContextId ?? null) !== actor.contextId) {
         throw failure('remote_target_context_differs');
       }
       actor.scopeConfirmed = true;
@@ -172,11 +182,16 @@ class BrowserWorker {
       this.record({kind: 'cleanup_intent', actor: actor.name, generation: actor.generation});
       actor.client?.destroy();
       let contextDisposed = actor.mode === 'fresh' && !actor.contextCreationSent, remoteTermination = 'unconfirmed';
-      let attachmentDetached = false;
+      let attachmentDetached = false, profileReleased = false;
       if (actor.mode === 'borrowed') {
         const attaching = actor.attaching > 0;
         const replies = await Promise.all([...actor.attachments.keys()].map(id => this.detachPage(actor, id)));
         attachmentDetached = !attaching && actor.attaching === 0 && priorState !== 'transport_lost' && replies.every(value => value === true);
+      } else if (actor.mode === 'provider-session') {
+        if (actor.cdp && actor.profileScope && priorState !== 'transport_lost') {
+          profileReleased = await providerProfile.close(actor, this.cleanupMs);
+          if (profileReleased) remoteTermination = 'confirmed';
+        }
       } else if (actor.cdp && actor.contextId && actor.scopeConfirmed && priorState !== 'transport_lost') {
         try {
           await actor.cdp.send('Target.disposeBrowserContext', {browserContextId: actor.contextId}, {timeoutMs: this.cleanupMs});
@@ -185,7 +200,9 @@ class BrowserWorker {
       }
       actor.cdp?.close(); actor.ws?.terminate(); actor.state = 'released';
       const result = {contextDisposed, attachmentDetached, ownership: actor.mode, connectionClosed: true, remoteTermination,
-        complete: actor.mode === 'borrowed' ? attachmentDetached : contextDisposed, uncertainDispatches: actor.uncertain};
+        ...(actor.mode === 'provider-session' ? {profileReleased, profileRetained: profileReleased} : {}),
+        complete: actor.mode === 'provider-session' ? profileReleased : actor.mode === 'borrowed' ? attachmentDetached : contextDisposed,
+        uncertainDispatches: actor.uncertain};
       this.record({kind: 'cleanup_result', actor: actor.name, generation: actor.generation, ...result});
       return result;
     })();
@@ -227,7 +244,8 @@ class BrowserWorker {
   route(actor, method, params) {
     if (method === 'Storage.getCookies' || method === 'Storage.setCookies') {
       if (params.browserContextId && params.browserContextId !== actor.contextRef) throw failure('remote_context_differs');
-      return {params: {...params, browserContextId: actor.contextId}, sessionId: null};
+      const scoped = {...params}; delete scoped.browserContextId;
+      return {params: {...scoped, ...(actor.contextId ? {browserContextId: actor.contextId} : {})}, sessionId: null};
     }
     if (!(method === 'DOMStorage.getDOMStorageItems' || /^(?:Page|Runtime|DOM|Input|Network|Accessibility|Emulation)\.[A-Za-z]+$/.test(method)) || DENIED.has(method)) {
       throw failure('remote_method_unsupported');
@@ -280,7 +298,7 @@ class BrowserWorker {
               // Recheck the exact target: an operator may have closed/replaced it since acquisition.
               const {targetInfo} = await actor.cdp.send('Target.getTargetInfo', {targetId: actor.targetId},
                 {timeoutMs: Math.min(this.acquireMs, Math.max(1, Math.ceil(actor.deadline - performance.now())))});
-              if (targetInfo?.targetId !== actor.targetId || targetInfo.browserContextId !== actor.contextId || targetInfo.type !== 'page')
+              if (targetInfo?.targetId !== actor.targetId || (targetInfo.browserContextId ?? null) !== actor.contextId || targetInfo.type !== 'page')
                 throw failure('remote_target_context_differs');
               attached = await actor.cdp.send('Target.attachToTarget', {targetId: actor.targetId, flatten: true},
                 {timeoutMs: Math.min(this.acquireMs, Math.max(1, Math.ceil(actor.deadline - performance.now())))});

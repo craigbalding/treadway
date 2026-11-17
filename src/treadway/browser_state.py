@@ -232,6 +232,7 @@ class BrowserIdentity:
         """
         lease = self.acquire(project_id)
         try:
+            lease.require_storage_kind('snapshot')
             for path in lease.directory.glob('state-*.json'):
                 if not re.fullmatch(r'state-[0-9a-f-]{36}\.json', path.name):
                     continue
@@ -241,9 +242,12 @@ class BrowserIdentity:
             _write(lease.directory / 'identity.json', lease._record)
             lease.release(context_disposed=True, uncertain=False)
             return {'forgotten': True, 'credentialRevocation': 'not_attempted', 'runEvidence': 'retained'}
-        except BaseException:
+        except BaseException as error:
             try:
-                lease.release()
+                if isinstance(error, BrowserStateIncomplete) and str(error) == 'browser_identity_storage_kind_differs':
+                    lease.release(profile_released=True, uncertain=False)
+                else:
+                    lease.release()
             except Exception:
                 pass
             raise
@@ -259,6 +263,18 @@ class IdentityLease:
     def binding(self):
         return json.loads(json.dumps(self._record['binding']))
 
+    def require_storage_kind(self, kind, *, initialize=False):
+        self._current()
+        current = self._record.get('storageKind', 'snapshot')
+        if current == kind:
+            return
+        if (initialize and kind == 'provider-session' and 'storageKind' not in self._record
+                and self._record.get('snapshot') is None and self._record.get('execution') is None):
+            self._record['storageKind'] = kind
+            _write(self.directory / 'identity.json', self._record)
+            return
+        raise BrowserStateIncomplete('browser_identity_storage_kind_differs')
+
     def _current(self):
         if self._closed:
             raise BrowserStateIncomplete('browser_identity_lease_closed')
@@ -270,6 +286,7 @@ class IdentityLease:
             raise BrowserStateIncomplete('browser_identity_owner_differs')
 
     def read(self):
+        self.require_storage_kind('snapshot')
         self._current()
         snapshot = self._record.get('snapshot')
         if snapshot is None:
@@ -293,9 +310,10 @@ class IdentityLease:
     def record_run(self, *, directory, project_id, run_id, actor, mode='snapshot-fresh'):
         """Durably bind this owner before the worker's allocation request."""
         self._current()
-        if (mode not in {'snapshot-fresh', 'borrowed'} or project_id != self.binding['projectId'] or any(not isinstance(value, str)
+        if (mode not in {'snapshot-fresh', 'borrowed', 'provider-session'} or project_id != self.binding['projectId'] or any(not isinstance(value, str)
                 or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value) for value in (run_id, actor))):
             raise ValueError('explicit_browser_run_binding_required')
+        self.require_storage_kind('provider-session' if mode == 'provider-session' else 'snapshot')
         self._record['execution'] = {'provider': 'browserless', 'mode': mode,
             'directory': str(Path(directory).absolute()), 'projectId': project_id, 'runId': run_id, 'actor': actor}
         _write(self.directory / 'identity.json', self._record)
@@ -314,6 +332,7 @@ class IdentityLease:
             raise BrowserStateIncomplete('browser_identity_snapshot_binding_differs')
 
     def save(self, snapshot):
+        self.require_storage_kind('snapshot')
         self._current()
         self._validate(snapshot)
         target = self.directory / ('state-' + str(uuid.uuid4()) + '.json')
@@ -322,7 +341,7 @@ class IdentityLease:
         _write(self.directory / 'identity.json', self._record)
         return {'saved': True, 'components': self.binding['components'], 'sourceGeneration': snapshot['sourceGeneration']}
 
-    def release(self, *, context_disposed=False, attachment_detached=False, uncertain=True):
+    def release(self, *, context_disposed=False, attachment_detached=False, profile_released=False, uncertain=True):
         if self._closed:
             return self.last_release
         self.last_release = {'released': False, 'recoveryRequired': True}
@@ -330,10 +349,13 @@ class IdentityLease:
             self._current()
             execution = self._record.get('execution')
             borrowed = isinstance(execution, dict) and execution.get('mode') == 'borrowed'
-            finished = attachment_detached is True if borrowed else context_disposed is True
+            provider_profile = self._record.get('storageKind') == 'provider-session'
+            finished = profile_released is True if provider_profile else attachment_detached is True if borrowed else context_disposed is True
             self._record.update(state='released' if finished and uncertain is False else 'recovery_required',
                                 cleanup={'contextDisposed': context_disposed is True,
                                          'attachmentDetached': attachment_detached is True, 'uncertain': uncertain is not False})
+            if provider_profile:
+                self._record['cleanup']['profileReleased'] = profile_released is True
             self._record.pop('owner', None)
             _write(self.directory / 'identity.json', self._record)
             self.last_release = {'released': True, 'recoveryRequired': self._record['state'] != 'released'}

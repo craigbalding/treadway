@@ -4,7 +4,8 @@ This reference records the design reviewed on 2026-11-17. Fresh sessions, select
 saved state, borrowed attachment and explicit reconnect are now implemented.
 Use [the task guide](../REMOTE-BROWSERS.md) for actual APIs and commands, and the
 [acceptance record](BROWSERLESS-ACCEPTANCE.md) for tested paths and limitations.
-Provider persistence and final review remain in progress.
+Provider persistence is implemented behind an explicit Session API capability;
+owner recovery and final review remain in progress.
 
 The design was reviewed against Treadway commit
 `203adc8ffe1e7fb99903ed981a2f891c8ad9bafa`, official Browserless documentation and the

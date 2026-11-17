@@ -168,20 +168,37 @@ async function restoreState(session, snapshot, input) {
     }
   }
 }
-module.exports = {captureState, restoreState, validateSnapshot, validateBinding, verifyPrincipal: principal};
+async function verifyState(session, input) {
+  optionsFor(input);
+  const remaining = budget(input.timeoutMs ?? 10000);
+  if (input.landingUrl !== undefined) {
+    const landing = new URL(input.landingUrl);
+    if (landing.origin !== input.principal.origin || landing.username || landing.password) fail('browser_state_landing_origin_differs');
+    await session.navigate(input.landingUrl, {timeoutMs: remaining()});
+  }
+  const before = await value(session, '({origin:location.origin,timeOrigin:performance.timeOrigin})', remaining);
+  if (before.origin !== input.principal.origin) fail('browser_state_origin_differs');
+  const verified = await principal(session, input, remaining);
+  const after = await value(session, '({origin:location.origin,timeOrigin:performance.timeOrigin})', remaining);
+  if (before.origin !== after.origin || before.timeOrigin !== after.timeOrigin) fail('browser_state_document_changed');
+  return {verified: true, generation: input.generation, principal: verified};
+}
+module.exports = {captureState, restoreState, verifyState, validateSnapshot, validateBinding, verifyPrincipal: principal};
 
 if (require.main === module) (async () => {
   const fs = require('node:fs'); const {connectSession} = require('./connection'); let session;
   try {
     const raw = fs.readFileSync(0); if (raw.length > MAX_BYTES + 65536) fail('bounded_browser_state_required');
     const input = JSON.parse(raw); optionsFor(input);
-    if (!['capture', 'restore'].includes(input.operation)) fail('browser_state_operation_required');
+    if (!['capture', 'restore', 'verify'].includes(input.operation)) fail('browser_state_operation_required');
     if (input.operation === 'restore') validateSnapshot(input.snapshot, input.binding);
     session = await connectSession(input.connection, {commandTimeoutMs: input.timeoutMs ?? 10000});
-    const result = input.operation === 'capture' ? await captureState(session, input) : await restoreState(session, input.snapshot, input);
+    const result = input.operation === 'capture' ? await captureState(session, input) : input.operation === 'verify' ?
+      await verifyState(session, input) : await restoreState(session, input.snapshot, input);
     process.stdout.write(JSON.stringify({complete: true, result}));
   } catch (error) {
     const code = /^(?:browser_|multi_origin_)[a-z_]+$/.test(error.message) ? error.message : 'browser_state_operation_incomplete';
-    process.stdout.write(JSON.stringify({complete: false, code, ...(error.stateCleanupIncomplete ? {cleanupIncomplete: true} : {})})); process.exitCode = 1;
+    process.stdout.write(JSON.stringify({complete: false, code, ...(error.observation ? {observation: error.observation} : {}),
+      ...(error.stateCleanupIncomplete ? {cleanupIncomplete: true} : {})})); process.exitCode = 1;
   } finally { session?.close(); }
 })();

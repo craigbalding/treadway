@@ -149,23 +149,26 @@ class BrowserRuntime:
         if provider == 'local' and set(config) - {'provider', 'binding', 'acquire_seconds', 'session_seconds', 'cleanup_seconds'}:
             raise ValueError('local_browser_configuration_invalid')
         if provider == "browserless":
-            allowed = {"provider", "binding", "endpoint_env", "attachment_env", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds", "reconnect"}
+            allowed = {"provider", "binding", "endpoint_env", "attachment_env", "session_api_env", "session_allowed_origins", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds", "reconnect"}
             mode = config.get('mode', 'fresh')
-            if set(config) - allowed or mode not in {'fresh', 'borrowed'}:
+            if set(config) - allowed or mode not in {'fresh', 'borrowed', 'provider-session'}:
                 raise ValueError("remote_browser_capability_unsupported")
-            required = 'attachment_env' if mode == 'borrowed' else 'endpoint_env'
-            if ('endpoint_env' if mode == 'borrowed' else 'attachment_env') in config:
+            required = {'borrowed': 'attachment_env', 'provider-session': 'session_api_env'}.get(mode, 'endpoint_env')
+            if set(config) & ({'endpoint_env', 'attachment_env', 'session_api_env'} - {required}) or mode != 'provider-session' and 'session_allowed_origins' in config:
                 raise ValueError('remote_browser_configuration_conflicts')
             for key in (required, "headers_env"):
                 value = config.get(key)
                 if (key == required or value is not None) and (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)):
                     raise ValueError("browser_secret_reference_invalid")
+            if mode == 'provider-session':
+                from .browserless_sessions import configuration as validate_session_configuration
+                validate_session_configuration(config)
         self.reconnect_policy = _reconnect_policy(config.get('reconnect'))
         if self.reconnect_policy is not None and (provider != 'browserless' or config.get('mode', 'fresh') != 'fresh'):
             raise ValueError('remote_reconnect_mode_unsupported')
         self.configuration = config
         self.provider = provider
-        self.provider_binding = config.get('binding', config.get('endpoint_env', config.get('attachment_env', 'local')))
+        self.provider_binding = config.get('binding', config.get('endpoint_env', config.get('attachment_env', config.get('session_api_env', 'local'))))
         if not isinstance(self.provider_binding, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', self.provider_binding):
             raise ValueError('safe_browser_provider_binding_required')
         self.root = Path(root).absolute()
@@ -245,6 +248,8 @@ class BrowserRuntime:
             raise BrowserRuntimeIncomplete("browser_runtime_closed")
         if self.configuration.get('mode') == 'borrowed':
             raise ValueError('remote_explicit_borrow_required')
+        if self.configuration.get('mode') == 'provider-session':
+            raise ValueError('remote_explicit_provider_identity_required')
         if not isinstance(actor, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", actor):
             raise ValueError("path_safe_session_name_required")
         if any(session.name == actor for session in self.sessions.values()):
@@ -377,7 +382,9 @@ class BrowserRuntime:
         leases, attempted, session = [], False, None
         try:
             leases.append(identity.acquire(project_id))
+            leases[0].require_storage_kind('snapshot')
             leases.append(canonical.acquire(project_id))
+            leases[1].require_storage_kind('snapshot')
             with self._rpc_lock:
                 try:
                     self._start_worker(deadline)
@@ -418,7 +425,8 @@ class BrowserRuntime:
                          and cleanup.get('uncertainDispatches') is False)
                 for lease in reversed(leases):
                     try:
-                        lease.release(context_disposed=not attempted, attachment_detached=clean, uncertain=not clean)
+                        lease.release(context_disposed=not attempted, attachment_detached=clean,
+                                      profile_released=not attempted, uncertain=not clean)
                     except Exception:
                         pass
             raise
@@ -457,6 +465,7 @@ class BrowserRuntime:
         lease = identity.acquire(project_id)
         session, browser_attempted = None, False
         try:
+            lease.require_storage_kind('snapshot')
             snapshot = lease.read() if restore else None
             browser_attempted = True
             session = self.acquire(actor, _identity_lease=lease, **local_options)
@@ -478,7 +487,7 @@ class BrowserRuntime:
                 try:
                     if self.provider == 'browserless' and lease._record.get('execution') is None:
                         browser_attempted = False  # The durable intent precedes every allocation RPC.
-                    lease.release(context_disposed=not browser_attempted, uncertain=browser_attempted)
+                    lease.release(context_disposed=not browser_attempted, profile_released=not browser_attempted, uncertain=browser_attempted)
                 except Exception:
                     pass  # Preserve the first failure; the manifest remains unavailable.
             raise
@@ -513,6 +522,10 @@ class BrowserRuntime:
 
     def save_identity(self, session, *, timeout_seconds=10):
         """Explicitly verify the actual principal, export and persist scoped state."""
+        self._owned(session)
+        if session._identity_lease is None:
+            raise ValueError('browser_identity_lease_required')
+        session._identity_lease.require_storage_kind('snapshot')
         snapshot = self._state_operation(session, 'capture', timeout_seconds=timeout_seconds)
         try:
             return session._identity_lease.save(snapshot)
@@ -584,6 +597,7 @@ class BrowserRuntime:
                     result[key] = lease.release(
                         context_disposed=result.get('contextDisposed', result.get('complete')) is True,
                         attachment_detached=result.get('attachmentDetached') is True,
+                        profile_released=result.get('profileReleased') is True,
                         uncertain=session._identity_failed or result.get('uncertainDispatches', False))
                 except BaseException as error:
                     result[key] = {'released': False, 'recoveryRequired': True}
@@ -599,6 +613,23 @@ class BrowserRuntime:
         if session.provider != 'browserless':
             raise ValueError('remote_receipt_inspection_required')
         return self._rpc(operation='inspect', connection=session.connection())
+
+    def create_provider_identity(self, identity, *, ttl_seconds, headless=True):
+        from .browserless_sessions import create
+        return create(self, identity, ttl_seconds=ttl_seconds, headless=headless)
+
+    def acquire_provider_identity(self, actor, identity, *, principal, initial_setup=False, landing_url=None, verify_seconds=10):
+        from .browserless_sessions import acquire
+        return acquire(self, actor, identity, principal=principal, initial_setup=initial_setup,
+            landing_url=landing_url, verify_seconds=verify_seconds)
+
+    def verify_provider_identity(self, session, *, timeout_seconds=10):
+        from .browserless_sessions import verify
+        return verify(self, session, timeout_seconds=timeout_seconds)
+
+    def forget_provider_identity(self, identity):
+        from .browserless_sessions import forget
+        return forget(self, identity)
 
     def prepare_reconnect(self, session, *, timeout_seconds=30):
         """Explicitly reserve provider reconnect time; retain its URL privately.
