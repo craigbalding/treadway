@@ -189,7 +189,7 @@ class BrowserWorker {
       if (params.browserContextId && params.browserContextId !== actor.contextRef) throw failure('remote_context_differs');
       return {params: {...params, browserContextId: actor.contextId}, sessionId: null};
     }
-    if (!/^(?:Page|Runtime|DOM|Input|Network|Accessibility|Emulation)\.[A-Za-z]+$/.test(method) || DENIED.has(method)) {
+    if (!(method === 'DOMStorage.getDOMStorageItems' || /^(?:Page|Runtime|DOM|Input|Network|Accessibility|Emulation)\.[A-Za-z]+$/.test(method)) || DENIED.has(method)) {
       throw failure('remote_method_unsupported');
     }
     return {params};

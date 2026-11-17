@@ -75,6 +75,67 @@ The optimisation example accepts `--browser-config`, `--fixture-host` and
 with each disposable fixture's selected port. Browserless must be able to reach
 those ports. Local HTTP observers continue to run from the runner.
 
+## Save a login for another run
+
+Use a saved identity when a later run should start with the same application's
+login. The browser context is still fresh. Treadway restores only the state you
+selected, then checks the application's actual user before returning the actor.
+It does not log in again or retry a failed restore.
+
+Add a stable safe `binding`, such as `shared-browser-service`, to the browser
+configuration. Bind the identity to that alias, your project, the application,
+the intended user and the exact application origins:
+
+```python
+from treadway.browser_state import BrowserIdentity
+
+identity = BrowserIdentity(
+    root=Path.home() / ".local/state/treadway/identities",
+    resource="workboard-member", application="workboard", identity_ref="member",
+    provider_binding="shared-browser-service",
+    origins=("https://app.example.invalid",),
+    components=("cookies", "localStorage", "sessionStorage"),
+)
+principal = {"origin": identity.origins[0], "probe": "/api/principal",
+             "expected": {"principal": "member"}}
+
+with BrowserRuntime.from_file("browser.json", root=Path("artifacts/browsers")) as browsers:
+    member = browsers.acquire_identity(
+        "member", identity, principal=principal,
+        landing_url="https://app.example.invalid/workboard",
+    )
+    # Run your application flow with browsers.drive(member).
+    browsers.save_identity(member)  # Explicitly persist any changed login state.
+```
+
+For initial setup, acquire with `restore=False`, run your application's normal
+login flow, then call `save_identity(member)`. Missing state stops before browser
+allocation; it never triggers an implicit login. Saving verifies the actual user
+and includes HttpOnly cookies and cookies from every application path. The
+principal endpoint must return JSON matching the expected fields.
+
+All runs sharing the same state resource must use the same trusted state root
+on one host. The resource has an exclusive writer lease for the entire browser
+lifetime. A different project or identity alias cannot bypass it. Independent
+roots, copied state and multiple hosts require external coordination.
+
+State files and operation captures contain credentials and stay private. The
+snapshot declares its selected components; it is not a browser profile. Web
+Storage currently requires one origin; cookie-only snapshots can select up to
+eight origins. IndexedDB, cache, service workers and filesystem state are not
+captured. Unsupported requirements fail before restore. Cookies use domain/path
+scope, so an origin's port is not a cookie isolation boundary.
+
+An owner crash, failed state operation or unconfirmed cleanup leaves the resource
+recovery-required. A free local file lock does not establish that the old remote
+browser stopped. Do not delete the manifest or force another login to bypass it;
+retain its run evidence and establish cleanup and application outcomes first.
+
+After a clean release, `identity.forget(project_id)` explicitly removes saved
+snapshots. It refuses active or recovery-required resources, retains their
+project binding and does not revoke credentials or erase run evidence. Ordinary
+browser release never deletes saved login state.
+
 ## Inspect an incomplete operation
 
 Keep the first attempt's private worker `events.jsonl` and operation artifacts.
@@ -104,9 +165,9 @@ disconnect or cleanup result cannot turn a missing response into rejection.
 ## Current capability boundaries
 
 Fresh contexts support existing page interactions, actual-user checks,
-context-scoped cookies and screenshots. Remote file transfers, origin clearing
-and global target monitoring are refused before dispatch. Borrowing, reconnect,
-saved-state restoration and provider persistence require their own explicit
+context-scoped cookies, selected saved state and screenshots. Remote file
+transfers, origin clearing and global target monitoring are refused before
+dispatch. Borrowing, reconnect and provider persistence require their own explicit
 capabilities; they must not be inferred from a launch URL or a local profile flag.
 
 The client session deadline cannot extend the provider's lifetime. Cleanup reports

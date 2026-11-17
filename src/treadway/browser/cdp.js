@@ -387,8 +387,8 @@ async function initializeSession(cdp, target, capabilities = {}) {
     async screenshot(outPath) {
       return screenshot(cdp, outPath);
     },
-    async navigate(url) {
-      return navigate(cdp, url);
+    async navigate(url, options = {}) {
+      return navigate(cdp, url, options);
     },
     async click(selector) {
       return click(cdp, selector);
@@ -968,11 +968,11 @@ async function screenshot(cdp, outPath) {
 // Navigate
 // ---------------------------------------------------------------------------
 
-async function navigate(cdp, url) {
-  const loadPromise = cdp.once("Page.loadEventFired");
+async function navigate(cdp, url, options = {}) {
+  const loadPromise = cdp.once("Page.loadEventFired", options);
   try {
     const [navResult] = await Promise.all([
-      cdp.send("Page.navigate", { url }).then(result => {
+      cdp.send("Page.navigate", { url }, options).then(result => {
         if (result.errorText) throw new Error(`Navigation failed: ${result.errorText}`);
         return result;
       }), loadPromise,

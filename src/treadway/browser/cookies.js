@@ -13,6 +13,16 @@ function appliesToHost(cookie, hostname) {
     (domain.startsWith('.') && hostname.endsWith(domain));
 }
 
+function validateCookies(cookies) {
+  if (!Array.isArray(cookies)) throw new Error('cookie_snapshot_incomplete');
+  for (const cookie of cookies) {
+    if (!cookie || !['name', 'value', 'domain', 'path'].every(key => typeof cookie[key] === 'string') ||
+        !['secure', 'httpOnly', 'session'].every(key => typeof cookie[key] === 'boolean') ||
+        typeof cookie.expires !== 'number' || !Number.isFinite(cookie.expires)) throw new Error('cookie_snapshot_incomplete');
+  }
+  return cookies;
+}
+
 async function captureCookies(session, {origin, actor, generation, timeoutMs = 5000} = {}) {
   const url = new URL(origin);
   if (url.origin !== origin || !['https:', 'http:'].includes(url.protocol) ||
@@ -38,16 +48,11 @@ async function captureCookies(session, {origin, actor, generation, timeoutMs = 5
   if (!Array.isArray(response.cookies) || response.cookies.some(cookie => !cookie || typeof cookie.domain !== 'string'))
     throw new Error('cookie_snapshot_incomplete');
   const cookies = response.cookies.filter(cookie => appliesToHost(cookie, url.hostname));
-  for (const cookie of cookies) {
-    if (!['name', 'value', 'path'].every(key => typeof cookie[key] === 'string') ||
-        !['secure', 'httpOnly', 'session'].every(key => typeof cookie[key] === 'boolean') ||
-        typeof cookie.expires !== 'number' || !Number.isFinite(cookie.expires))
-      throw new Error('cookie_snapshot_incomplete');
-  }
+  validateCookies(cookies);
   const after = await observe();
   if (before.timeOrigin !== after.timeOrigin) throw new Error('cookie_snapshot_context_changed');
   return {version: 'treadway.cookies/1', complete: true, actor, generation, origin,
     observedAt: new Date().toISOString(), cookies: JSON.parse(JSON.stringify(cookies)), limits: [...LIMITS]};
 }
 
-module.exports = {captureCookies, appliesToHost, LIMITS};
+module.exports = {captureCookies, appliesToHost, validateCookies, LIMITS};

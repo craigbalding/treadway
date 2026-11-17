@@ -25,6 +25,8 @@ import uuid
 
 from .browsers import BrowserManager, BrowserSession, private_json
 from .credentials import CredentialRef, EnvironmentProvider
+from .browser_state import BrowserIdentity, IdentityLease
+from .process import run_json_process
 
 
 class BrowserRuntimeIncomplete(RuntimeError):
@@ -96,6 +98,9 @@ class RuntimeSession:
     _connection: dict = field(repr=False)
     capabilities: dict = field(default_factory=dict)
     _local: BrowserSession | None = field(default=None, repr=False)
+    _identity_lease: IdentityLease | None = field(default=None, repr=False)
+    _identity_principal: dict | None = field(default=None, repr=False)
+    _identity_failed: bool = field(default=False, repr=False)
 
     def connection(self):
         """Private subprocess input; do not pass this mapping as Robot arguments."""
@@ -112,10 +117,10 @@ class BrowserRuntime:
         provider = config.get("provider", "local")
         if provider not in {"local", "browserless"}:
             raise ValueError("browser_provider_unsupported")
-        if provider == 'local' and set(config) - {'provider', 'acquire_seconds', 'session_seconds', 'cleanup_seconds'}:
+        if provider == 'local' and set(config) - {'provider', 'binding', 'acquire_seconds', 'session_seconds', 'cleanup_seconds'}:
             raise ValueError('local_browser_configuration_invalid')
         if provider == "browserless":
-            allowed = {"provider", "endpoint_env", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds"}
+            allowed = {"provider", "binding", "endpoint_env", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds"}
             if set(config) - allowed or config.get("mode", "fresh") != "fresh":
                 raise ValueError("remote_browser_capability_unsupported")
             for key in ("endpoint_env", "headers_env"):
@@ -124,6 +129,9 @@ class BrowserRuntime:
                     raise ValueError("browser_secret_reference_invalid")
         self.configuration = config
         self.provider = provider
+        self.provider_binding = config.get('binding', config.get('endpoint_env', 'local'))
+        if not isinstance(self.provider_binding, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', self.provider_binding):
+            raise ValueError('safe_browser_provider_binding_required')
         self.root = Path(root).absolute()
         self.project_root = Path(project_root or Path.cwd()).absolute()
         self.acquire_seconds = _seconds(config.get("acquire_seconds", 15), 3600)
@@ -270,12 +278,110 @@ class BrowserRuntime:
             raise BrowserRuntimeIncomplete("browser_runtime_binding_differs")
         return session
 
+    def acquire_identity(self, actor, identity, *, principal, restore=True, landing_url=None,
+                         state_timeout_seconds=10, **local_options):
+        """Lease a saved identity for this whole browser lifetime.
+
+        ``restore=False`` explicitly starts fresh for initial login/setup.
+        Missing state is never repaired by an implicit login or account fallback.
+        The actual principal is verified inside restore/export, independently of
+        the configured identity label.
+        """
+        if self._closed:
+            raise BrowserRuntimeIncomplete('browser_runtime_closed')
+        if not isinstance(identity, BrowserIdentity) or identity.provider_binding != self.provider_binding:
+            raise ValueError('browser_identity_provider_binding_differs')
+        if not isinstance(actor, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', actor):
+            raise ValueError('path_safe_session_name_required')
+        if any(session.name == actor for session in self.sessions.values()):
+            raise BrowserRuntimeIncomplete('browser_actor_already_acquired')
+        if self.provider == 'browserless' and local_options:
+            raise ValueError('local_launch_options_not_remote_capabilities')
+        if type(restore) is not bool or local_options.get('persistent'):
+            raise ValueError('browser_identity_fresh_context_required')
+        state_timeout_seconds = _seconds(state_timeout_seconds, 30)
+        principal = json.loads(json.dumps(principal, allow_nan=False))
+        if (not isinstance(principal, dict) or principal.get('origin') not in identity.origins
+                or set(principal) - {'origin', 'probe', 'expected', 'maxBodyBytes'}
+                or not isinstance(principal.get('probe'), str) or not principal['probe'].startswith('/')
+                or principal['probe'].startswith('//') or not isinstance(principal.get('expected'), dict)
+                or not principal['expected']):
+            raise ValueError('browser_identity_principal_binding_required')
+        project_id = _project_identity(self.project_root, time.monotonic() + self.acquire_seconds)
+        self.project_id = project_id
+        lease = identity.acquire(project_id)
+        session, browser_attempted = None, False
+        try:
+            snapshot = lease.read() if restore else None
+            browser_attempted = True
+            session = self.acquire(actor, **local_options)
+            session._identity_lease, session._identity_principal = lease, principal
+            if restore:
+                self._state_operation(session, 'restore', snapshot=snapshot,
+                    landingUrl=landing_url or principal['origin'] + '/', timeout_seconds=state_timeout_seconds)
+            return session
+        except BaseException:
+            if session is not None:
+                session._identity_failed = True
+                try:
+                    self.release(session)
+                except Exception:
+                    pass
+            else:
+                try:
+                    lease.release(context_disposed=not browser_attempted, uncertain=browser_attempted)
+                except Exception:
+                    pass  # Preserve the first failure; the manifest remains unavailable.
+            raise
+
+    def _state_operation(self, session, operation, *, timeout_seconds=10, **arguments):
+        self._owned(session)
+        if session._identity_lease is None:
+            raise ValueError('browser_identity_lease_required')
+        timeout_seconds = _seconds(timeout_seconds, 30)
+        evidence_root = _private_directory(self.root / 'state-attempts')
+        evidence = evidence_root / (str(uuid.uuid4()) + '.json')
+        try:
+            with self.drive(session):
+                payload = {'operation': operation, 'connection': session.connection(),
+                    'binding': session._identity_lease.binding, 'actor': session.name, 'generation': session.generation,
+                    'principal': session._identity_principal, 'timeoutMs': max(1, int(timeout_seconds * 1000)), **arguments}
+                transport = run_json_process(['node', str(Path(__file__).with_name('browser') / 'state-snapshot.js')],
+                    input_data=json.dumps(payload), timeout_seconds=timeout_seconds + 3, preserve_newlines=True)
+            private_json(evidence, transport)
+            value = transport.get('payload')
+            if (transport.get('failure') is not None or transport.get('exitCode') != 0
+                    or not isinstance(value, dict) or value.get('complete') is not True):
+                code = value.get('code') if isinstance(value, dict) else None
+                code = code if isinstance(code, str) and re.fullmatch(r'(?:browser_|multi_origin_)[a-z_]+', code) else 'browser_state_operation_incomplete'
+                raise BrowserRuntimeIncomplete(code, evidence=evidence)
+            return value['result']
+        except BaseException:
+            session._identity_failed = True
+            raise
+
+    def save_identity(self, session, *, timeout_seconds=10):
+        """Explicitly verify the actual principal, export and persist scoped state."""
+        snapshot = self._state_operation(session, 'capture', timeout_seconds=timeout_seconds)
+        try:
+            return session._identity_lease.save(snapshot)
+        except BaseException:
+            session._identity_failed = True
+            raise
+
     @contextmanager
     def drive(self, session):
         self._owned(session)
+        if session._identity_lease is not None:
+            session._identity_lease._current()
         if session.provider == "local":
-            with self.local.drive(session._local):
-                yield session
+            try:
+                with self.local.drive(session._local):
+                    yield session
+            except BaseException:
+                if session._identity_lease is not None:
+                    session._identity_failed = True
+                raise
             return
         lease = self._rpc(operation="reserve", connection=session.connection())
         session._connection.update(lease)
@@ -284,6 +390,8 @@ class BrowserRuntime:
             yield session
         except BaseException:
             failed = True
+            if session._identity_lease is not None:
+                session._identity_failed = True
             raise
         finally:
             try:
@@ -296,12 +404,25 @@ class BrowserRuntime:
 
     def release(self, session):
         self._owned(session)
-        if session.provider == "local":
-            self.local.stop(session._local)
-            result = {"complete": True}
-        else:
-            result = self._rpc(operation="release", connection=session.connection(), timeout=self.cleanup_seconds + 2)
+        try:
+            if session.provider == "local":
+                self.local.stop(session._local)
+                result = {"complete": True}
+            else:
+                result = self._rpc(operation="release", connection=session.connection(), timeout=self.cleanup_seconds + 2)
+        except BaseException:
+            self.last_cleanup = {'complete': False, 'contextDisposed': False}
+            if session._identity_lease is not None:
+                try:
+                    self.last_cleanup['identity'] = session._identity_lease.release()
+                except Exception:
+                    self.last_cleanup['identityRecoveryRequired'] = True
+            raise
         self.last_cleanup = result
+        if session._identity_lease is not None:
+            result['identity'] = session._identity_lease.release(
+                context_disposed=result.get('contextDisposed', result.get('complete')) is True,
+                uncertain=session._identity_failed or result.get('uncertainDispatches', False))
         return result
 
     def inspect(self, session):
@@ -351,6 +472,12 @@ class BrowserRuntime:
         self._closed = True
         results = []
         try:
+            for session in self.sessions.values():
+                if session._identity_lease is not None:
+                    try:
+                        results.append(self.release(session))
+                    except Exception:
+                        results.append({'complete': False, 'identityRecoveryRequired': True})
             if self.process is not None:
                 try:
                     results.append(self._rpc(operation="shutdown", timeout=self.cleanup_seconds + 2))
@@ -365,7 +492,8 @@ class BrowserRuntime:
                     results.append({"complete": False, "remoteTermination": "unconfirmed"})
             else:
                 for session in self.sessions.values():
-                    results.append(self.release(session))
+                    if session._identity_lease is None:
+                        results.append(self.release(session))
         finally:
             if self.selector:
                 self.selector.close()

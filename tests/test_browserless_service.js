@@ -12,12 +12,13 @@ const {BrowserWorker} = require('../src/treadway/browser/browser-worker');
 const {connectEndpoint} = require('../src/treadway/browser/remote-transport');
 const {connectSession} = require('../src/treadway/browser/connection');
 const {makeCdpClient} = require('../src/treadway/browser/cdp');
+const {captureState, restoreState} = require('../src/treadway/browser/state-snapshot');
 
 const packageRoot = process.env.TREADWAY_BROWSERLESS_SERVICE;
 const node = process.env.TREADWAY_BROWSERLESS_NODE;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-test('Browserless 2.63.1: owned contexts, other-project sentinel, capacity and unknown write',
+test('Browserless 2.63.1: owned contexts, state restoration, sentinel, capacity and unknown write',
   {skip: !packageRoot || !node, timeout: 120000}, async t => {
   assert.equal(JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'))).version, '2.63.1');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-browserless-acceptance-'));
@@ -26,6 +27,11 @@ test('Browserless 2.63.1: owned contexts, other-project sentinel, capacity and u
   const workers = [], sessions = [];
   const requests = [];
   const app = http.createServer((request, response) => {
+    if (request.url === '/principal') {
+      const principal = request.headers.cookie?.includes('project=project-a') ? 'member' : null;
+      response.writeHead(200, {'Content-Type': 'application/json'});
+      response.end(JSON.stringify({principal})); return;
+    }
     if (request.method === 'POST' && request.url === '/save') requests.push('saved');
     response.setHeader('Content-Type', 'text/html');
     response.end('<!doctype html><title>Synthetic application</title><p>Ready</p>');
@@ -100,7 +106,24 @@ test('Browserless 2.63.1: owned contexts, other-project sentinel, capacity and u
   const extra = new BrowserWorker({root: path.join(root, 'capacity'), projectId: 'project-c', runId: 'run-one', acquireMs: 3000});
   workers.push(extra); await extra.start();
   await assert.rejects(extra.acquire({actor: 'member', endpoint}), error => error.status === 429);
-  const first = sessions[0];
+  let first = sessions[0], firstHandle = handles[0], firstWorker = workers[0];
+  await first.eval('sessionStorage.setItem("page","original")');
+  const stateInput = {actor: 'member', generation: firstHandle.generation,
+    binding: {projectId: 'project-a', application: 'workboard', identityRef: 'member', providerBinding: 'service',
+      origins: [origin], components: ['cookies', 'localStorage', 'sessionStorage']},
+    principal: {origin, probe: '/principal', expected: {principal: 'member'}}, landingUrl: origin};
+  const snapshot = await captureState(first, stateInput);
+  first.close();
+  assert.equal((await firstWorker.release(firstHandle)).contextDisposed, true);
+  firstWorker = new BrowserWorker({root: path.join(root, 'restore'), projectId: 'project-a', runId: 'run-two', acquireMs: 20000});
+  workers.push(firstWorker); await firstWorker.start();
+  firstHandle = (await firstWorker.acquire({actor: 'member', endpoint})).connection;
+  first = await connectSession(firstHandle); sessions.push(first);
+  const restored = await restoreState(first, snapshot, {...stateInput, generation: firstHandle.generation});
+  assert.equal(restored.restored, true);
+  assert.equal(await first.eval('localStorage.getItem("project")'), 'project-a');
+  assert.equal(await first.eval('sessionStorage.getItem("page")'), 'original');
+  assert.notEqual(firstHandle.generation, stateInput.generation);
   await assert.rejects(first.cdp.send('Runtime.evaluate', {
     expression: `fetch('/save',{method:'POST'}).then(()=>new Promise(()=>{}))`, awaitPromise: true, returnByValue: true},
     {timeoutMs: 300}), /unknown|timed out|remote_command_incomplete/);
@@ -108,10 +131,10 @@ test('Browserless 2.63.1: owned contexts, other-project sentinel, capacity and u
   while (!requests.length && performance.now() < observedDeadline) await pause(10);
   assert.deepEqual(requests, ['saved']);
   first.close(); await pause(100);
-  await assert.rejects(connectSession(handles[0]), /remote_reconciliation_required/);
+  await assert.rejects(connectSession(firstHandle), /remote_reconciliation_required/);
   assert.equal(await sessions[1].eval('localStorage.getItem("project")'), 'project-b');
   assert.equal((await sessions[1].cdp.send('Storage.getCookies')).cookies[0].value, 'project-b');
-  const cleanup = await workers[0].release(handles[0]);
+  const cleanup = await firstWorker.release(firstHandle);
   assert.equal(cleanup.contextDisposed, true);
   assert.equal(await sessions[1].eval('localStorage.getItem("project")'), 'project-b');
   assert.equal((await sentinel.send('Runtime.evaluate', {expression: 'globalThis.sentinel', returnByValue: true},
