@@ -19,6 +19,8 @@ function publicURL(value) {
 
 class TargetMonitor {
   constructor(cdp,{actor,origin,record,maxEvents=1000,maxTargets=64}={}) {
+    if(cdp.capabilities?.remote && cdp.capabilities.targetMonitoring !== true)
+      throw new Error('remote_target_monitor_unsupported');
     if(!actor?.generation || !actor?.name || typeof record!=='function' || !Number.isSafeInteger(maxEvents) || maxEvents<=0 || !Number.isSafeInteger(maxTargets) || maxTargets<=0)
       throw new Error('explicit_monitor_scope_required');
     const url=new URL(origin);

@@ -31,7 +31,7 @@ class ReferenceFlow:
             os.fsync(stream.fileno())
 
     def _http(self, path, body=None, method=None):
-        request = Request(self.config["origin"] + path,
+        request = Request(self.config.get("observerOrigin", self.config["origin"]) + path,
                           data=None if body is None else json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"}, method=method)
         try:

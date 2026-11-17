@@ -13,6 +13,7 @@ available through `treadway guide TOPIC`.
 | Learn from working scenarios | [Examples](EXAMPLES.md) | `walkthrough` |
 | Reuse a browser operation | [Forms](forms.md), [widgets](REUSABLE-WIDGETS.md) | `recipes` |
 | Use distinct users or persistent profiles | [Sessions](BROWSER-SESSIONS.md) | `sessions` |
+| Use an operator-supplied Browserless service | [Remote browsers](REMOTE-BROWSERS.md) | `remote` |
 | Read credentials from a configured source | [Credentials](CREDENTIALS.md) | `credentials` |
 | Sign in through Entra | [Entra](ENTRA.md) | `entra` |
 | Renew a session during repeat work | [Session recovery](SESSION-RECOVERY.md) | `recovery` |
@@ -32,6 +33,7 @@ Each task guide links to the relevant configuration and recovery details.
 
 - [Fast checks](FAST-FEEDBACK.md) and [CI and releases](RELEASING.md).
 - [Flow optimisation design](FLOW-OPTIMISATION-DESIGN.md).
+- [Proposed Browserless support](BROWSERLESS-DESIGN.md), including concurrent projects.
 - [Browser backend evaluation](BROWSER-COMPARISON.md) and [reproduce the experiment](../experiments/browser-comparison/README.md).
 - [Validation history](VALIDATION.md) and [original authoring-kit trial](AUTHORING-VALIDATION.md).
 

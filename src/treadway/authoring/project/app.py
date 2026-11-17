@@ -29,7 +29,7 @@ def validate_edit(value):
     return {key: value[key] for key in ("ownerId", "start", "due", "note")}
 
 
-def make_server(database: Path):
+def make_server(database: Path, *, address=("127.0.0.1", 0)):
     from collaboration import initialize, handle
     database = Path(database)
     initialize(database)
@@ -140,4 +140,4 @@ def make_server(database: Path):
         do_POST = mutate
         do_DELETE = mutate
 
-    return ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    return ThreadingHTTPServer(address, Handler)

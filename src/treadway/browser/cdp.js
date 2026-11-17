@@ -68,7 +68,10 @@ function makeCdpClient(ws, { commandTimeoutMs = 30000 } = {}) {
         return;
       }
       if (msg.error) {
-        settle(msg.id, new Error(`CDP ${msg.error.code}: ${msg.error.message}`));
+        if (ws.treadwayIPC && typeof msg.error.code === 'string' && /^(?:remote_|ipc_)[a-z_]+$/.test(msg.error.code)) {
+          settle(msg.id, Object.assign(new Error(msg.error.code), {code: msg.error.code,
+            ...(msg.error.outcome === 'unknown' ? {outcome: 'unknown'} : {})}));
+        } else settle(msg.id, new Error(`CDP ${msg.error.code}: ${msg.error.message}`));
       } else {
         settle(msg.id, null, msg.result);
       }
@@ -113,7 +116,8 @@ function makeCdpClient(ws, { commandTimeoutMs = 30000 } = {}) {
         }, timeoutMs);
         pending.set(id, { resolve, reject, timer, sessionId, finishDiagnostic:diagnostics.command(method) });
         try {
-          ws.send(JSON.stringify({ id, method, params, ...(sessionId ? {sessionId} : {}) }), (error) => {
+          ws.send(JSON.stringify({ id, method, params, ...(sessionId ? {sessionId} : {}),
+            ...(ws.treadwayIPC ? {options: {timeoutMs}} : {}) }), (error) => {
             if (error) settle(id, new Error("CDP send failed before response; command outcome unknown"));
           });
         } catch (error) {
@@ -215,6 +219,11 @@ async function connect(proxy, targetId, options = {}) {
   try { cdp = makeCdpClient(ws, options); }
   catch (error) { if (ws.terminate) ws.terminate(); else ws.close(); throw error; }
 
+  return initializeSession(cdp, target);
+}
+
+async function initializeSession(cdp, target, capabilities = {}) {
+  // Shared setup for exact local targets and scope-bound remote worker sessions.
   // Enable domains we commonly need
   try {
     await cdp.send("Page.enable");
@@ -367,6 +376,7 @@ async function connect(proxy, targetId, options = {}) {
   return {
     cdp,
     target,
+    capabilities,
     networkLog,
     consoleLog,
     routeLog,
@@ -1094,4 +1104,4 @@ async function waitForNetworkIdle(cdp, timeoutMs = 5000, quietMs = 500) {
 // ---------------------------------------------------------------------------
 // CLI interface
 
-module.exports = { createCdpProxy, connect, listTabs, makeCdpClient, snapshot, screenshot, navigate, click, typeText, fillText, evalJS, findByText, findByRole, findByLabel, waitForNetworkIdle, waitForElement, waitForReady, waitForRoute, getToasts };
+module.exports = { createCdpProxy, connect, initializeSession, listTabs, makeCdpClient, snapshot, screenshot, navigate, click, typeText, fillText, evalJS, findByText, findByRole, findByLabel, waitForNetworkIdle, waitForElement, waitForReady, waitForRoute, getToasts };

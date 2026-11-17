@@ -3,7 +3,7 @@
 // arguments, environment variables set by this helper, or stdout fields.
 const fs = require('node:fs');
 const path = require('node:path');
-const {connect, createCdpProxy} = require('./cdp.js');
+const {connectSession} = require('./connection.js');
 const {EntraLogin} = require('./entra.js');
 const {EntraStop} = require('./entra-flow.js');
 const {execFile} = require('node:child_process');
@@ -79,7 +79,7 @@ async function executeMain(input) {
   let session, phase = 'input';
   try {
     phase = 'connect';
-    session = await connect(createCdpProxy(input.connection), input.connection.targetId, {commandTimeoutMs: 5000});
+    session = await connectSession(input.connection, {commandTimeoutMs: 5000});
     phase = 'credential_store';
     const store = seedStore(input.totpRoot);
     let credentials;

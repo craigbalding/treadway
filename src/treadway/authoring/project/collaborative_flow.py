@@ -6,7 +6,7 @@ import sqlite3
 
 from robot.api.types import Secret
 
-from treadway.browsers import BrowserManager
+from treadway.browser_runtime import BrowserRuntime
 from treadway.credentials import CredentialResolver
 from treadway.process import run_json_process
 from treadway.properties import require_expected_fields
@@ -21,14 +21,16 @@ class CollaborativeFlow:
 
     def open_collaborative_run(self):
         self.config = json.loads(Path(os.environ["TREADWAY_REFERENCE_CONFIG"]).read_text())
-        self.manager = BrowserManager(Path(self.config["artifacts"]) / "actors")
+        self.manager = BrowserRuntime(Path(self.config["artifacts"]) / "actors",
+            configuration=self.config.get('browserConfiguration'), project_root=self.config.get('projectRoot'))
         self.identities = CredentialResolver.from_file(Path(__file__).with_name('identities.json'))
 
     def _open_actor(self, name, expected):
         if name in self.actors:
             raise AssertionError("actor_already_open")
-        browser = self.manager.start(name, executable=os.environ["CHROME_BIN"],
-                                     sandbox=os.environ.get("TREADWAY_CHROME_SANDBOX", "on") != "off")
+        options = {'executable': os.environ['CHROME_BIN'],
+                   'sandbox': os.environ.get('TREADWAY_CHROME_SANDBOX', 'on') != 'off'} if self.manager.provider == 'local' else {}
+        browser = self.manager.acquire(name, **options)
         actor = {"name": name, "principal": expected['principal'], "expected": dict(expected),
                  "generation": browser.generation, "connection": browser.connection()}
         self.actors[name] = {"browser": browser, "actor": actor}
@@ -57,6 +59,7 @@ class CollaborativeFlow:
     def _call(self, name, operation="request", **args):
         entry = self.actors[name]
         with self.manager.drive(entry["browser"]):
+            entry['actor']['connection'] = entry['browser'].connection()
             result = run_json_process(["node", str(Path(__file__).with_name("actors.cjs"))],
                 input_data=json.dumps({"config": self.config, "actor": entry["actor"], "operation": operation, "args": args}),
                 timeout_seconds=12)
@@ -153,12 +156,9 @@ class CollaborativeFlow:
                 if db.execute("SELECT count(*) FROM resources").fetchone()[0]:
                     raise AssertionError("collaborative_cleanup_incomplete")
         finally:
-            errors = []
-            for entry in self.actors.values():
-                try:
-                    self.manager.stop(entry["browser"])
-                except (OSError, RuntimeError) as error:
-                    errors.append(str(error))
-            self.actors.clear()
-            if errors:
-                raise AssertionError("browser_cleanup_incomplete: " + "; ".join(errors))
+            try:
+                cleanup = self.manager.close()
+                if not cleanup['complete']:
+                    raise AssertionError('browser_cleanup_incomplete')
+            finally:
+                self.actors.clear()

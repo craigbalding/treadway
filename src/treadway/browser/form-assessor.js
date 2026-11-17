@@ -3,7 +3,7 @@
 // Agent-assisted form mechanics with explicit inputs, actions and observations.
 const fs = require('node:fs');
 const path = require('node:path');
-const { createCdpProxy, connect } = require('./cdp.js');
+const { connectSession } = require('./connection.js');
 const {choiceContext}=require('./choice-binding.js');
 const diagnostics=require('./diagnostics.js');
 const runtime = fs.readFileSync(path.join(__dirname, 'browser-form.function.js'), 'utf8');
@@ -342,13 +342,14 @@ async function main() {
   return require('./diagnostics.js').withDiagnostics(input._diagnostics,()=>executeMain(input));
 }
 async function executeMain(input) {
-  if(!input.targetId || !input.cdpHost || !input.cdpPort) throw new Error('explicit_browser_host_port_and_target_required');
+  const connection=input.connection || input;
+  if(!connection.targetId || (!connection.kind && (!connection.cdpHost || !connection.cdpPort))) throw new Error('explicit_browser_host_port_and_target_required');
   if(!['inspect','locate','apply','attempt'].includes(input.operation))throw new Error('unknown_operation');
   if(['apply','attempt'].includes(input.operation) && !input.recordPath)throw new Error('mutation_recordPath_required');
   const deadline=setTimeout(()=>{process.stdout.write(JSON.stringify({version:VERSION,observed:false,reason:'process_deadline',completion:'unconfirmed',mutationOutcome:'unknown'})+'\n');process.exit(2);},60000);
-  const proxy=createCdpProxy({cdpHost:input.cdpHost,cdpPort:input.cdpPort});
-  const session=await connect(proxy,input.targetId,{commandTimeoutMs:3000});
+  let session;
   try {
+    session=await connectSession(connection,{commandTimeoutMs:3000});
     const record=input.recordPath ? entry=>{
       const fd=fs.openSync(input.recordPath,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_APPEND|fs.constants.O_NOFOLLOW,0o600);
       try{fs.fchmodSync(fd,0o600);fs.writeFileSync(fd,JSON.stringify(entry)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
@@ -367,7 +368,7 @@ async function executeMain(input) {
         : await form.attempt(input.snapshot,input.actionRef,{windowMs:input.windowMs,intent:input.intent,fieldRef:input.fieldRef});
     }
     process.stdout.write(JSON.stringify(result)+'\n');
-  } finally {session.close();clearTimeout(deadline);}
+  } finally {session?.close();clearTimeout(deadline);}
 }
 if(require.main===module)main().catch(e=>{process.stdout.write(JSON.stringify({version:VERSION,observed:false,reason:errorKind(e),completion:'unconfirmed'})+'\n');process.exit(1);});
 module.exports={FormAssessor,VERSION,changes,guidance,redactFieldValues};

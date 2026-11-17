@@ -3,13 +3,13 @@ const fs=require('node:fs');
 const path=require('node:path');
 const input=JSON.parse(fs.readFileSync(0,'utf8'));
 const {config,actor,operation,args}=input;
-const {createCdpProxy,connect}=require(path.join(config.browserRoot,'cdp.js'));
+const {connectSession}=require(path.join(config.browserRoot,'connection.js'));
 const {ActorBrowser}=require(path.join(config.browserRoot,'actors.js'));
 const {BrowserInteractions}=require(path.join(config.browserRoot,'interactions.js'));
 (async()=>{
   let session,ui;
   try {
-    session=await connect(createCdpProxy(actor.connection),actor.connection.targetId,{commandTimeoutMs:6000});
+    session=await connectSession(actor.connection,{commandTimeoutMs:6000});
     const record=entry=>fs.appendFileSync(path.join(config.artifacts,'actors.jsonl'),JSON.stringify(entry)+'\n',{mode:0o600});
     ui=new BrowserInteractions(session,{origin:config.origin,record});
     if((await ui.evaluate('location.origin'))!==config.origin)await ui.navigate(config.origin+'/collaboration');

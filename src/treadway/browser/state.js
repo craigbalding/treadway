@@ -15,6 +15,8 @@ class OriginState {
     return result.result.value;
   }
   async clear({timeoutMs=5000}={}) {
+    if(this.session.capabilities?.remote && this.session.capabilities.originClear !== true)
+      throw new Error('remote_origin_clear_unsupported');
     const before=await this.observe({timeoutMs});
     if(!before.complete)throw new Error('origin_state_prerequisite_incomplete');
     // Storage clears the declared origin, including HttpOnly cookies. Never use

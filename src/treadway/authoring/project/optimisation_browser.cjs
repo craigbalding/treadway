@@ -3,13 +3,13 @@
 const fs=require('node:fs'),path=require('node:path');
 async function execute(config){
   const root=config.browserRoot;
-  const {connect,createCdpProxy}=require(path.join(root,'cdp.js'));
+  const {connectSession}=require(path.join(root,'connection.js'));
   const {BrowserInteractions}=require(path.join(root,'interactions.js'));
   const {ActorBrowser}=require(path.join(root,'actors.js'));
   const {RequestObserver}=require(path.join(root,'request-observer.js'));
   const diagnostics=require(path.join(root,'diagnostics.js'));
   return diagnostics.withDiagnostics(config.diagnostics,async()=>{
-    const session=await connect(createCdpProxy(config.connection),config.connection.targetId,{commandTimeoutMs:3000});
+    const session=await connectSession(config.connection,{commandTimeoutMs:3000});
     const record=value=>{const fd=fs.openSync(config.journal,'a',0o600);try{fs.writeSync(fd,JSON.stringify(value)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}};
     const ui=new BrowserInteractions(session,{origin:config.origin,scope:'#application',record,emit:diagnostics.machinery});
     const actor=new ActorBrowser(session,{name:config.actor,origin:config.origin,generation:config.generation,

@@ -18,7 +18,7 @@ def copy_new(source: Path, destination: Path):
     staging = Path(tempfile.mkdtemp(prefix=".treadway-", dir=destination.parent))
     try:
         shutil.copytree(source, staging, dirs_exist_ok=True,
-                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "artifacts", "node_modules", ".venv", ".git"))
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "artifacts", "node_modules", ".venv", ".git", ".treadway"))
         # Rename only after all assets have been copied. The destination must be new.
         if destination.exists() or destination.is_symlink():
             raise ValueError(f"Destination already exists: {destination}")
@@ -38,14 +38,14 @@ def main(argv=None):
     skill.add_argument("destination", type=Path,
                        help="New skill folder, e.g. ~/.codex/skills/treadway-flows")
     guide = commands.add_parser("guide", help="Print an installed authoring reference")
-    guide.add_argument("topic", nargs="?", choices=["start", "recipes", "walkthrough", "sessions", "credentials", "entra", "recovery", "diagnostics", "optimisation"], default="start")
+    guide.add_argument("topic", nargs="?", choices=["start", "recipes", "walkthrough", "sessions", "credentials", "entra", "recovery", "diagnostics", "optimisation", "remote"], default="start")
     args = parser.parse_args(argv)
     try:
         if args.command == "guide":
             filename = {"start": "AUTHORING.md", "recipes": "RECIPES.md",
                         "walkthrough": "WALKTHROUGH.md", "sessions": "SESSIONS.md",
                         "credentials": "CREDENTIALS.md", "entra": "ENTRA.md", "recovery": "SESSION-RECOVERY.md",
-                        "diagnostics": "DIAGNOSTICS.md", "optimisation": "OPTIMISATION.md"}[args.topic]
+                        "diagnostics": "DIAGNOSTICS.md", "optimisation": "OPTIMISATION.md", "remote": "REMOTE-BROWSERS.md"}[args.topic]
             print((ASSETS / "skill/treadway-flows/references" / filename).read_text())
         elif args.command == "skill":
             print(copy_new(ASSETS / "skill/treadway-flows", args.destination))

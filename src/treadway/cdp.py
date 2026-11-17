@@ -8,8 +8,10 @@ import time
 
 
 class CdpSocket:
-    def __init__(self, *, host, port, target_id, timeout_seconds=10, events=()):
-        if not target_id:
+    def __init__(self, *, host=None, port=None, target_id=None, connection=None, timeout_seconds=10, events=()):
+        if connection is not None and any(value is not None for value in (host, port, target_id)):
+            raise ValueError("explicit_single_browser_connection_required")
+        if connection is None and not target_id:
             raise ValueError("explicit_target_required")
         self.timeout = timeout_seconds
         self.buffer = b""
@@ -18,7 +20,7 @@ class CdpSocket:
         self.selector = selectors.DefaultSelector()
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
         try:
-            self.send(json.dumps({"cdpHost": host, "cdpPort": port, "targetId": target_id,
+            self.send(json.dumps({"connection": connection or {"cdpHost": host, "cdpPort": port, "targetId": target_id},
                                   "events": list(events), "commandTimeoutMs": int(timeout_seconds*1000)}))
             if json.loads(self.recv()).get("ready") is not True:
                 raise RuntimeError("cdp_bridge_setup_incomplete")

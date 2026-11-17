@@ -4,7 +4,7 @@
 // controls only; there is no application workflow or completion evaluator here.
 const fs=require('node:fs');
 const diagnostics=require('./diagnostics.js');
-const {createCdpProxy,connect}=require('./cdp.js');
+const {connectSession}=require('./connection.js');
 const {BrowserInteractions}=require('./interactions.js');
 const {Autocomplete,MultiSelect,DateRange,RichTextEditor,InlineEditor,PreparedEdit}=require('./widgets.js');
 function createWidget(ui,kind,profile){
@@ -55,7 +55,8 @@ async function main(){
   return diagnostics.withDiagnostics(input._diagnostics,()=>executeMain(input));
 }
 async function executeMain(input){
-  if(!input.cdpHost||!input.cdpPort||!input.targetId||!input.origin||!input.recordPath)throw new Error('explicit_browser_origin_target_and_journal_required');
+  const connection=input.connection||input;
+  if((!connection.kind&&(!connection.cdpHost||!connection.cdpPort))||!connection.targetId||!input.origin||!input.recordPath)throw new Error('explicit_browser_origin_target_and_journal_required');
   createWidget(null,input.kind,input.profile); // Offline validation before connect.
   const record=entry=>{
     const fd=fs.openSync(input.recordPath,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_APPEND|fs.constants.O_NOFOLLOW,0o600);
@@ -64,7 +65,7 @@ async function executeMain(input){
   const deadline=setTimeout(()=>{process.stdout.write(JSON.stringify({version:'treadway.widget/1',mechanicsComplete:false,reason:'process_deadline',mutationOutcome:'unknown'})+'\n');process.exit(2);},60000);
   let session,ui;
   try{
-    session=await connect(createCdpProxy({cdpHost:input.cdpHost,cdpPort:input.cdpPort}),input.targetId,{commandTimeoutMs:3000});
+    session=await connectSession(connection,{commandTimeoutMs:3000});
     ui=new BrowserInteractions(session,{origin:input.origin,scope:input.scope,frameSelector:input.frameSelector,record,emit:diagnostics.machinery});
     if(await ui.evaluate('location.origin')!==input.origin)throw new Error('widget_browser_origin_differs');
     const result=await execute(ui,input);

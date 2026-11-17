@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded local authoring checks and disposable reference acceptance."""
+"""Bounded authoring checks and disposable reference acceptance."""
 from __future__ import annotations
 
 import argparse
@@ -15,9 +15,11 @@ import threading
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from urllib.parse import urlsplit
 
 import treadway
 from treadway.browsers import BrowserManager, BrowserSession
+from treadway.browser_runtime import BrowserRuntime
 from app import make_server
 
 ROOT = Path(__file__).resolve().parent
@@ -25,7 +27,7 @@ BROWSER = Path(treadway.__file__).parent / "browser"
 
 
 def source_files():
-    ignored = {"artifacts", ".git", ".venv", "venv", "node_modules", "__pycache__"}
+    ignored = {"artifacts", ".git", ".venv", "venv", "node_modules", "__pycache__", ".treadway"}
     for directory, names, files in os.walk(ROOT):
         names[:] = sorted(name for name in names if name not in ignored)
         for name in sorted(files):
@@ -96,21 +98,31 @@ def offline(output, deadline, checks):
     return checks
 
 
-def browser_test(output, deadline, suites, checks):
+def browser_test(output, deadline, suites, checks, *, browser_config=None, app_url=None,
+                 fixture_host='127.0.0.1', fixture_port=0):
+    runtime = BrowserRuntime.from_file(browser_config, root=output / 'browsers', project_root=ROOT) if browser_config else BrowserRuntime(
+        output / 'browsers', project_root=ROOT)
     chrome = os.environ.get("CHROME_BIN")
-    if not chrome or not Path(chrome).is_file():
+    if runtime.provider == 'local' and (not chrome or not Path(chrome).is_file()):
         raise ValueError("CHROME_BIN must name an existing Chromium executable")
-    server = make_server(output / "workboard.sqlite")
+    if runtime.provider != 'local' and not app_url:
+        raise ValueError('remote_browser_requires_app_url_reaching_this_fixture')
+    if app_url:
+        parsed = urlsplit(app_url)
+        if parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password or parsed.path not in {'', '/'} or parsed.query or parsed.fragment:
+            raise ValueError('explicit_fixture_origin_required')
+    server = make_server(output / "workboard.sqlite", address=(fixture_host, fixture_port))
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
-    origin = f"http://127.0.0.1:{server.server_port}"
-    manager = BrowserManager(output / "browsers")
+    observer_origin = f"http://127.0.0.1:{server.server_port}"
+    origin = (app_url or observer_origin).rstrip('/')
+    manager = runtime
     browser = None
     try:
-        browser = manager.start("author", executable=chrome,
-                                sandbox=os.environ.get("TREADWAY_CHROME_SANDBOX", "on") != "off",
-                                startup_seconds=min(15, max(.01, deadline-time.monotonic())))
-        config = {"origin": origin, "cdpPort": browser.port, "targetId": browser.target_id,
+        options = {'executable': chrome, 'sandbox': os.environ.get('TREADWAY_CHROME_SANDBOX', 'on') != 'off'} if runtime.provider == 'local' else {}
+        browser = manager.acquire("author", deadline=deadline, **options)
+        config = {"origin": origin, "observerOrigin": observer_origin, "connection": browser.connection(),
+                  "browserConfiguration": runtime.configuration, "projectRoot": str(runtime.project_root),
                   "browserRoot": str(BROWSER), "artifacts": str(output), "run": uuid.uuid4().hex}
         config_file = output / "runtime.json"
         config_file.write_text(json.dumps(config))
@@ -138,19 +150,46 @@ def browser_test(output, deadline, suites, checks):
         try:
             # A deadline kills Robot before its teardown can run. Actor browsers
             # have independent process groups; recover only this run's records.
-            actors = BrowserManager(output / "actors")
-            owned = [(manager, browser)] if browser is not None else []
-            try:
-                owned.extend((actors, BrowserSession(**entry["session"])) for entry in actors.sessions())
-            except (OSError, RuntimeError, ValueError) as error:
-                cleanup["complete"] = False
-                cleanup["errors"].append(str(error))
+            # Remote workers are run-owned: killing Robot closes its worker's
+            # owner pipe. Never enumerate the provider to recover other actors.
+            owned = []
+            if runtime.provider == 'local':
+                actors = BrowserManager(output / "actors")
+                try:
+                    owned.extend((actors, BrowserSession(**entry["session"])) for entry in actors.sessions())
+                except (OSError, RuntimeError, ValueError) as error:
+                    cleanup["complete"] = False
+                    cleanup["errors"].append(str(error))
+            else:
+                # A dead Robot owner closes its worker's stdin. Wait only for
+                # this run's private journals, never provider-wide resources.
+                actor_deadline = time.monotonic() + runtime.cleanup_seconds + 2
+                actor_root = output / 'actors'
+                actor_journals = [directory / 'events.jsonl' for directory in actor_root.iterdir() if directory.is_dir()] if actor_root.exists() else []
+                while True:
+                    actor_results = []
+                    for journal in actor_journals:
+                        try:
+                            events = [json.loads(line) for line in journal.read_text().splitlines()]
+                            stopped = bool(events) and events[-1]['kind'] == 'worker_stopped'
+                            acquired = {e['generation'] for e in events if e['kind'] == 'acquisition_intent'}
+                            disposed = {e['generation'] for e in events if e['kind'] == 'cleanup_result' and e.get('complete') is True}
+                            actor_results.append(stopped and acquired <= disposed)
+                        except (OSError, ValueError, KeyError):
+                            actor_results.append(False)
+                    if all(actor_results) or time.monotonic() >= actor_deadline:
+                        break
+                    time.sleep(.02)
+                cleanup['actors'] = {'complete': all(actor_results), 'workers': len(actor_results)}
+                cleanup['complete'] = cleanup['complete'] and cleanup['actors']['complete']
             for owner, session in owned:
                 try:
                     owner.stop(session)
                 except (OSError, RuntimeError, ValueError) as error:
                     cleanup["complete"] = False
                     cleanup["errors"].append(str(error))
+            cleanup['runtime'] = runtime.close()
+            cleanup['complete'] = cleanup['complete'] and cleanup['runtime']['complete']
         finally:
             server.shutdown()
             server.server_close()
@@ -165,6 +204,10 @@ def main():
     parser.add_argument("mode", choices=["check", "test"])
     parser.add_argument("--suite", action="append", type=Path, help="Explicit Robot suite; defaults to flow.robot")
     parser.add_argument("--budget-seconds", type=float, default=None)
+    parser.add_argument('--browser-config', type=Path, help='Explicit provider configuration; check stays offline')
+    parser.add_argument('--app-url', help='Browser-reachable origin of this fixture; required for remote browsers')
+    parser.add_argument('--fixture-host', default='127.0.0.1', help='Explicit local fixture listen address')
+    parser.add_argument('--fixture-port', type=int, default=0, help='Local fixture port (0 chooses an unused port)')
     args = parser.parse_args()
     budget = args.budget_seconds if args.budget_seconds is not None else (15 if args.mode == "check" else 60)
     if not 1 <= budget <= 120:
@@ -182,7 +225,9 @@ def main():
         offline(output, started + budget, summary["checks"])
         if args.mode == "test":
             suites = [file.resolve() for file in (args.suite or [ROOT / "flow.robot"])]
-            summary["browser"] = browser_test(output, started + budget, suites, summary["checks"])
+            summary["browser"] = browser_test(output, started + budget, suites, summary["checks"],
+                browser_config=args.browser_config, app_url=args.app_url,
+                fixture_host=args.fixture_host, fixture_port=args.fixture_port)
             summary["liveConditionsVerified"] = True
         summary["passed"] = True
     except (OSError, RuntimeError, ValueError, TimeoutError, subprocess.SubprocessError) as error:

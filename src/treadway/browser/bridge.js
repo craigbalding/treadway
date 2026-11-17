@@ -1,7 +1,7 @@
 'use strict';
 // Private JSON-lines bridge for Python consumers of the same Node CDP client.
 const readline=require('node:readline');
-const {createCdpProxy,connect}=require('./cdp.js');
+const {connectSession}=require('./connection.js');
 const lines=readline.createInterface({input:process.stdin,crlfDelay:Infinity});
 const write=value=>process.stdout.write(JSON.stringify(value)+'\n');
 let session,initializing=false;
@@ -10,7 +10,7 @@ lines.on('line',async line=>{
     const value=JSON.parse(line);
     if(!session) {
       if(initializing)throw new Error('bridge_not_ready');initializing=true;
-      session=await connect(createCdpProxy(value),value.targetId,{commandTimeoutMs:value.commandTimeoutMs||5000});
+      session=await connectSession(value.connection||value,{commandTimeoutMs:value.commandTimeoutMs||5000});
       for(const event of value.events||[])session.cdp.on(event,params=>write({method:event,params}));
       write({ready:true});return;
     }

@@ -33,6 +33,7 @@ budget). Keep the first failure and add a focused regression before fixing it.
 | Learn from runnable examples | [Walkthroughs](references/WALKTHROUGH.md) |
 | Map forms, choices, dates, editing or transfers | [Recipes](references/RECIPES.md) |
 | Separate participants or reuse profiles | [Sessions](references/SESSIONS.md) |
+| Use an operator-supplied Browserless service | [Remote browsers](references/REMOTE-BROWSERS.md) |
 | Resolve credentials or use a vault | [Credentials](references/CREDENTIALS.md) |
 | Sign in through Entra, including supported MFA/setup | [Entra](references/ENTRA.md) |
 | Continue repeated REST mutations after expiry | [Recovery](references/SESSION-RECOVERY.md) |

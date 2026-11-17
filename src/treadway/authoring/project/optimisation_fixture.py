@@ -39,10 +39,12 @@ const value=await r.json();if(r.ok){binding=value;document.querySelector('#saved
 
 class OwnerFixture:
     """Passive construction; start explicitly creates scoped state and loopback HTTP."""
-    def __init__(self, root, count=1, *, expire_after=None, lose_response=None):
+    def __init__(self, root, count=1, *, expire_after=None, lose_response=None,
+                 browser_app_url=None, fixture_host='127.0.0.1'):
         self.root, self.count = Path(root), count
         self.expire_after, self.lose_response = expire_after, lose_response
         self.server = None
+        self.browser_app_url, self.fixture_host = browser_app_url, fixture_host
         self.state = {'writes': 0, 'refreshes': 0, 'attempts': [], 'lost': False, 'contract': 1,
                       'epochs': {actor: 0 for actor in ACTORS}}
 
@@ -161,10 +163,12 @@ class OwnerFixture:
                     return
                 self.reply(200, fixture.observe(body['id']))
 
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server = ThreadingHTTPServer((self.fixture_host, 0), Handler)
         self.thread = Thread(target=lambda: self.server.serve_forever(poll_interval=.01), daemon=True)
         self.thread.start()
         self.origin = f'http://127.0.0.1:{self.server.server_port}'
+        # The operator supplies a reachable fixture URL; no tunnel is created.
+        self.browser_origin = self.browser_app_url.replace('{port}', str(self.server.server_port)).rstrip('/') if self.browser_app_url else self.origin
         return self
 
     def observe(self, item):

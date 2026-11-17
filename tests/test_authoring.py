@@ -63,7 +63,8 @@ def test_skill_can_be_exported_independently(tmp_path):
                                            ('entra', 'Sign in with Microsoft Entra'),
                                            ('recovery', 'Maintain authentication during repeated mutations'),
                                            ('diagnostics', 'Debug a flow and its machinery'),
-                                           ('optimisation', "Optimise a flow for the operator's objective")])
+                                           ('optimisation', "Optimise a flow for the operator's objective"),
+                                           ('remote', 'Use a Browserless browser')])
 def test_installed_reference_is_accessible(capsys, topic, content):
     main(['guide', topic])
     assert content in capsys.readouterr().out
@@ -129,14 +130,29 @@ def test_feedback_timeout_stops_actor_browsers_even_without_robot_teardown(tmp_p
         'Test Teardown    Close Collaborative Run\n*** Test Cases ***\n'
         'Interrupted Collaboration\n    Open Actor    author\n'
         '    Create File    ${CURDIR}/actor-opened\n    Sleep    60\n')
-    # Exercise the actual browser runner's interrupted-Robot cleanup directly.
-    # Repeating five offline gates here can consume the observation budget
-    # before the actor exists, which tests startup speed instead of cleanup.
+    # Interrupt at the actual ready record, before the later principal probe
+    # must finish. A wall-clock guess can instead interrupt browser startup.
+    # The runner's real command timeout is covered by the hung-contract test.
     driver = (
-        'import json,subprocess,time\nfrom pathlib import Path\nimport run\n'
+        'import json,os,signal,subprocess,time\nfrom pathlib import Path\nimport run\n'
+        'def interrupt(arguments,output,name,deadline,*,env=None):\n'
+        ' with (output/(name+".log")).open("w") as log:\n'
+        '  process=subprocess.Popen(arguments,cwd=run.ROOT,stdout=log,stderr=subprocess.STDOUT,env=env,start_new_session=True)\n'
+        '  try:\n'
+        '   cutoff=time.monotonic()+20\n'
+        '   while time.monotonic()<cutoff and process.poll() is None:\n'
+        '    record=output/"actors/author/session.json"\n'
+        '    if record.exists() and json.loads(record.read_text()).get("phase")=="ready":\n'
+        '     raise subprocess.TimeoutExpired(arguments,0)\n'
+        '    time.sleep(.02)\n'
+        '   raise RuntimeError("actor_did_not_reach_ready")\n'
+        '  finally:\n'
+        '   if process.poll() is None: os.killpg(process.pid,signal.SIGKILL)\n'
+        '   process.wait(timeout=3)\n'
+        'run.command=interrupt\n'
         'output=Path("artifacts/test-deadline");output.mkdir(parents=True)\nchecks=[]\n'
         'try:\n'
-        ' run.browser_test(output.resolve(),time.monotonic()+20,[Path("deadline.robot").resolve()],checks)\n'
+        ' run.browser_test(output.resolve(),time.monotonic()+40,[Path("deadline.robot").resolve()],checks)\n'
         'except subprocess.TimeoutExpired:\n'
         ' print(json.dumps({"passed":False,"timedOut":True,"checks":checks,"artifacts":str(output.resolve())}))\n'
         ' raise SystemExit(1)\n'
@@ -144,7 +160,7 @@ def test_feedback_timeout_stops_actor_browsers_even_without_robot_teardown(tmp_p
     )
     try:
         result = subprocess.run([sys.executable, '-c', driver],
-                                cwd=project, capture_output=True, text=True, timeout=32)
+                                cwd=project, capture_output=True, text=True, timeout=45)
         assert result.returncode == 1, result.stdout+result.stderr
         summary = json.loads(result.stdout.splitlines()[-1])
         assert summary['passed'] is False
@@ -193,7 +209,7 @@ def test_export_omits_runtime_state_and_dependencies(tmp_path):
     source = tmp_path/'source'
     source.mkdir()
     (source/'flow.robot').write_text('synthetic flow')
-    for name in ('artifacts', 'node_modules', '.venv', '.git', '__pycache__'):
+    for name in ('artifacts', 'node_modules', '.venv', '.git', '__pycache__', '.treadway'):
         (source/name).mkdir()
         (source/name/'state').write_text('synthetic runtime state')
     destination = tmp_path/'export'

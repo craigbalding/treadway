@@ -29,6 +29,8 @@ function readFile(file,maxBytes){
 function bounds(maxBytes){if(!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>1024*1024*1024)throw new Error('bounded_transfer_size_required');}
 function sourceRequired(source){if(typeof source!=='string'||!source)throw new Error('explicit_transfer_source_required');}
 async function uploadFile(ui,{rootDirectory,filePath,sha256,selector,source,maxBytes=16*1024*1024,validateTarget}={}){
+  if(ui.session?.capabilities?.remote && ui.session.capabilities.fileTransfers !== true)
+    throw new Error('remote_file_transfer_unsupported');
   bounds(maxBytes);sourceRequired(source);
   const file=scopedPath(rootDirectory,filePath),data=readFile(file,maxBytes);
   if(typeof sha256!=='string'||!/^[a-f0-9]{64}$/.test(sha256)||digest(data)!==sha256)throw new Error('upload_fixture_hash_differs');
@@ -56,6 +58,8 @@ async function uploadFile(ui,{rootDirectory,filePath,sha256,selector,source,maxB
   }
 }
 async function downloadFile(ui,{rootDirectory,directory,name,source,dispatch,windowMs=20000,maxBytes=16*1024*1024}={}){
+  if(ui.session?.capabilities?.remote && ui.session.capabilities.fileTransfers !== true)
+    throw new Error('remote_file_transfer_unsupported');
   bounds(maxBytes);sourceRequired(source);
   if(typeof name!=='string'||!name||['.','..'].includes(name)||path.basename(name)!==name||name.includes('\0')||typeof dispatch!=='function')throw new Error('explicit_download_name_and_action_required');
   const destination=scopedPath(rootDirectory,directory,{directory:true});

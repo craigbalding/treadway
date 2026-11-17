@@ -19,15 +19,15 @@ function sameBinding(actual,binding){
   return actual&&actual.id===binding.id&&actual.run===binding.run&&actual.actor==='fixture-author'&&actual.revision===binding.revision;
 }
 async function execute(config,operation,args){
-  const {createCdpProxy,connect}=require(path.join(config.browserRoot,'cdp.js'));
+  const {connectSession}=require(path.join(config.browserRoot,'connection.js'));
   const {BrowserInteractions}=require(path.join(config.browserRoot,'interactions.js'));
   const {Autocomplete,DateRange,RichTextEditor,PreparedEdit}=require(path.join(config.browserRoot,'widgets.js'));
   const {RequestObserver}=require(path.join(config.browserRoot,'request-observer.js'));
-  const session=await connect(createCdpProxy({cdpHost:'127.0.0.1',cdpPort:config.cdpPort}),config.targetId,{commandTimeoutMs:4000});
+  const session=await connectSession(config.connection||{cdpHost:'127.0.0.1',cdpPort:config.cdpPort,targetId:config.targetId},{commandTimeoutMs:4000});
   const record=value=>{const fd=fs.openSync(path.join(config.artifacts,'attempts.jsonl'),'a',0o600);try{fs.writeSync(fd,JSON.stringify(value)+'\n');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}};
   const ui=new BrowserInteractions(session,{origin:config.origin,scope:'#application',record,emit:(phase,data)=>process.stderr.write(JSON.stringify({phase,...data})+'\n')});
   async function actual(id){
-    const response=await fetch(config.origin+'/api/items/'+id,{signal:AbortSignal.timeout(3000)});
+    const response=await fetch((config.observerOrigin||config.origin)+'/api/items/'+id,{signal:AbortSignal.timeout(3000)});
     if(response.status!==200)throw new Error('resource_observation_incomplete');
     return response.json();
   }
@@ -58,7 +58,7 @@ async function execute(config,operation,args){
     }
     await guard(args.binding);
     if(operation==='prepare'){
-      const people=await (await fetch(config.origin+'/api/people?q='+encodeURIComponent(args.owner),{signal:AbortSignal.timeout(3000)})).json();
+      const people=await (await fetch((config.observerOrigin||config.origin)+'/api/people?q='+encodeURIComponent(args.owner),{signal:AbortSignal.timeout(3000)})).json();
       const matches=people.people.filter(person=>person.name===args.owner);
       if(matches.length!==1)throw new Error('exact_actual_owner_required');
       const person=matches[0],choice=new Autocomplete(ui,{field:'#owner',windowMs:2000});

@@ -9,6 +9,7 @@ from robot.api import logger
 from robot.api.deco import keyword
 
 from .browsers import BrowserManager, private_json
+from .browser_runtime import BrowserRuntime
 from .credentials import CredentialResolver
 from .process import run_json_process
 from . import diagnostics as diag
@@ -44,6 +45,7 @@ class EntraLibrary:
         attempt.mkdir(parents=True, mode=0o700)
         attempt.chmod(0o700)
         session = None
+        runtime = None
         owned = False
         receipt = None
         browser_evidence = None
@@ -69,22 +71,33 @@ class EntraLibrary:
             key = json.dumps([str(refs), config.get('scope', ''), options['origin'], identity])
             binding = hashlib.sha256(key.encode()).hexdigest()[:32]
             root = Path(config['browser']['root']).expanduser().resolve()
-            manager = BrowserManager(root, verification_seconds=config['browser'].get('verification_seconds', 2))
             existing = config['browser'].get('existing_session')
             name = existing or 'entra-' + binding
             # This reference also survives startup failure, when no handle exists.
             browser_evidence = {'name': name, 'directory': str(root / name)}
             enter('browser_attach' if existing else 'browser_start')
-            if existing:
+            remote = config['browser'].get('provider', 'local') != 'local'
+            if remote:
+                # Remote persistence/attachment requires an explicit provider
+                # capability, never the local persistent-profile default.
+                browser_config = {key: value for key, value in config['browser'].items() if key != 'root'}
+                runtime = BrowserRuntime(root, configuration=browser_config, project_root=config.get('project_root'))
+                manager = runtime
+                session = manager.acquire(name)
+                owned = True
+                browser_evidence = {'name': name, 'directory': str(runtime.evidence)}
+            elif existing:
+                manager = BrowserManager(root, verification_seconds=config['browser'].get('verification_seconds', 2))
                 session = manager.attach(existing)
                 if config['browser'].get('generation') != session.generation:
                     raise RuntimeError('explicit_current_browser_generation_required')
             else:
+                manager = BrowserManager(root, verification_seconds=config['browser'].get('verification_seconds', 2))
                 session = manager.start('entra-' + binding, executable=config['browser']['executable'],
                                         persistent=True, require_new=True)
                 owned = True
             enter('flow_configuration')
-            payload = {'connection': {'cdpHost': '127.0.0.1', 'cdpPort': session.port, 'targetId': session.target_id},
+            payload = {
                        '_diagnostics': diag.bridge_configuration(),
                        'credentialSource': {'python': sys.executable, 'refs': str(refs), 'identity': identity},
                        'allowSubmission': True,
@@ -98,6 +111,8 @@ class EntraLibrary:
                                    'exportCookies': config.get('export_cookies', True),
                                    'screenshotMask': config.get('screenshot_mask', 'none')}}
             with manager.drive(session):
+                payload['connection'] = session.connection() if remote else {
+                    'cdpHost': '127.0.0.1', 'cdpPort': session.port, 'targetId': session.target_id}
                 enter('flow')
                 result = run_json_process(['node', str(Path(__file__).with_name('browser') / 'entra-runner.js')],
                                           input_data=json.dumps(payload), timeout_seconds=285)
@@ -110,16 +125,21 @@ class EntraLibrary:
                     receipt = {'status': 'entra_process_incomplete', 'outcome': 'unknown', 'observedResult': receipt,
                                'nextStep': 'The runner did not complete. Reconcile its recorded authentication observation before another login.'}
                 receipt['runner'] = transport
-            receipt['browser'] = {'name': session.name, 'generation': session.generation, 'persistent': session.persistent}
+            receipt['browser'] = {'name': session.name, 'generation': session.generation,
+                                  'persistent': False if remote else session.persistent,
+                                  'provider': 'browserless' if remote else 'local'}
         except Exception as error:
             receipt = {'status': 'entra_setup_incomplete', 'outcome': 'unknown', 'phase': phase,
                        'code': phase + '_incomplete', 'errorType': type(error).__name__,
                        'nextStep': f'Inspect the retained {phase} evidence and browser logs before another attempt. No automatic retry was made.'}
         finally:
-            if owned and session is not None:
+            if runtime is not None or (owned and session is not None):
                 cleanup = {'complete': True}
                 try:
-                    manager.stop(session)
+                    if runtime is not None:
+                        cleanup = runtime.close()
+                    else:
+                        manager.stop(session)
                 except (OSError, RuntimeError, ValueError):
                     cleanup = {'complete': False}
                 if receipt is not None:

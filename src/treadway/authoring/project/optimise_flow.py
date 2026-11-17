@@ -17,7 +17,7 @@ import time
 import subprocess
 import uuid
 
-from treadway.browsers import BrowserManager
+from treadway.browser_runtime import BrowserRuntime
 from treadway.diagnostics import RunDiagnostics, reference
 from treadway.optimisation import compare_objective_runs, fingerprint, summarise_profile
 from treadway.process import run_json_process
@@ -94,11 +94,15 @@ def disposition(name):
 
 
 class Context:
-    def __init__(self, root, count, *, expire_after=None, lose_response=None):
+    def __init__(self, root, count, *, expire_after=None, lose_response=None,
+                 browser_config=None, browser_app_url=None, fixture_host='127.0.0.1'):
         self.root = Path(root)
-        self.fixture = OwnerFixture(self.root/'application', count, expire_after=expire_after, lose_response=lose_response)
+        self.fixture = OwnerFixture(self.root/'application', count, expire_after=expire_after, lose_response=lose_response,
+                                   browser_app_url=browser_app_url, fixture_host=fixture_host)
         self.executors, self.browsers = {}, {}
-        self.manager = BrowserManager(self.root/'browsers')
+        self.browser_config, self.browser_app_url = browser_config, browser_app_url
+        self.manager = BrowserRuntime.from_file(browser_config, root=self.root/'browsers', project_root=HERE) if browser_config else BrowserRuntime(
+            self.root/'browsers', project_root=HERE)
 
     def start(self):
         self.fixture.start()
@@ -111,16 +115,20 @@ class Context:
 
     def browser(self, actor):
         if actor not in self.browsers:
-            self.browsers[actor] = self.manager.start(actor, executable=os.environ['CHROME_BIN'], sandbox=True)
+            if self.manager.provider != 'local' and not self.browser_app_url:
+                raise ValueError('remote_browser_requires_reachable_fixture_url')
+            options = {'executable': os.environ['CHROME_BIN'], 'sandbox': True} if self.manager.provider == 'local' else {}
+            self.browsers[actor] = self.manager.acquire(actor, **options)
         return self.browsers[actor]
 
     def browser_call(self, actor, run, directory, **binding):
         browser = self.browser(actor)
         config = {'browserRoot': str(Path(treadway.__file__).parent/'browser'),
-                  'origin': self.fixture.origin, 'connection': browser.connection(),
+                  'origin': self.fixture.browser_origin,
                   'actor': actor, 'generation': browser.generation, 'journal': str(directory/'browser.jsonl'),
                   'diagnostics': run.bridge() if run else None, **binding}
         with self.manager.drive(browser):
+            config['connection'] = browser.connection()
             transport = run_json_process(['node', str(HERE/'optimisation_browser.cjs')],
                 input_data=json.dumps(config), timeout_seconds=25)
         private_json(directory/('browser-transport-'+uuid.uuid4().hex+'.json'), transport)
@@ -140,11 +148,11 @@ class Context:
     def close(self):
         errors = []
         try:
-            for browser in self.browsers.values():
-                try:
-                    self.manager.stop(browser)
-                except (RuntimeError, OSError) as error:
-                    errors.append(type(error).__name__)
+            try:
+                if not self.manager.close()['complete']:
+                    errors.append('cleanup_incomplete')
+            except (RuntimeError, OSError) as error:
+                errors.append(type(error).__name__)
         finally:
             self.fixture.close()
         if errors:
@@ -195,17 +203,17 @@ def browser_binding(context, binding, operation_id, run, directory, *, direct, o
 
 
 def run_sample(root, objective, variant, mode, pair, challenge, *, context=None, offset=0,
-               expire_after=None, lose_response=None):
+               expire_after=None, lose_response=None, browser_options=None):
     directory = Path(root)/uuid.uuid4().hex
     directory.mkdir(parents=True, mode=0o700)
     run_id, owned = directory.name, context is None
     transport = 'http' if variant == 'candidate' and objective['id'] == 'persistence' else 'browser'
     context = context or Context(directory/'context', len(objective['workload']),
-                                 expire_after=expire_after, lose_response=lose_response)
+                                 expire_after=expire_after, lose_response=lose_response, **(browser_options or {}))
     record = {'version': 'treadway.objective-run/1', 'id': run_id, 'objective_digest': fingerprint(objective),
               'workload_digest': fingerprint(objective['workload']), 'conditions': objective['conditions'],
               'variant': variant, 'pair': pair, 'mode': mode, 'environment': ENVIRONMENT,
-              'implementation_digest': implementation_digest(), 'transaction_scope': run_id,
+              'implementation_digest': implementation_digest(context.browser_config), 'transaction_scope': run_id,
               'subject': transport if transport == 'http' else 'browser-direct' if variant == 'candidate' else 'browser-list',
               'faults': {'expire_after': context.fixture.expire_after, 'lose_response': context.fixture.lose_response},
               'observations': [], 'transactions': [], 'challenges': [], 'binding_durations_ms': [], 'outcome': 'incomplete'}
@@ -274,12 +282,15 @@ def run_sample(root, objective, variant, mode, pair, challenge, *, context=None,
     return directory, record
 
 
-def implementation_digest():
+def implementation_digest(browser_config=None):
     package = Path(treadway.__file__).parent
     runtime = {str(path.relative_to(package)): hashlib.sha256(path.read_bytes()).hexdigest()
                for path in [*package.glob('*.py'), *(package/'browser').glob('*.js'), *(package/'browser').glob('package*.json')]}
     browser = None
-    if os.environ.get('CHROME_BIN'):
+    if browser_config:
+        browser = {'configuration': hashlib.sha256(Path(browser_config).read_bytes()).hexdigest(),
+                   'engineIdentity': 'not_measured'}
+    elif os.environ.get('CHROME_BIN'):
         executable = Path(os.environ['CHROME_BIN']).resolve()
         stat = executable.stat()
         browser = browser_identity(str(executable), stat.st_size, stat.st_mtime_ns)
@@ -296,12 +307,12 @@ def browser_identity(executable, size, modified):
     return {'sha256': digest, 'version': result.stdout.strip()}
 
 
-def challenge_contracts(root, objective, subject='http'):
+def challenge_contracts(root, objective, subject='http', *, browser_options=None):
     """Explicit synthetic fault executions. They never contact an external target."""
     tick = time.monotonic()
     gates = {}
     if subject != 'http':
-        context = Context(Path(root)/'browser-guards', 2, lose_response='item-1').start()
+        context = Context(Path(root)/'browser-guards', 2, lose_response='item-1', **(browser_options or {})).start()
         try:
             for name in objective['required_challenges']:
                 receipt = {'state': 'not_dispatched'}
@@ -414,12 +425,15 @@ def main(argv=None):
     parser.add_argument('--repetitions', type=int, default=2, choices=range(1, 6), metavar='1..5')
     parser.add_argument('--describe', action='store_true', help='Print the objective and proposed omissions without execution')
     parser.add_argument('--output', type=Path, default=HERE/'artifacts/optimisation')
+    parser.add_argument('--browser-config', type=Path, help='Explicit browser provider configuration')
+    parser.add_argument('--browser-app-url', help='Browser-reachable fixture origin; {port} substitutes the local fixture port')
+    parser.add_argument('--fixture-host', default='127.0.0.1', help='Explicit fixture listen address')
     args = parser.parse_args(argv)
     objective = testing_objective(args.objective, args.bindings, ('cold', 'warm') if args.benchmark else ('cold',))
     if args.describe:
         print(json.dumps({'objective': objective, 'disposition': disposition(args.objective)}))
         return 0
-    if (args.benchmark or args.objective == 'validation') and not os.environ.get('CHROME_BIN'):
+    if (args.benchmark or args.objective == 'validation') and not args.browser_config and not os.environ.get('CHROME_BIN'):
         parser.error('CHROME_BIN is required for the browser boundary')
     root = args.output/uuid.uuid4().hex
     root.mkdir(parents=True, mode=0o700)
@@ -427,8 +441,10 @@ def main(argv=None):
     private_json(root/'disposition.json', disposition(args.objective))
     baseline, candidate, records = [], [], []
     variants = ['baseline', 'candidate'] if args.benchmark else ['candidate']
+    browser_options = {'browser_config': args.browser_config, 'browser_app_url': args.browser_app_url, 'fixture_host': args.fixture_host}
     challenges = {variant: challenge_contracts(root/'challenges'/variant, objective,
-        'http' if variant == 'candidate' and args.objective == 'persistence' else 'browser-direct' if variant == 'candidate' else 'browser-list')
+        'http' if variant == 'candidate' and args.objective == 'persistence' else 'browser-direct' if variant == 'candidate' else 'browser-list',
+        browser_options=browser_options)
         for variant in variants}
     for mode in objective['modes']:
         for variant in variants:
@@ -438,14 +454,15 @@ def main(argv=None):
             preparation_ms = 0
             try:
                 if mode == 'warm':
-                    context = Context(root/(mode+'-'+variant), args.bindings*args.repetitions*2).start()
+                    context = Context(root/(mode+'-'+variant), args.bindings*args.repetitions*2, **browser_options).start()
                     context.prewarm(objective, 'http' if variant == 'candidate' and args.objective == 'persistence' else 'browser')
                     preparation_ms = (time.monotonic()-prep_tick)*1000
                 for repeat in range(args.repetitions if args.benchmark else 1):
                     directory, record = run_sample(root, objective, variant, mode, f'sample-{repeat+1}', challenges[variant],
                         context=context, offset=repeat*args.bindings*2 if context else 0,
                         expire_after=37 if args.bindings == 100 and not args.benchmark else None,
-                        lose_response='item-63' if args.bindings == 100 and not args.benchmark else None)
+                        lose_response='item-63' if args.bindings == 100 and not args.benchmark else None,
+                        browser_options=browser_options)
                     (baseline if variant == 'baseline' else candidate).append(directory)
                     records.append(record)
                     shared_records.append((directory, record))
@@ -476,11 +493,11 @@ def main(argv=None):
     private_json(root/'profile.json', summarise_profile(profiles))
     # Explicit provenance points at this run's observations, never at captured secrets.
     calibrated_digest = records[0]['implementation_digest']
-    current_digest = implementation_digest()
+    current_digest = implementation_digest(args.browser_config)
     observed_knowledge = (all(record['outcome'] == 'completed' and record['implementation_digest'] == calibrated_digest for record in records)
                           and current_digest == calibrated_digest)
     private_json(root/'knowledge.json', {'version': 'treadway.knowledge/1', 'application': ENVIRONMENT,
-        'scope': 'owned-loopback-fixture', 'calibrated_at': datetime.now(timezone.utc).isoformat(),
+        'scope': 'owned-fixture', 'calibrated_at': datetime.now(timezone.utc).isoformat(),
         'implementation_digest': calibrated_digest, 'claims': [
             {'operation': 'owner-write' if args.objective == 'persistence' else 'browser-owner-validation',
              'state': 'observed' if observed_knowledge else 'unverified',

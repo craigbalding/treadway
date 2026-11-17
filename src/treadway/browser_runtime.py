@@ -1,0 +1,388 @@
+"""Provider-neutral browser ownership. Configuration and construction are passive.
+
+Only explicit acquire/drive/release operations start processes or resolve endpoint
+credentials. Remote descriptors are private inputs to the shared Node connection
+factory; they contain no provider URL or token.
+"""
+from __future__ import annotations
+
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+import fcntl
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import selectors
+import shutil
+import subprocess
+import tempfile
+import threading
+import time
+import uuid
+
+from .browsers import BrowserManager, BrowserSession, private_json
+from .credentials import CredentialRef, EnvironmentProvider
+
+
+class BrowserRuntimeIncomplete(RuntimeError):
+    """Safe summary with retained private evidence, never provider exception text."""
+
+    def __init__(self, code, *, evidence=None, details=None):
+        self.code = code
+        self.evidence = str(evidence) if evidence else None
+        self.details = dict(details or {})
+        super().__init__(code)
+
+
+def _seconds(value, maximum):
+    if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= maximum:
+        raise ValueError("bounded_browser_deadline_required")
+    return float(value)
+
+
+def _private_directory(directory):
+    directory = Path(directory).absolute()
+    for component in (*reversed(directory.parents), directory):
+        if component.is_symlink():
+            raise ValueError("private_browser_state_directory_required")
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not directory.is_dir() or directory.stat().st_mode & 0o077:
+        raise ValueError("private_browser_state_directory_required")
+    return directory
+
+
+def _project_identity(project_root, deadline):
+    directory = _private_directory(Path(project_root) / ".treadway")
+    lock = os.open(directory / "project.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BrowserRuntimeIncomplete("project_identity_deadline") from None
+                time.sleep(min(.01, remaining))
+        state = directory / "project.json"
+        if state.exists() or state.is_symlink():
+            if state.is_symlink() or not state.is_file() or state.stat().st_mode & 0o077:
+                raise ValueError("private_project_identity_required")
+            data = json.loads(state.read_text())
+            identifier = data.get("projectId")
+            if data.get("version") != 1 or not isinstance(identifier, str) or str(uuid.UUID(identifier)) != identifier:
+                raise ValueError("project_identity_invalid")
+        else:
+            identifier = str(uuid.uuid4())
+            private_json(state, {"version": 1, "projectId": identifier})
+        ignored = directory / ".gitignore"
+        if not ignored.exists():
+            descriptor = os.open(ignored, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(descriptor, "w") as stream:
+                stream.write("*\n")
+        return identifier
+    finally:
+        os.close(lock)
+
+
+@dataclass
+class RuntimeSession:
+    name: str
+    provider: str
+    generation: str
+    _connection: dict = field(repr=False)
+    capabilities: dict = field(default_factory=dict)
+    _local: BrowserSession | None = field(default=None, repr=False)
+
+    def connection(self):
+        """Private subprocess input; do not pass this mapping as Robot arguments."""
+        return dict(self._connection)
+
+
+class BrowserRuntime:
+    def __init__(self, root: Path, *, configuration=None, project_root=None):
+        config = dict(configuration or {})
+        if "browser" in config:
+            if len(config) != 1:
+                raise ValueError("browser_configuration_invalid")
+            config = dict(config["browser"])
+        provider = config.get("provider", "local")
+        if provider not in {"local", "browserless"}:
+            raise ValueError("browser_provider_unsupported")
+        if provider == 'local' and set(config) - {'provider', 'acquire_seconds', 'session_seconds', 'cleanup_seconds'}:
+            raise ValueError('local_browser_configuration_invalid')
+        if provider == "browserless":
+            allowed = {"provider", "endpoint_env", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds"}
+            if set(config) - allowed or config.get("mode", "fresh") != "fresh":
+                raise ValueError("remote_browser_capability_unsupported")
+            for key in ("endpoint_env", "headers_env"):
+                value = config.get(key)
+                if (key == "endpoint_env" or value is not None) and (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)):
+                    raise ValueError("browser_secret_reference_invalid")
+        self.configuration = config
+        self.provider = provider
+        self.root = Path(root).absolute()
+        self.project_root = Path(project_root or Path.cwd()).absolute()
+        self.acquire_seconds = _seconds(config.get("acquire_seconds", 15), 3600)
+        self.session_seconds = _seconds(config.get("session_seconds", 300), 86400)
+        self.cleanup_seconds = _seconds(config.get("cleanup_seconds", 3), 60)
+        self.local = BrowserManager(self.root)
+        self.sessions = {}
+        self.process = None
+        self.selector = None
+        self._rpc_lock = threading.RLock()
+        self._next_id = 0
+        self._buffer = b""
+        self._closed = False
+        self.last_cleanup = None
+
+    @classmethod
+    def from_file(cls, filename, *, root, project_root=None):
+        filename = Path(filename).absolute()
+        # A shared provider config is not a shared project identity. Callers
+        # running outside the project directory supply its root explicitly.
+        return cls(root, configuration=json.loads(filename.read_text()), project_root=project_root)
+
+    def _start_worker(self, deadline):
+        if self.process is not None:
+            return
+        self.project_id = _project_identity(self.project_root, deadline)
+        self.run_id = str(uuid.uuid4())
+        self.evidence = _private_directory(self.root / self.run_id)
+        self.socket_root = Path(tempfile.mkdtemp(prefix="treadway-ipc-"))
+        stderr_path = self.evidence / "worker-stderr.log"
+        descriptor = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stderr:
+            self.process = subprocess.Popen(["node", str(Path(__file__).with_name("browser") / "browser-worker.js")],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, start_new_session=True)
+        self.selector = selectors.DefaultSelector()
+        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+        self._rpc(configuration={"root": str(self.evidence), "socketRoot": str(self.socket_root),
+            "projectId": self.project_id, "runId": self.run_id, "acquireMs": max(1, int(self.acquire_seconds * 1000)),
+            "sessionMs": max(1, int(self.session_seconds * 1000)), "cleanupMs": max(1, int(self.cleanup_seconds * 1000))},
+            timeout=max(.001, min(5, deadline - time.monotonic())))
+
+    def _rpc(self, *, timeout=None, **request):
+        with self._rpc_lock:
+            self._next_id += 1
+            identifier = self._next_id
+            try:
+                self.process.stdin.write(json.dumps({"id": identifier, **request}).encode() + b"\n")
+                self.process.stdin.flush()
+                deadline = time.monotonic() + (timeout or self.acquire_seconds + self.cleanup_seconds + 2)
+                while True:
+                    while b"\n" in self._buffer:
+                        raw, self._buffer = self._buffer.split(b"\n", 1)
+                        result = json.loads(raw)
+                        if result.get("id") != identifier:
+                            raise BrowserRuntimeIncomplete("remote_control_reply_differs", evidence=self.evidence)
+                        if "error" in result:
+                            error = result["error"]
+                            raise BrowserRuntimeIncomplete(error.get("code", "remote_control_incomplete"), evidence=self.evidence,
+                                details={key: value for key, value in error.items() if key in {"phase", "status", "allocation"}})
+                        return result["result"]
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or not self.selector.select(remaining):
+                        raise BrowserRuntimeIncomplete("remote_control_deadline", evidence=self.evidence)
+                    chunk = os.read(self.process.stdout.fileno(), 65536)
+                    if not chunk or len(self._buffer) + len(chunk) > 16 * 1024 * 1024:
+                        raise BrowserRuntimeIncomplete("remote_control_incomplete", evidence=self.evidence)
+                    self._buffer += chunk
+            except BrowserRuntimeIncomplete:
+                raise
+            except Exception:
+                raise BrowserRuntimeIncomplete("remote_control_incomplete", evidence=self.evidence) from None
+
+    def acquire(self, actor, *, deadline=None, **local_options):
+        if self._closed:
+            raise BrowserRuntimeIncomplete("browser_runtime_closed")
+        if not isinstance(actor, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", actor):
+            raise ValueError("path_safe_session_name_required")
+        if any(session.name == actor for session in self.sessions.values()):
+            raise BrowserRuntimeIncomplete('browser_actor_already_acquired')
+        if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+            raise ValueError("finite_monotonic_deadline_required")
+        deadline = min(deadline, time.monotonic() + self.acquire_seconds) if deadline is not None else time.monotonic() + self.acquire_seconds
+        if deadline <= time.monotonic():
+            raise BrowserRuntimeIncomplete("remote_acquisition_deadline")
+        if self.provider == "local":
+            local_options.setdefault('require_new', True)
+            local_options["startup_seconds"] = min(local_options.get("startup_seconds", 15), max(.001, deadline - time.monotonic()))
+            local = self.local.start(actor, **local_options)
+            session = RuntimeSession(actor, "local", local.generation, local.connection(), _local=local)
+        else:
+            if local_options:
+                raise ValueError("local_launch_options_not_remote_capabilities")
+            # Resolve only at this explicit live boundary, using existing provider rules.
+            try:
+                provider = EnvironmentProvider()
+                endpoint = provider.read(CredentialRef("env", self.configuration["endpoint_env"]))
+                headers = json.loads(provider.read(CredentialRef("env", self.configuration["headers_env"]))) if self.configuration.get("headers_env") else {}
+            except Exception:
+                raise BrowserRuntimeIncomplete("remote_credentials_unavailable") from None
+            with self._rpc_lock:
+                try:
+                    self._start_worker(deadline)
+                except BaseException:
+                    # Startup can fail after the process exists. Preserve the
+                    # first error and retained journal, but stop our own child.
+                    try:
+                        self.close()
+                    except Exception:
+                        pass
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BrowserRuntimeIncomplete("remote_acquisition_deadline", evidence=self.evidence)
+                result = self._rpc(operation="acquire", arguments={"actor": actor, "endpoint": endpoint, "headers": headers,
+                    "budgetMs": max(1, min(int(self.acquire_seconds * 1000), int(remaining * 1000)))},
+                    timeout=remaining + self.cleanup_seconds + 1)
+            connection = result["connection"]
+            session = RuntimeSession(actor, "browserless", connection["generation"], connection, capabilities=result["capabilities"])
+        self.sessions[session.generation] = session
+        return session
+
+    def acquire_many(self, actors, **local_options):
+        """One acquisition budget; roll back this call's acknowledged allocations."""
+        names = list(actors)
+        if not names or any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", name) for name in names) or len(names) != len(set(names)):
+            raise ValueError("distinct_actor_names_required")
+        sessions = []
+        deadline = time.monotonic() + self.acquire_seconds
+        try:
+            for name in names:
+                sessions.append(self.acquire(name, deadline=deadline, **local_options))
+            return sessions
+        except BaseException:
+            self.last_partial_cleanup = []
+            for session in reversed(sessions):
+                try:
+                    self.last_partial_cleanup.append(self.release(session))
+                except Exception:
+                    self.last_partial_cleanup.append({"complete": False})
+            raise
+
+    def _owned(self, session):
+        if not isinstance(session, RuntimeSession) or self.sessions.get(session.generation) is not session:
+            raise BrowserRuntimeIncomplete("browser_runtime_binding_differs")
+        return session
+
+    @contextmanager
+    def drive(self, session):
+        self._owned(session)
+        if session.provider == "local":
+            with self.local.drive(session._local):
+                yield session
+            return
+        lease = self._rpc(operation="reserve", connection=session.connection())
+        session._connection.update(lease)
+        failed = False
+        try:
+            yield session
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                self.last_lease = self._rpc(operation="unreserve", connection=session.connection())
+            except BrowserRuntimeIncomplete:
+                if not failed:
+                    raise
+            finally:
+                session._connection.pop("driveLease", None)
+
+    def release(self, session):
+        self._owned(session)
+        if session.provider == "local":
+            self.local.stop(session._local)
+            result = {"complete": True}
+        else:
+            result = self._rpc(operation="release", connection=session.connection(), timeout=self.cleanup_seconds + 2)
+        self.last_cleanup = result
+        return result
+
+    def inspect(self, session):
+        """Observe worker receipts; this neither sends CDP nor resolves an effect."""
+        self._owned(session)
+        if session.provider != 'browserless':
+            raise ValueError('remote_receipt_inspection_required')
+        return self._rpc(operation='inspect', connection=session.connection())
+
+    def record_reconciliation(self, session, *, request_ref, outcome, evidence):
+        """Retain an application's independent observation of one unknown effect.
+
+        This does not prove remote execution stopped and never unlocks or replays
+        the quarantined generation. The caller's application observer establishes
+        the outcome; Treadway binds and retains its private evidence.
+        """
+        self._owned(session)
+        if session.provider != 'browserless' or outcome not in {'applied', 'not_applied', 'unknown'}:
+            raise ValueError('remote_reconciliation_evidence_required')
+        source = Path(evidence)
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            import stat
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077 or metadata.st_size > 16 * 1024 * 1024:
+                raise ValueError('private_bounded_reconciliation_evidence_required')
+            with os.fdopen(descriptor, 'rb', closefd=False) as stream:
+                data = stream.read(16 * 1024 * 1024 + 1)
+            if len(data) > 16 * 1024 * 1024:
+                raise ValueError('private_bounded_reconciliation_evidence_required')
+        finally:
+            os.close(descriptor)
+        reference = str(uuid.uuid4())
+        directory = _private_directory(self.evidence / 'reconciliations')
+        output = os.open(directory / reference, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(output, 'wb') as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return self._rpc(operation='reconcile', connection=session.connection(), arguments={
+            'requestRef': request_ref, 'outcome': outcome,
+            'evidence': {'reference': reference, 'sha256': hashlib.sha256(data).hexdigest()}})
+
+    def close(self):
+        if self._closed:
+            return self.last_cleanup
+        self._closed = True
+        results = []
+        try:
+            if self.process is not None:
+                try:
+                    results.append(self._rpc(operation="shutdown", timeout=self.cleanup_seconds + 2))
+                except BrowserRuntimeIncomplete:
+                    results.append({"complete": False, "remoteTermination": "unconfirmed"})
+                self.process.stdin.close()
+                try:
+                    self.process.wait(timeout=self.cleanup_seconds + 1)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=2)
+                    results.append({"complete": False, "remoteTermination": "unconfirmed"})
+            else:
+                for session in self.sessions.values():
+                    results.append(self.release(session))
+        finally:
+            if self.selector:
+                self.selector.close()
+            if self.process:
+                self.process.stdout.close()
+            if hasattr(self, "socket_root"):
+                shutil.rmtree(self.socket_root, ignore_errors=True)
+        self.last_cleanup = {"complete": all(result.get("complete") for result in results), "resources": results}
+        return self.last_cleanup
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *error):
+        try:
+            self.close()
+        except Exception:
+            self.last_cleanup = {"complete": False}
+            if error[0] is None:
+                raise

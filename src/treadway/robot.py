@@ -19,9 +19,12 @@ class FormOperationIncomplete(RuntimeError):
 class FormLibrary:
     ROBOT_LIBRARY_SCOPE = "SUITE"
 
-    def __init__(self, cdp_host, cdp_port, target_id, record_path, scope="body", frame_selector=None):
-        self.configuration = dict(cdpHost=cdp_host, cdpPort=int(cdp_port),
-                                  targetId=target_id, recordPath=str(record_path), scope=scope,
+    def __init__(self, cdp_host=None, cdp_port=None, target_id=None, record_path=None, scope="body", frame_selector=None,
+                 connection=None):
+        if record_path is None or (connection is not None and any(value is not None for value in (cdp_host, cdp_port, target_id))):
+            raise ValueError("explicit_connection_and_record_path_required")
+        selected = {"connection": dict(connection)} if connection is not None else dict(cdpHost=cdp_host, cdpPort=int(cdp_port), targetId=target_id)
+        self.configuration = dict(selected, recordPath=str(record_path), scope=scope,
                                   frameSelector=frame_selector)
         self.record_path = Path(record_path)
 

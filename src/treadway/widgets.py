@@ -18,8 +18,10 @@ class WidgetOperationIncomplete(RuntimeError):
 class WidgetLibrary:
     ROBOT_LIBRARY_SCOPE = "SUITE"
 
-    def __init__(self, cdp_host, cdp_port, target_id, origin, record_path, kind,
-                 profile, scope="body", frame_selector=None):
+    def __init__(self, cdp_host=None, cdp_port=None, target_id=None, origin=None, record_path=None, kind=None,
+                 profile=None, scope="body", frame_selector=None, connection=None):
+        if record_path is None or (connection is not None and any(value is not None for value in (cdp_host, cdp_port, target_id))):
+            raise ValueError("explicit_connection_and_record_path_required")
         if isinstance(profile, str):
             profile = json.loads(profile)
         if not isinstance(profile, dict):
@@ -27,8 +29,8 @@ class WidgetLibrary:
         if kind not in {"autocomplete", "multi_select", "date_range", "rich_text",
                         "inline_editor", "prepared_edit"}:
             raise ValueError("Unknown widget kind")
-        self.configuration = dict(cdpHost=cdp_host, cdpPort=int(cdp_port),
-                                  targetId=target_id, origin=origin,
+        selected = {"connection": dict(connection)} if connection is not None else dict(cdpHost=cdp_host, cdpPort=int(cdp_port), targetId=target_id)
+        self.configuration = dict(selected, origin=origin,
                                   recordPath=str(record_path), kind=kind,
                                   profile=profile, scope=scope,
                                   frameSelector=frame_selector)
