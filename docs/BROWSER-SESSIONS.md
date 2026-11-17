@@ -1,34 +1,33 @@
-# Browser and actor sessions
+# Use separate browser sessions
 
-The [installed session guide](../src/treadway/authoring/skill/treadway-flows/references/SESSIONS.md)
-documents Chromium lifecycle, sandbox and proxy choices, profile persistence,
-exclusive session control, actual-principal verification, isolated HTTP cookie
-jars, origin state operations and scoped CDP target monitoring.
+Give each participant its own profile or HTTP cookie jar, including separate
+anonymous users. Choose profile reuse explicitly: `persistent=True` keeps a named
+browser profile's login and cache across restarts; the default uses a fresh profile.
 
-## Chromium sandbox in gVisor
+## Run a collaboration flow
 
-Sandboxed Chromium startup and Treadway's generated example flow have both been
-verified in a SafeYolo environment using gVisor, with user namespaces enabled.
-Keep the sandbox enabled by default, including under gVisor. Running under
-gVisor alone is not a reason to pass `--no-sandbox`, set `sandbox=False` or set
-`TREADWAY_CHROME_SANDBOX=off`.
-
-If startup fails, inspect the retained Chrome log named in the error. A startup
-timeout alone does not establish a sandbox failure. Diagnose the actual browser
-or runtime error before changing sandbox settings. See the installed
-[sandbox guide](../src/treadway/authoring/skill/treadway-flows/references/SESSIONS.md#chromium-sandbox-in-gvisor)
-for the explicit opt-out in an environment that demonstrably cannot support it.
-
-## Collaborative walkthrough
-
-Use `treadway guide sessions` from an installed package. The shipped
-`collaboration.robot` walkthrough exercises distinct authenticated principals and
-two anonymous sessions through actual browser requests and independent persisted
-state observations. Run it after `treadway new my-flow`:
+From a generated project:
 
 ```sh
 CHROME_BIN=/absolute/path/to/chromium python run.py test --suite collaboration.robot
 ```
 
-Core supplies mechanics. Adapters define their identity probes, resource
-relationships, expected permission rules and completion evidence.
+Expect two passed Robot cases. The first creates as A, refuses A's self-approval,
+approves as B and verifies as A. The second requests a known private resource as
+B and two anonymous users, checking actual application refusals and saved state.
+
+The [session guide](../src/treadway/authoring/skill/treadway-flows/references/SESSIONS.md)
+shows browser startup, profile reuse and actual-user checks. It is also available
+as `treadway guide sessions`.
+
+## Chromium sandbox in gVisor
+
+Keep Chromium's sandbox enabled, including under gVisor. Sandboxed startup and
+the generated flow have been verified in SafeYolo/gVisor with user namespaces.
+A timeout does not establish a sandbox failure: inspect the retained Chrome log.
+[Sandbox settings](../src/treadway/authoring/skill/treadway-flows/references/SESSION-REFERENCE.md#chromium-sandbox-in-gvisor)
+cover diagnosis and the explicit opt-out for an environment that cannot support it.
+
+For flags, proxy trust, HTTP jars and target monitoring, use the
+[browser/session reference](../src/treadway/authoring/skill/treadway-flows/references/SESSION-REFERENCE.md).
+For expiry during repeated work, see [session recovery](SESSION-RECOVERY.md).

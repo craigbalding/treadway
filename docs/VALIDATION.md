@@ -1,4 +1,8 @@
-# Validation and operating limits
+# Validation history
+
+Dated validation records follow. Test counts, versions and limits belong to the
+run described, rather than a current support matrix. For current commands use
+[fast feedback](FAST-FEEDBACK.md); for usable APIs start with the [API index](API.md).
 
 The checks use synthetic local fixtures, loopback servers and an isolated browser.
 They establish the covered mechanics, not a particular application's behavior.

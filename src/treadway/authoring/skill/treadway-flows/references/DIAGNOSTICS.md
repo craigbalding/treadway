@@ -1,164 +1,81 @@
 # Debug a flow and its machinery
 
-Enable one `RunDiagnostics` scope around ordinary Python composition, or the
-native Robot listener around a suite. Library imports, constructors and dry-runs
-are passive. No diagnostics scope means no new diagnostics output or threads.
+Enable diagnostics around the flow you want to inspect. Progress goes to stderr;
+your script still controls stdout. The run directory retains events and timing
+statistics for inspection after success or failure.
 
-## Run the complete example
+## Try the local example
 
-From a generated project (`treadway new my-flow`, then `cd my-flow`):
+From a generated project:
 
 ```sh
 python debug_recovery.py --level DEBUG
 ```
 
-The loop visibly supplies `{"id": "item-N", "value": N}` for each of 100
-mutations. The disposable app expires its session after write 37. The configured
-owner refreshes it, the HTTP principal is checked again and write 38 proceeds.
-Write 63 commits but loses its reply; an independent SQLite observer confirms it
-without another write. No browser, external service or real credentials are used.
+The example runs 100 local mutations, renews a session after write 37 and confirms
+a lost reply at write 63 without repeating the write. Expect progress on stderr,
+a final JSON result on stdout and a private directory containing `events.jsonl`,
+`summary.json` and `coverage.json`. Use `--no-console` to keep files without
+terminal progress. No browser, external account or live service is used.
 
-Safe progress is streamed to stderr, a final result/statistics JSON goes to
-stdout, and a unique private run directory retains `events.jsonl`, `summary.json`
-and `coverage.json`. Existing operation/owner journals remain separate mandatory
-execution evidence. Use `--no-console` for a quiet terminal; files and statistics
-still work. `--help` does not start the app.
-
-To observe a real contract mismatch in that synthetic app:
+To see a changed application contract stop the next write:
 
 ```sh
 python debug_recovery.py --simulate-contract-change-at 38
 ```
 
-The fixture's schema version changes from 1 to 2. The next read-only observation
-reports `contract_mismatch` and stops before write 38. The result exits nonzero;
-the 37 completed writes and original evidence remain. No payload repair, guessed
-replacement selector or automatic retry is introduced.
+This command deliberately exits nonzero before write 38. The first 37 writes
+and their evidence remain available.
 
-## Python: configure once, select the output
+## Python events
+
+Wrap your own existing operations in one scope:
 
 ```python
 from treadway.diagnostics import RunDiagnostics
 
-with RunDiagnostics("artifacts/diagnostics", console=True, level="DEBUG",
-                    watch=["application_flow.py", "adapter.py"],
-                    watch_runtime=True) as run:
+with RunDiagnostics("artifacts/diagnostics", console=True, level="DEBUG") as run:
     for binding in bindings:
         execute_calibrated_mutation(binding)
 
 statistics = run.summary()
 ```
 
-`execute_calibrated_mutation` is your application keyword, not a new built-in.
-HTTP requests, prerequisite principal checks, authentication callbacks, dispatch
-reservations, effect assessments and reconciliation emit events automatically.
-Form/widget/Entra Python adapters also correlate their browser subprocess/CDP
-events with that run. Native Robot/Python still owns flow control.
+`bindings` and `execute_calibrated_mutation` belong to your application. Shared
+HTTP, authentication and browser adapters emit their events within this scope.
+Without a diagnostics scope, they create no diagnostic files, output or threads.
 
-`console=True` prints safe events to stderr, flushing as they are delivered.
-INFO reports operation/effect/browser progress; DEBUG includes HTTP, probe,
-authentication preparation, subprocess and CDP details. Nothing is printed to
-stdout by these diagnostics. The application decides its result output.
+INFO shows operation progress. DEBUG adds HTTP, identity-probe, subprocess and
+CDP details. For your own display, pass `sinks=[callback]`; the callback receives
+structured metadata with no payloads, credentials or page text. Standard Python
+logging is available through `treadway.events`. See [event delivery](DIAGNOSTICS-REFERENCE.md#event-delivery)
+for buffering, dropped events, callback failures and private journal access.
 
-For standard Python logging, configure the `treadway.events` logger; each record
-has `record.treadway_event`. Treadway installs no root logger handler. Supply
-`sinks=[callback]` for a custom formatter or event consumer. A sink receives only
-allowlisted metadata: no payloads, cookie/header values, URLs, selectors, page
-text or exception messages. Correlation references are keyed per run, so simple
-dictionary matching cannot recover predictable IDs. Operation IDs and raw
-observations remain available through the existing private journals.
+## Robot logs
 
-Sinks run through a bounded asynchronous queue outside execution locks. A full
-queue drops telemetry and increments `dropped_events`. A raising sink is disabled
-and counted; a hanging sink cannot block execution or context exit indefinitely.
-`flush_seconds` bounds final delivery waiting (default 1, maximum 5). A summary
-reports pending delivery and incomplete telemetry rather than claiming all
-events were saved. Callbacks must still be suitable for the selected environment.
-
-This optional telemetry does not weaken mandatory intent/evidence persistence:
-if that journal cannot be written, the existing operation still stops dispatch.
-Diagnostic files are not a replacement for those execution journals.
-
-## Robot: one run owner, native logs
+From a generated project:
 
 ```sh
-python -m robot \
-  --listener treadway.diagnostics_robot.DiagnosticsListener:artifacts/diagnostics:DEBUG:true \
-  --loglevel DEBUG \
-  --outputdir artifacts/robot session_recovery.robot
+python -m robot --pythonpath . \
+  --listener treadway.diagnostics_robot.DiagnosticsListener:artifacts/diagnostics:DEBUG \
+  --loglevel DEBUG --outputdir artifacts/robot session_recovery.robot
 ```
 
-Arguments are output directory, verbosity, optional runtime guard (`false` by
-default), and an optional comma-separated list of application flow files. The
-listener owns the outer suite's run; keyword libraries reuse it. It streams safe
-events to the console and attaches structured messages to Robot's normal result
-and `log.html`. Robot logging is flushed on its execution thread at keyword/suite
-boundaries; terminal progress arrives while a long keyword is running.
-Robot's own log level also controls which messages its HTML/result log retains.
+The listener prints progress to stderr and adds structured messages to Robot's
+normal result and `log.html`. One listener owns the suite's run. Its arguments
+are output directory, level, optional runtime guard (`false` by default) and an
+optional comma-separated list of application flow files.
 
-The listener's dry-run detection is a small compatibility adapter for the pinned
-Robot 7.5.1 runtime and is covered by an actual native dry-run test.
+## Read a result or stop on a change
 
-## Statistics: work performed versus business effects
+Start with `summary.json` for elapsed time, operation counts and incomplete
+delivery; use `events.jsonl` for the sequence. Timings can overlap, so do not add
+nested timings to calculate wall time. Diagnostic counts do not prove business
+completion; keep the operation's original journal and saved-state checks.
 
-`run.summary()` and `summary.json` include duration, event counts, operation
-outcomes, cached returns, HTTP transport handoffs, dispatch reservations, principal
-checks, authentication preparation/renewal/reconciliation counts, observed HTTP
-statuses and timing count/total/max for each measured boundary.
-
-A reservation is not a transport handoff. A CDP command is not a business write.
-A cached confirmed receipt is a historical result, not another server effect.
-Business confirmation still comes from the application's calibrated observer.
-Nested timings overlap: do not sum them as wall time. Counts describe observed
-work in this process; they are not a complete network monitor or provider audit.
-
-Subprocess events carry parent-assigned producer identity and sequence numbers.
-Malformed/out-of-order messages and missing producer completion make telemetry
-incomplete. A killed subprocess cannot turn an uncertain mutation into a proven
-rejection. Raw stderr stays in the private transport result and is never copied
-unconditionally to safe console output.
-
-## Report changes precisely
-
-Logging and change enforcement are independent. `watch`/`watch_runtime` explicitly
-enable checkpoints; merely enabling diagnostics does not add a guard.
-
-Watched files are fingerprinted at run entry. Before a new dependent mutation or
-authentication callback, a changed fingerprint raises a distinct `FlowChanged`
-precondition. Python AST fingerprints ignore comments and formatting. Other files
-use content bytes conservatively. This proves an `implementation_changed` fact,
-not that the remote application's workflow changed. Coverage/fingerprints and
-their file mapping are private in `coverage.json`. This is disk checking, not
-loaded-code attestation; it does not eliminate every check-to-dispatch race.
-
-For a real application contract, compare an actual observation immediately before
-its dependent action:
-
-```python
-run.check_contract("resource-revision", expected=original_revision,
-                   observed=observed_revision)
-```
-
-A material mismatch stops the dependent action. Expected/observed values are
-retained privately when an output directory is configured; safe events expose
-only opaque references. Use `material=False` for a documented nonblocking
-difference. Existing observed form/context/native-target/choice/prepared-edit
-guards also report recognized mismatches through the browser bridge. A generic
-timeout or unknown screen alone does not establish application drift.
-
-If an earlier mutation may already have committed, its effect stays unknown.
-Use `executor.reconcile_only(operation_id)` for the calibrated read-only observer
-without authentication preparation, renewal or mutation dispatch. Non-GET
-`HttpSession` requests are refused in that scope. If authentication is unavailable,
-observation may remain unknown; do not escalate into a login or replay implicitly.
-
-Contexts are local to the Python execution context. Subprocess propagation is
-explicit in the shared adapters. For unrelated worker threads or independently
-launched Node programs, establish/carry their own explicit diagnostics context;
-do not assume a global logger establishes run ownership or identity.
-
-Completed subprocess producers are retired as needed. If the bounded producer
-registry is exhausted by unfinished children, guarded launches stop rather than
-dropping the guard; unguarded telemetry is marked incomplete. Python AST
-normalization applies to parent checkpoints; a browser child's inherited file
-baseline is conservatively checked as content bytes at its action boundaries.
+For watched files, set `watch=["adapter.py"]` and optionally `watch_runtime=True`.
+For an observed application requirement, use `run.check_contract(...)` before
+the dependent action. [Change guards](DIAGNOSTICS-REFERENCE.md#report-changes-precisely)
+explain what each check establishes and how to reconcile an earlier uncertain
+write. Logging alone does not enable a guard, and a timeout alone does not prove
+the application changed.

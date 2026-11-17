@@ -1,9 +1,9 @@
 # Browser backend comparison
 
-An optional, synthetic, loopback-only experiment comparing current Treadway
-mechanics with **Robot Framework Browser 21.0.0**, using its supported JavaScript
-extension API and Playwright 1.64.1. This directory is not shipped in the Python
-package and adds no production dependencies. No production backend is changed.
+Run this optional local experiment to compare Treadway with **Robot Framework
+Browser 21.0.0** and Playwright 1.64.1. It uses synthetic loopback apps and does
+not change or ship a production backend. For ordinary flows, use
+[the main quickstart](../../README.md#try-the-local-example).
 
 The shared React 18.3.1 and Vue 3.5.45 fixtures are exercised unchanged. The third
 fixture uses the actual **Element Plus 2.14.8** remote, filterable, teleported

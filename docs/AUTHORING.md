@@ -1,35 +1,29 @@
-# Flow authoring kit
+# Build a flow
 
-Build flows that carry out work with explicit intent, checked identity/resource
-prerequisites and verified outcomes. The same mechanics support operational
-automation and application testing. Establish the operator's objective first:
-completing a valid handoff and proving that an invalid handoff is refused require
-different actions and evidence.
+Start with the runnable workboard, then replace its application mappings with
+your own. Install Treadway using the [quickstart](../README.md#try-the-local-example)
+or [wheel instructions](INSTALLING.md).
 
-The installable authoring guide is maintained with the wheel's skill resources:
-[Start here](../src/treadway/authoring/skill/treadway-flows/references/AUTHORING.md).
-See the [recipe index](../src/treadway/authoring/skill/treadway-flows/references/RECIPES.md)
-for shared operations and [the agent skill](../src/treadway/authoring/skill/treadway-flows/SKILL.md)
-for the agent workflow.
+```sh
+treadway new my-flow
+cd my-flow
+python run.py check
+CHROME_BIN=/absolute/path/to/chromium python run.py test --suite flow.robot
+```
 
-Learn through [the executable walkthroughs](EXAMPLES.md), also available as
-`treadway guide walkthrough`.
+Expect two passed Robot cases and `"liveConditionsVerified": true`. The project
+includes the app, adapter, local checks and agent skill. No other repository or
+external account is required. Use a new destination: `new` refuses existing paths.
 
-Export the complete runnable reference with `treadway new DIRECTORY` or
-`python -m treadway.authoring new DIRECTORY`. Export the standalone skill with
-`treadway skill DESTINATION`. Existing destinations are refused. Installed guides
-are available through `treadway guide start` and `treadway guide recipes`.
+To add a scenario, compose existing keywords in a `.robot` file. For a missing
+operation, put your selectors and request mapping in `browser.cjs`, and your
+user/resource checks and saved-state observer in `adapter.py`. Run the offline
+check, then the affected suite after each change.
 
-The reference provides a synthetic local application, complete domain adapter,
-native Robot flows, independent SQLite readback, stale-revision failure and
-observed scoped cleanup. `python run.py check` has a 15-second overall budget;
-`CHROME_BIN=/path/to/chromium python run.py test` includes local browser acceptance
-with a 60-second overall budget. It runs from the installed package without a source checkout.
+Follow [the authoring guide](../src/treadway/authoring/skill/treadway-flows/references/AUTHORING.md#adapt-another-application)
+for the sequence, or [the walkthrough](EXAMPLES.md) to trace existing keywords.
+[Recipes](../src/treadway/authoring/skill/treadway-flows/references/RECIPES.md)
+identify the shared helpers for a new interaction.
 
-Validation of the installed kit and independent fresh-flow trial is recorded in
-[the authoring validation ledger](AUTHORING-VALIDATION.md).
-
-For the library's own development checks, see [fast feedback](FAST-FEEDBACK.md).
-The full guide also covers adapting another application, reusable checkpoints,
-intentional input variations and the distinction between an unmet prerequisite
-and an observed application rejection.
+The same guide is available as `treadway guide start`. For an agent working in
+another project, export `treadway skill NEW_DESTINATION` and point it at `SKILL.md`.

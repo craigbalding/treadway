@@ -1,4 +1,7 @@
-# Authoring kit validation — 2026-11-09
+# Original authoring kit trial
+
+This is the 2026-11-09 trial record, retained for its measurements and failures.
+To write a flow, use [authoring](AUTHORING.md) or [the examples](EXAMPLES.md).
 
 This validates the authoring kit shipped with Treadway 0.1.0. Earlier library and
 application acceptance remains evidence for its own scope. The kit introduces no

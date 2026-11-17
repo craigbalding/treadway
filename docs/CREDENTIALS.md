@@ -1,13 +1,18 @@
-# Identity credentials
+# Supply identity credentials
 
-The self-contained [credential guide](../src/treadway/authoring/skill/treadway-flows/references/CREDENTIALS.md)
-covers named references, native Robot `Secret` values, environment and 1Password
-providers, optional RPA Vault and SafeYolo gateway integrations, custom providers
-and the runnable authenticated collaboration example.
+Store references in `identities.json` and provision their values privately through
+environment variables or a supported vault. Resolve them inside the login
+operation. Reading a credential does not authenticate a browser or renew a session.
 
-Use `treadway guide credentials` from an installed package. Retrieval is explicit
-and separate from login, session renewal and actual-principal verification.
+Follow [the credential setup](../src/treadway/authoring/skill/treadway-flows/references/CREDENTIALS.md#configure-your-own-identity)
+for a complete reference file and Robot example, or run the synthetic example
+from a generated project:
 
-For applications using Microsoft Entra, the [shared login flow](ENTRA.md) consumes
-these references, verifies the actual browser principal and handles supported
-TOTP challenges and first-login enrollment.
+```sh
+CHROME_BIN=/absolute/path/to/chromium python run.py test --suite collaboration.robot
+```
+
+Use [Entra sign-in](ENTRA.md) when your app redirects to Microsoft Entra. For
+1Password, RPA Vault, SafeYolo or custom retrieval, open the
+[provider reference](../src/treadway/authoring/skill/treadway-flows/references/CREDENTIAL-PROVIDERS.md).
+The installed setup guide is `treadway guide credentials`.

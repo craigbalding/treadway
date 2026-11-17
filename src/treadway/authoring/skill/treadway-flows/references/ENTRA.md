@@ -8,8 +8,7 @@ The application adapter does not need to reproduce those screen transitions.
 
 ## Native Robot example
 
-Install Treadway's Robot extra and its locked Node dependency as described in
-the installation guide. Chrome or Chromium is installed separately. Keep the
+Install the Robot extra and locked Node dependency using [setup](AUTHORING.md#install-and-run). Chrome or Chromium is installed separately. Keep the
 browser sandbox enabled, including under gVisor.
 
 Create `identities.json` with references, rather than resolved credentials:
@@ -58,18 +57,11 @@ private browser-state paths:
 The probe must return the current session's actual principal. For this example,
 HTTP 200 with `{"user":{"email":"author@example.invalid"}}` establishes the
 expected identity; a page title, identity alias or cookie's presence does not.
-Only the configured expected fields enter the result, rather than the raw
-session response. Configure additional exact HTTPS `idp_origins` under
-`application` when the tenant uses a different supported login origin.
-The principal probe defaults to 5,000 milliseconds; set
-`application.principal_timeout_ms` explicitly for a different bounded observation
-window, up to 60,000 milliseconds. Results retain safe response status,
-completeness, truncation and timing metadata when identity cannot be established.
-An unknown result does not establish an expired or invalid session.
+Use the exact fields your probe returns. Configure additional login origins and
+observation budgets only when your application needs them; see
+[probe configuration](ENTRA-REFERENCE.md#probe-and-startup-budgets).
 
-Owned browser endpoint verification defaults to a two-second total budget.
-`browser.verification_seconds` can select a different positive budget up to 60
-seconds without relaxing the process, generation or exact-target checks.
+Save the suite as `login.robot`:
 
 ```robotframework
 *** Settings ***
@@ -91,157 +83,31 @@ The explicit keyword permits the flow's password and MFA submissions. It does
 not retry a failed login. Importing the library, constructing it and Robot dry-run
 do not resolve credentials or contact the application.
 
-## Identity and state lifetimes
+## Check the result
 
-The native keyword binds a persistent browser profile to the credential
-configuration path, scope, application origin and identity. Repeating a flow
-for that identity reuses its profile and cache. A different identity has a
-separate profile. Each invocation starts and stops its owned browser generation;
-the persistent profile remains. An already-running owned session is refused,
-so a new invocation cannot adopt and then stop another caller's browser.
+Expect `status: verified`. The keyword verifies the application user, exports
+required app cookies by default and retains the attempt's screenshots and logs.
+If it fails, start with `Get Last Entra Result`, then its `robotEvidence` and
+`evidence.directory` paths. Authentication, cookie export and cleanup have
+separate results; an export failure is not a reason to force another login.
 
-For a flow that continues using an already-owned browser, configure
-`browser.existing_session` and `browser.generation` with its exact current
-BrowserManager handle. In this mode the keyword borrows the selected target,
-uses its existing profile and leaves the browser running; its owner performs
-cleanup. For example:
+Screenshots default to no masking. `screenshot_mask: "credentials"` masks input
+values and known secrets, and hides authenticator setup screens in full. Keep
+screenshots and profiles private. [Attempt evidence](ENTRA-REFERENCE.md#diagnose-one-attempt)
+describes retained files and incomplete outcomes.
 
-```json
-{
-  "browser": {
-    "root": "/private/treadway/workboard",
-    "existing_session": "author-browser",
-    "generation": "current-generation-from-the-owner"
-  }
-}
-```
+## Reuse a session or handle MFA
 
-This fragment replaces the earlier `browser` object. Obtain the generation
-from the actual current handle, rather than copying the illustrative string.
-A returned handle from an owned invocation records a stopped browser generation;
-it does not provide an active target for later browser steps. JavaScript callers
-can pass their existing connected session directly to `EntraLogin` and retain
-ownership of its lifetime.
-See [browser and actor sessions](SESSIONS.md) for starting a browser, carrying
-its current handle between steps and generation-guarded cleanup.
+Repeating the same identity/configuration reuses its persistent profile and
+browser cache. Different identities get separate profiles. The default keyword
+stops its owned browser after login; to keep using a live browser, configure
+[an explicitly borrowed session](ENTRA-REFERENCE.md#identity-and-state-lifetimes).
 
-An authenticated browser and a usable HTTP replay state are separate results.
-One named session cookie is not a general representation of authentication.
-Applications may require several cookies, including same-name cookies with
-different paths, or additional browser storage. Preserve the browser profile;
-do not delete a valid token to make a login callback run. Required state export
-must run after both fresh authentication and authenticated-session reuse.
-An export failure must retain the verified authentication observation and report
-that the requested state is incomplete.
+Supported English screens include password, TOTP and first-login setup using an
+alternative authenticator where offered. Unknown screens stop with evidence.
+Keep a pending enrollment seed after interruption; inspect it before another code
+submission. See [MFA support](ENTRA-REFERENCE.md#mfa-and-first-login-setup).
 
-The native keyword requests app-cookie export by default (`export_cookies:
-true`). Its receipt separates `authentication.state` from
-`authenticationState.complete`. The latter indexes a private cookie snapshot;
-it retains each cookie's metadata and same-name entries. An unavailable required
-snapshot returns `authentication_state_incomplete` even when the principal was
-verified. Setting `export_cookies` to `false` explicitly opts out.
-
-An HTTP consumer can import the private snapshot into an explicitly bound
-`HttpSession` using `import_browser_cookies(snapshot, generation=...)`. Actor,
-origin and browser generation must match. Import is atomic and refuses
-unsupported partitioned-cookie replay. It does not establish the HTTP client's
-actual principal: use that client's own read-only probe before a dependent
-operation. Cookies do not represent local storage, IndexedDB, service workers
-or bearer tokens held elsewhere in an application.
-
-## MFA and first-login setup
-
-The flow detects the currently supported English Entra screens. It selects a
-different authenticator application where offered, chooses manual setup where
-available, checks the displayed account name, stages the seed in a private
-store, verifies a TOTP code and confirms the candidate after observed completion.
-It does not replace an existing seed or assume an absent account name matches.
-
-The native store retains separate pending and confirmed records under the
-identity's private browser root. An interrupted pending enrollment stops a later
-invocation for reconciliation before another code submission. Keep the pending
-record: it may be the only copy of a seed whose enrollment partly completed.
-JavaScript consumers can supply their own private `stage`/`confirm` store.
-
-Unsupported challenges or setup screens remain explicit incomplete states.
-Do not introduce an account fallback, repeated password submissions, password
-changes, consent acceptance or a different MFA method to make the test pass.
-Tenant policy determines whether another authenticator application is offered.
-
-## Diagnose one attempt
-
-Every attempt gets a unique private directory before application execution.
-Structured observations and action-start records are appended as execution
-progresses, so an interrupted subprocess still leaves evidence. A later success
-does not overwrite an earlier failure. Robot's native result and log contain
-the concise receipt and paths to the private artifacts.
-
-Inspect the result's status, phase, last screen, transition timings, readiness
-conditions, action dispatch state, principal verification and browser cleanup.
-An acknowledged click proves dispatch; a missing acknowledgement leaves its
-effect unknown. A prep timeout does not establish an account problem or an
-infrastructure cause. Reconcile dispatched actions before another login.
-
-Screenshots are captured at observed step boundaries and on failure, rather
-than on each browser paint. Screenshot masking is optional and defaults to
-`none`. Set `screenshot_mask` to `credentials` to mask credential fields and
-known secrets; setup screens are masked in full in that mode. Unmasked setup
-screens can include a visible enrollment seed. Screenshots and profiles stay
-private; ordinary structured logs redact resolved passwords, seeds and codes.
-
-Use Robot's supported result API to analyse its native outputs. A separate
-report parser or logging framework is unnecessary. A timeout or process failure
-cannot turn a partial `verified` payload into successful workflow completion.
-
-## JavaScript integration
-
-`browser/entra.js` exports `EntraLogin`, `createPrincipalVerifier` and `totp`.
-Construct the flow around an explicit connected session:
-
-```js
-const {EntraLogin} = require('/installed/treadway/browser/entra.js');
-const flow = new EntraLogin(session, {
-  appOrigin: 'https://workboard.example.invalid',
-  signinUrl: 'https://workboard.example.invalid/sign-in',
-  credentials: async () => resolveThisIdentity(),
-  principal: {
-    actor: 'author', generation: browserSession.generation,
-    probe: '/api/session', expected: {'user.email': 'author@example.invalid'},
-  },
-  beforeSubmit: async kind => authorizeThisSubmission(kind),
-  exportCookies: true,
-  evidenceRoot: '/private/treadway/attempts',
-});
-const receipt = await flow.run();
-```
-
-The submission guard must return `true` or `{allowed: true}` explicitly. A custom
-`verifyPrincipal` callback can replace the helper, but must establish the actual
-principal in this browser session. Callback deadlines bound observation; they do
-not cancel external work already dispatched by a callback. Browser mutations
-check origin, document, stage and deadline inside the operation itself.
-JavaScript cookie export is opt-in through `exportCookies`. When using a custom
-verifier, also provide the explicit actor/generation binding in `principal`.
-Set `principal.timeoutMs` to configure the shared JavaScript probe's bounded
-observation window. The surrounding flow and phase deadlines still apply.
-
-## Upstream SSO after an application session expires
-
-The native entry point now resolves account identification separately from
-password/TOTP fields. It can follow the configured application authorization
-route and reuse upstream browser SSO without requiring an available password
-provider. Password retrieval occurs only at a trusted observed password screen;
-TOTP retrieval occurs only for a supported trusted challenge or enrollment.
-An explicitly supplied external code provider need not resolve a stored TOTP seed.
-Actual application-principal verification and complete required state export
-still apply after this authorization.
-
-JavaScript integrations use `account: async () => ({username})` together with
-`credentials: async purpose => ...`, where purpose is `password` or `totp` and
-the result includes the same username. The older combined `credentials()`
-interface remains supported; it resolves all supplied fields before sign-in.
-Use the split interface to avoid that eager resolution.
-
-This integration performs browser sign-in/SSO; it does not implement an OAuth
-refresh-token cache or an arbitrary application's refresh exchange. Configure
-those supported mechanisms through the application's [authentication owner](SESSION-RECOVERY.md).
+The [reference](ENTRA-REFERENCE.md) covers JavaScript callbacks, complete cookie
+import and upstream SSO reuse without a password. Application-session refresh
+is configured separately through [session recovery](SESSION-RECOVERY.md).

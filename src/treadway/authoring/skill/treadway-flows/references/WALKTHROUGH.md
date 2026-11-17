@@ -10,10 +10,6 @@ For actual distinct principals and anonymous users, follow
 [the collaboration and session walkthrough](SESSIONS.md). Its separate fixture
 routes use synthetic accounts and real HttpOnly browser-session cookies.
 
-Humans can follow the steps below; agents can use the same files and returned
-bindings. The walkthroughs explain the executable suites rather than define a
-second workflow format.
-
 ## Set up and find the moving parts
 
 With Treadway, its Robot extra and locked Node runtime installed as described in
@@ -86,7 +82,7 @@ ${current}=    Commit Work Item Plan    ${sam}
 Should Be Equal    ${first}[id]    ${current}[id]
 ```
 
-Read the full suite for setup and independently authored expected values. The
+Read the full suite for setup and explicit expected values. The
 important transition is `${item}` → `${first}` → `${current}`: the actual resource
 ID stays the same while the revision advances after each committed plan.
 

@@ -1,44 +1,37 @@
 # API index
 
-Python modules live under `treadway`; browser JavaScript assets ship in
-`treadway/browser`. [Installation](INSTALLING.md) covers their runtime dependency.
+Python modules live under `treadway`; CommonJS browser modules ship under
+`treadway/browser`. [Installation](INSTALLING.md) covers their Node dependency.
+Choose the task guide for a working example, or the reference for exact contracts.
 
-- `treadway.process`: bounded JSON child process and live stderr delivery; full
-  incomplete payload retained on exceptions.
-- `treadway.properties`: strict expected-field comparisons, distinguishing missing,
-  null, different, incomplete and unknown observations.
-- `treadway.browsers` and `treadway.sessions`: owned Chromium/profile lifetimes,
-  exclusive operation leases and independent HTTP actor cookie jars.
-- `treadway.credentials` and `treadway.credentials_robot.CredentialLibrary`:
-  named credential providers and native Robot secret values, separate from login.
-- `treadway.recovery`: opt-in application-owned authentication maintenance and
-  durable execution of one HTTP mutation, with explicit effect reconciliation;
-  [repeated mutations and session recovery](SESSION-RECOVERY.md).
-- `treadway.diagnostics.RunDiagnostics`: shared safe live events, selectable sinks,
-  per-run statistics and optional watched implementation/observed-contract guards.
-  `treadway.diagnostics_robot.DiagnosticsListener` integrates native Robot logs;
-  see [diagnostics](OBSERVABILITY.md).
-- `treadway.optimisation.summarise_profile` and `compare_objective_runs`: offline
-  timing analysis and evidence comparison against an operational or testing objective. They do
-  not execute flows; see [flow optimisation](FLOW-OPTIMISATION.md).
-- `treadway.entra_robot.EntraLibrary` and `browser/entra.js`: one Entra flow for
-  authenticated-session reuse, password, TOTP and first-login enrollment;
-  [configuration and evidence](ENTRA.md).
-- `browser/actors.js`, `state.js` and `targets.js`: same-session principal checks,
-  explicit origin-state operations and scoped multi-target CDP observation.
-- `browser/cookies.js` and `HttpSession.import_browser_cookies`: private app-cookie
-  snapshots and explicit HTTP replay import, preserving scope and duplicate names;
-  required state completeness remains separate from authentication verification.
-- `treadway.robot.FormLibrary`: Robot keywords over the shared browser form utility.
-- `src/treadway/browser/form-assessor.js`: actions-first discovery, sourced candidate
-  input/readback, explicit choices and one instrumented action with attempt memory.
-- `treadway.widgets.WidgetLibrary` and `browser/widgets.js`: reusable controlled
-  choices, multiselects, date ranges, plain-text rich editors and inline edits.
-- `browser/interactions.js`, `request-observer.js` and `transfers.js`: shared
-  browser operations, bounded request correlation and scoped file transfers.
-- `treadway-preflight`: explicit Python/JavaScript/Robot structural checks; imports
-  and constructors must be free of live effects. Structural success is not live acceptance.
+## Browser operations
 
+| API | Use | Details |
+| --- | --- | --- |
+| `FormAssessor`, `treadway.robot.FormLibrary` | Discover fields/actions, enter values and attempt one action | [Guide](forms.md) · [Reference](reference/FORMS.md) |
+| `widgets.js`, `treadway.widgets.WidgetLibrary` | Autocomplete, multiselect, dates, notes and inline edits | [Guide](REUSABLE-WIDGETS.md) · [Reference](reference/WIDGETS.md) |
+| `interactions.js`, `choices.js`, `prepared-edit.js` | Navigation, waits, controlled choices and guarded edits | [Recipes](../src/treadway/authoring/skill/treadway-flows/references/RECIPES.md) |
+| `request-observer.js`, `transfers.js` | Correlate a response or transfer a scoped file | [Module contracts](reference/WIDGETS.md#public-modules) |
 
-See [forms](forms.md), [widgets](REUSABLE-WIDGETS.md) and
-[browser sessions](BROWSER-SESSIONS.md) for usage and coverage.
+## Identities and authentication
+
+| API | Use | Details |
+| --- | --- | --- |
+| `treadway.browsers.BrowserManager` | Own a Chrome process/profile and its exact target | [Lifecycle](../src/treadway/authoring/skill/treadway-flows/references/SESSION-REFERENCE.md#browser-lifecycle) |
+| `treadway.sessions.HttpSession`, `actors.js` | Isolated cookies and same-session principal checks | [Session APIs](../src/treadway/authoring/skill/treadway-flows/references/SESSION-REFERENCE.md#actor-and-http-apis) |
+| `state.js`, `targets.js` | Origin storage and scoped target observation | [State and targets](../src/treadway/authoring/skill/treadway-flows/references/SESSION-REFERENCE.md#scoped-state-and-target-observation) |
+| `CredentialResolver`, `credentials_robot.CredentialLibrary` | Resolve named references and wrap Robot secrets | [Setup](CREDENTIALS.md) · [Providers](../src/treadway/authoring/skill/treadway-flows/references/CREDENTIAL-PROVIDERS.md) |
+| `entra_robot.EntraLibrary`, `entra.js` | Existing sessions, password, TOTP and enrollment | [Setup](ENTRA.md) · [Reference](../src/treadway/authoring/skill/treadway-flows/references/ENTRA-REFERENCE.md) |
+| `cookies.js`, `HttpSession.import_browser_cookies` | Export/import complete supported app-cookie state | [Cookie import](../src/treadway/authoring/skill/treadway-flows/references/ENTRA-REFERENCE.md#identity-and-state-lifetimes) |
+| `recovery.OperationExecutor`, `AuthenticationOwner` | Maintain authentication and reconcile mutations | [Guide](SESSION-RECOVERY.md) · [Callbacks and policy](../src/treadway/authoring/skill/treadway-flows/references/SESSION-RECOVERY-REFERENCE.md) |
+
+## Execution and inspection
+
+| API | Use | Details |
+| --- | --- | --- |
+| `process.run_json_process` | Bounded JSON subprocess with retained stderr and partial results | [Transport contract](reference/FORMS.md#robot-and-cli) |
+| `properties.require_expected_fields` | Compare independently expected fields, retaining missing/unknown states | [Recipes](../src/treadway/authoring/skill/treadway-flows/references/RECIPES.md) |
+| `diagnostics.RunDiagnostics`, `diagnostics_robot.DiagnosticsListener` | Events, statistics and optional change guards | [Guide](OBSERVABILITY.md) · [Reference](../src/treadway/authoring/skill/treadway-flows/references/DIAGNOSTICS-REFERENCE.md) |
+| `optimisation.summarise_profile`, `compare_objective_runs` | Offline timing and objective evidence comparison | [Guide](FLOW-OPTIMISATION.md) · [Records](../src/treadway/authoring/skill/treadway-flows/references/OPTIMISATION-REFERENCE.md) |
+| `treadway-preflight` | Structural Python/JS/Robot checks without live execution | [Fast checks](FAST-FEEDBACK.md) |
+| `generations.GenerationStore`, `Source` | Capture and lease immutable development source | [Development runtimes](DEVELOPMENT.md) |

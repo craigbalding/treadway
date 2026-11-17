@@ -1,5 +1,8 @@
 # Flow optimisation design
 
+Architecture reference. To shorten a flow or run the example, start with
+[the task guide](FLOW-OPTIMISATION.md).
+
 The authoring skill, offline helpers and synthetic native flows described here
 are implemented. See [the executable guide](FLOW-OPTIMISATION.md),
 [helper contracts](../tests/test_optimisation.py) and

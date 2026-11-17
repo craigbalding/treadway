@@ -1,4 +1,8 @@
-# Browser reuse comparison
+# Browser backend evaluation
+
+This is the 2026-11-10 evaluation record for an optional backend. It does not
+enable that backend in the shipped runtime. Use [widgets](REUSABLE-WIDGETS.md)
+for production APIs, or [the experiment](../experiments/browser-comparison/README.md) to reproduce the comparison.
 
 Decision: pursue **Robot Framework Browser as an optional execution backend**,
 while retaining Treadway's operation contracts and actor/resource safeguards.

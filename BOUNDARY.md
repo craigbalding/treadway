@@ -1,61 +1,36 @@
-# Project boundary
+# What Treadway and your adapter each provide
 
-Treadway supplies reusable mechanics for high-assurance web workflows directed
-by humans and agents. Operational automation and application testing both need
-explicit intent, checked prerequisites and evidence of the outcome:
+Treadway supplies reusable execution mechanics for web automation and testing.
+Your application adapter defines the work, the correct user and resource, and
+the observations that establish completion.
 
-- Form discovery, sourced candidate input, verified readback and explicit actions.
-- Bounded subprocess execution with live progress and retained incomplete results.
-- Strict comparisons between expected fields and observed application state.
-- Explicit-target browser connections and thin Robot Framework bindings.
-- Isolated browser/HTTP identities and application-owned session maintenance.
-- Durable intent, dispatch records and explicit reconciliation for supported HTTP mutations.
-- Live diagnostics, run statistics and objective-directed optimisation.
+| Treadway provides | Your adapter supplies |
+| --- | --- |
+| Form discovery, controlled input, widget operations and request observation | Selectors, exact option IDs, routes and payload mappings |
+| Isolated browser profiles and HTTP jars | Login configuration and an actual-user probe |
+| Checks before dependent actions and strict field comparisons | Current resource/revision checks and independently chosen expectations |
+| Durable intent and explicit recovery for supported HTTP mutations | Supported authentication mechanisms, effect observers and replay permission |
+| Progress, statistics, private evidence and cleanup mechanics | Required business evidence and application resource cleanup |
 
-Application adapters own selectors, routes, request shapes, account and resource
-relationships, state observers and completion conditions. They combine calibrated
-operations into working flows and establish which intermediate states can be
-reused for input variations. Adapters can live in a consuming application or a
-separate package. Treadway owns the shared library and optional synthetic
-reference projects used to document and exercise its APIs. Those examples ship
-with the authoring kit; real-application integrations own their fixtures,
-lifecycle orchestration and acceptance records. Installing, developing and
-validating Treadway requires no other repository. Public guides teach from the
-shipped examples and must be usable without access to an integration's source
-or private captures.
+Flows use native Robot sequencing or ordinary Python/JavaScript. Treadway requires
+no hosted service, model provider or second scheduler. The shipped workboard is
+synthetic; a real integration keeps its credentials, application bindings and
+private captures outside this repository.
 
-Operators choose the intended result and required assurance. For operational
-work, this might mean updating ownership and verifying the saved assignments.
-For testing, it might mean exercising an application boundary with a deliberately
-invalid input or a different identity. Optimisation must preserve that distinction.
-Agents choose candidate inputs, meaningful variations and observations within
-the operator's objective.
-Operations pass actual runtime values between steps and enforce their required
-conditions. Property comparisons expose matches, differences and unknowns with
-observation references; callers supply and justify the expected behavior.
+## Execution rules
 
-Robot Framework supplies variables, returned objects, keywords, resource files,
-setup/teardown and execution reports. Python and JavaScript APIs also work directly.
-Treadway does not require a hosted service, model provider or parallel scheduler.
+Check the actual user and current resource inside the operation that depends on
+them. A page target or identity label is insufficient. Preserve deliberate input
+and identity variations in permission tests so the intended request reaches the app.
+Browser connections require an exact target; remote transport uses the configured
+HTTP proxy without a direct fallback.
 
-## Operational contracts
+Treat a click receipt and HTTP response as observations. Use the application's
+saved-state check to establish completion. A human-input checkpoint must wait for
+actual input. A timeout stops observation and cannot undo an action already sent.
+Reconcile uncertain effects before deciding on replay, and record cleanup separately.
 
-An instrumented click establishes interaction observations, not saved or submitted
-state. Application completion requires an appropriate observer and an explicit
-completion condition. Human input is a checkpoint, not a fabricated completion.
-
-Browser connections require an exact target. Non-loopback connections use an
-explicitly configured HTTP proxy, with no direct remote fallback. Environment
-setup and result publication belong in the consuming integration. The shared
-local Chromium manager owns explicit process/profile/session lifetimes; scoped
-target monitoring supplies optional capture mechanics. Application identity and
-permission rules stay in adapters. Actor verification must use the same session
-as the action, and execution guards must preserve intentional unauthorized attempts.
-
-Keep incomplete results available for investigation. A timeout cannot cancel an
-action already dispatched to a browser or server; retry decisions must account
-for uncertain effects. Cleanup is explicit and must report its own outcome.
-
-The current implementation is an early library with tested interaction patterns,
-not universal application support. See [form capabilities](docs/forms.md) and
-[validation and limits](docs/VALIDATION.md).
+Reuse known mappings without substituting old results for fresh observations.
+Optimisation must preserve the operator's requested result, or the specific
+behaviour under test. See [authoring](docs/AUTHORING.md),
+[API references](docs/API.md) and [validation history](docs/VALIDATION.md).
