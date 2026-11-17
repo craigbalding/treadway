@@ -64,7 +64,7 @@ class BrowserWorker {
     });
     fs.chmodSync(this.socketPath, 0o600);
     this.started = true;
-    this.record({kind: 'worker_started', projectId: this.projectId, runId: this.runId});
+    this.record({kind: 'worker_started', version: 1, projectId: this.projectId, runId: this.runId});
     return {projectId: this.projectId, runId: this.runId};
   }
   handle(actor) {

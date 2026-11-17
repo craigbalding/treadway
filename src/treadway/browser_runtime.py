@@ -483,7 +483,10 @@ class BrowserRuntime:
                     results.append(self._rpc(operation="shutdown", timeout=self.cleanup_seconds + 2))
                 except BrowserRuntimeIncomplete:
                     results.append({"complete": False, "remoteTermination": "unconfirmed"})
-                self.process.stdin.close()
+                try:
+                    self.process.stdin.close()
+                except OSError:
+                    results.append({'complete': False, 'code': 'remote_owner_pipe_close_incomplete'})
                 try:
                     self.process.wait(timeout=self.cleanup_seconds + 1)
                 except subprocess.TimeoutExpired:
@@ -493,7 +496,10 @@ class BrowserRuntime:
             else:
                 for session in self.sessions.values():
                     if session._identity_lease is None:
-                        results.append(self.release(session))
+                        try:
+                            results.append(self.release(session))
+                        except Exception:
+                            results.append({'complete': False, 'code': 'local_browser_cleanup_incomplete'})
         finally:
             if self.selector:
                 self.selector.close()

@@ -162,6 +162,24 @@ its digest. This records your observer's conclusion; it does not certify that
 remote execution stopped, unlock the generation or permit replay. A timeout,
 disconnect or cleanup result cannot turn a missing response into rejection.
 
+If the worker has exited, read the retained journal without contacting Browserless:
+
+```python
+from treadway.browser_receipts import inspect_browser_run
+
+observed = inspect_browser_run(
+    saved_run_directory, project_id=saved_project_id, run_id=saved_run_id,
+)
+```
+
+Save those three binding values privately while the runtime is alive; they are
+`browsers.evidence`, `browsers.project_id` and `browsers.run_id`. A missing reply
+stays unknown. A torn or malformed journal retains its valid prefix and reports
+incomplete evidence. Reconciliation counts as resolved only while its private
+evidence copy still matches its recorded digest. `journalComplete` describes the
+record syntax, not application success or remote termination. This reader grants
+no new lease and performs no recovery, reconnect or replay.
+
 ## Current capability boundaries
 
 Fresh contexts support existing page interactions, actual-user checks,

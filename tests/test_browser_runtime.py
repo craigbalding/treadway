@@ -236,6 +236,64 @@ def test_independent_reconciliation_is_retained_without_unlocking_uncertain_remo
                 pytest.fail('Unconfirmed remote execution cannot grant another mutation lease')
 
 
+def test_worker_death_retains_missing_reply_as_unknown_without_contacting_provider(tmp_path, endpoint, monkeypatch):
+    import time
+    from treadway.browser_receipts import inspect_browser_run
+
+    runtime = BrowserRuntime(tmp_path/'artifacts', configuration=CONFIG, project_root=tmp_path)
+    try:
+        actor = runtime.acquire('member')
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(operation, actor.connection(), 'lose-reply')
+            deadline = time.monotonic()+5
+            # Initialization has one Runtime.evaluate, then the actual invocation.
+            while True:
+                observed = inspect_browser_run(runtime.evidence, project_id=runtime.project_id, run_id=runtime.run_id)
+                commands = observed['actors'][0]['commands']
+                evaluates = [command for command in commands if command['method'] == 'Runtime.evaluate']
+                if len(evaluates) == 2 and evaluates[-1]['outcome'] == 'unknown':
+                    break
+                assert time.monotonic() < deadline, 'test operation was not dispatched'
+                time.sleep(.01)
+            runtime.process.kill()
+            runtime.process.wait(timeout=2)
+            with pytest.raises(AssertionError):
+                pending.result(timeout=3)
+        monkeypatch.delenv('TREADWAY_FIXTURE_ENDPOINT')
+        before = (runtime.evidence/'events.jsonl').read_bytes()
+        observed = inspect_browser_run(runtime.evidence, project_id=runtime.project_id, run_id=runtime.run_id)
+        assert observed['journalComplete'] is True
+        assert observed['workerStoppedObserved'] is False
+        assert observed['resumePermitted'] is False
+        retained, = observed['actors']
+        assert retained['cleanup'] is None
+        assert retained['unresolvedEffects'] == [evaluates[-1]['requestRef']]
+        assert (runtime.evidence/'events.jsonl').read_bytes() == before
+    finally:
+        runtime.close()
+
+
+def test_one_local_cleanup_failure_does_not_skip_other_owned_browsers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from treadway.browser_runtime import RuntimeSession
+
+    runtime = BrowserRuntime(tmp_path/'artifacts')
+    attempted = []
+    for name in ['author', 'reviewer']:
+        actor = RuntimeSession(name, 'local', name+'-generation', {}, _local=SimpleNamespace(name=name))
+        runtime.sessions[actor.generation] = actor
+
+    def stop(local):
+        attempted.append(local.name)
+        if local.name == 'author':
+            raise RuntimeError('synthetic_cleanup_failure')
+
+    monkeypatch.setattr(runtime.local, 'stop', stop)
+    assert runtime.close()['complete'] is False
+    assert attempted == ['author', 'reviewer']
+    assert not list(tmp_path.iterdir())
+
+
 def test_startup_failure_stops_the_partially_started_worker(tmp_path, endpoint, monkeypatch):
     runtime = BrowserRuntime(tmp_path / 'artifacts', configuration=CONFIG, project_root=tmp_path)
     original = runtime._rpc
