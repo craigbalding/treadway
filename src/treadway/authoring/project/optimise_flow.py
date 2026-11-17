@@ -146,7 +146,7 @@ class Context:
                 self.browser_call(actor, None, self.root, operation='session')
 
     def engine_identity(self):
-        if not self.browser_config:
+        if self.manager.provider != 'browserless':
             return None
         observations = {actor: self.manager.engine_identity(browser) for actor, browser in self.browsers.items()}
         private_json(self.root/'engine-observations.json', observations)
@@ -292,18 +292,26 @@ def run_sample(root, objective, variant, mode, pair, challenge, *, context=None,
     return directory, record
 
 
+def configured_provider(browser_config=None):
+    return (BrowserRuntime.from_file(browser_config, root=HERE/'artifacts'/'provenance-check', project_root=HERE).provider
+            if browser_config else 'local')
+
+
 def implementation_digest(browser_config=None, engine_identity=None):
     package = Path(treadway.__file__).parent
     runtime = {str(path.relative_to(package)): hashlib.sha256(path.read_bytes()).hexdigest()
                for path in [*package.glob('*.py'), *(package/'browser').glob('*.js'), *(package/'browser').glob('package*.json')]}
     browser = None
-    if browser_config:
+    provider = configured_provider(browser_config)
+    if provider == 'browserless':
         browser = {'configuration': hashlib.sha256(Path(browser_config).read_bytes()).hexdigest(),
                    'engineIdentity': engine_identity if engine_identity is not None else 'not_measured'}
     elif os.environ.get('CHROME_BIN'):
         executable = Path(os.environ['CHROME_BIN']).resolve()
         stat = executable.stat()
         browser = browser_identity(str(executable), stat.st_size, stat.st_mtime_ns)
+    if browser_config and provider == 'local':
+        browser = {'configuration': hashlib.sha256(Path(browser_config).read_bytes()).hexdigest(), 'engineIdentity': browser}
     return fingerprint({'consumer': {name: hashlib.sha256((HERE/name).read_bytes()).hexdigest()
                         for name in ('optimise_flow.py', 'optimisation_fixture.py', 'optimisation_browser.cjs')},
                         'runtime': runtime, 'python': platform.python_version(), 'browser': browser})
@@ -448,7 +456,7 @@ def main(argv=None):
     if args.describe:
         print(json.dumps({'objective': objective, 'disposition': disposition(args.objective)}))
         return 0
-    if (args.benchmark or args.objective == 'validation') and not args.browser_config and not os.environ.get('CHROME_BIN'):
+    if (args.benchmark or args.objective == 'validation') and configured_provider(args.browser_config) == 'local' and not os.environ.get('CHROME_BIN'):
         parser.error('CHROME_BIN is required for the browser boundary')
     root = args.output/uuid.uuid4().hex
     root.mkdir(parents=True, mode=0o700)

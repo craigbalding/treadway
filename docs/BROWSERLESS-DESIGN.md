@@ -8,7 +8,9 @@ Fresh sessions, selected saved state and explicit borrowed attachment are
 implemented. Explicit same-generation reconnect is also implemented. Fresh/state paths have passed checks against Browserless OSS
 2.63.1 as a local npm service; borrowed attachment has passed through a real
 Chromium relay; reconnect uses a relay that emulates the provider extension.
-Provider persistence remains separate work. See the
+Provider persistence uses an explicit Session API lifecycle; its control-plane
+contract is emulated in tests and Chromium profile restarts are checked directly.
+Hosted Session API behavior remains unverified. See the
 [usage guide](REMOTE-BROWSERS.md) and [acceptance record](reference/BROWSERLESS-ACCEPTANCE.md)
 for current commands and the limits of those results.
 

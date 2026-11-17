@@ -57,13 +57,51 @@ def test_same_engine_across_actors_preserves_calibration_but_a_different_engine_
     config = project/'browser.json'
     config.write_text('{"browser":{"provider":"browserless","endpoint_env":"TREADWAY_UNUSED_REMOTE_URL"}}')
     context = module.Context(tmp_path/'context', 2, browser_config=config)
-    context.manager = SimpleNamespace(engine_identity=lambda identity: {'identity': identity})
+    context.manager = SimpleNamespace(provider='browserless', engine_identity=lambda identity: {'identity': identity})
     context.browsers = {'member-a': '1'*64}
     first = context.engine_identity()
     context.browsers['member-b'] = '1'*64
     assert context.engine_identity() == first
     context.browsers['member-b'] = '2'*64
     assert context.engine_identity() != first
+
+
+def test_explicit_local_configuration_keeps_local_engine_provenance_and_requires_chrome_for_browser_work(example, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    module, project = example
+    config = project/'local-browser.json'
+    config.write_text('{"browser":{"provider":"local"}}')
+    context = module.Context(tmp_path/'context', 1, browser_config=config)
+    context.browsers = {'member-a': object()}
+    context.manager = SimpleNamespace(provider='local', engine_identity=lambda *_: pytest.fail('local actor used remote probe'))
+    assert context.engine_identity() is None
+    executable = tmp_path/'synthetic-chrome'
+    executable.write_bytes(b'synthetic executable identity')
+    monkeypatch.setenv('CHROME_BIN', str(executable))
+    observed = []
+    monkeypatch.setattr(module, 'browser_identity', lambda *args: observed.append(args) or {'version': 'synthetic-version', 'sha256': '1'*64})
+    assert len(module.implementation_digest(config)) == 64 and len(observed) == 1
+    assert module.configured_provider(config) == module.configured_provider() == 'local'
+    assert not (project/'artifacts'/'provenance-check').exists()
+    monkeypatch.delenv('CHROME_BIN')
+    with pytest.raises(SystemExit) as error:
+        module.main(['--objective', 'validation', '--browser-config', str(config)])
+    assert error.value.code == 2
+
+
+@pytest.mark.skipif(not os.environ.get('CHROME_BIN'), reason='CHROME_BIN required for local provider boundary')
+def test_explicit_local_configuration_can_drive_an_actual_browser(example, tmp_path):
+    module, project = example
+    config = project/'local-browser.json'
+    config.write_text('{"browser":{"provider":"local"}}')
+    context = module.Context(tmp_path/'context', 1, browser_config=config).start()
+    try:
+        observed = context.browser_call('member-a', None, context.root, operation='session')
+        assert observed['principal'] == 'member-a'
+        assert context.engine_identity() is None
+        assert len(module.implementation_digest(config)) == 64
+    finally:
+        context.close()
 
 
 def test_objective_selects_omissions_and_describe_stays_passive(example, monkeypatch):
