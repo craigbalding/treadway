@@ -14,11 +14,12 @@ import sys
 import threading
 import time
 import uuid
-import xml.etree.ElementTree as ET
 from urllib.parse import urlsplit
 
 import treadway
+from robot.api import ExecutionResult
 from treadway.browsers import BrowserManager, BrowserSession
+from treadway.browser_receipts import inspect_browser_run
 from treadway.browser_runtime import BrowserRuntime
 from app import make_server
 
@@ -98,6 +99,44 @@ def offline(output, deadline, checks):
     return checks
 
 
+def robot_pass_count(filename):
+    total = ExecutionResult(str(filename)).statistics.total
+    if not total.total or total.passed != total.total:
+        raise RuntimeError('robot_acceptance_incomplete')
+    return total.passed
+
+
+def remote_workers_cleanup(output, *, project_id, exclude, deadline):
+    """Read only this invocation's retained worker receipts; never contact a provider."""
+    directories = []
+    for name in ('browsers', 'actors'):
+        root = output / name
+        if root.is_symlink():
+            return {'complete': False, 'workers': 0, 'error': 'owned_worker_root_is_symlink'}
+        if root.exists():
+            directories.extend(path for path in sorted(root.iterdir())
+                               if path != exclude and path.name != 'state-attempts'
+                               and (path.is_dir() or path.is_symlink()))
+    while True:
+        workers = []
+        for directory in directories:
+            try:
+                observed = inspect_browser_run(directory, project_id=project_id, run_id=directory.name)
+                complete = observed['journalComplete'] and observed['workerStoppedObserved']
+                for actor in observed['actors']:
+                    facts = actor['cleanup'] or {}
+                    ownership_fact = {'fresh': 'contextDisposed', 'borrowed': 'attachmentDetached',
+                                      'provider-session': 'profileReleased'}[actor['mode']]
+                    complete = complete and facts.get('connectionClosed') is True and facts.get(ownership_fact) is True
+                workers.append({'runId': directory.name, 'complete': bool(complete),
+                    'unresolvedEffects': sum(len(actor['unresolvedEffects']) for actor in observed['actors'])})
+            except (OSError, RuntimeError, ValueError, KeyError):
+                workers.append({'runId': directory.name, 'complete': False})
+        if all(worker['complete'] for worker in workers) or time.monotonic() >= deadline:
+            return {'complete': all(worker['complete'] for worker in workers), 'workers': len(workers), 'runs': workers}
+        time.sleep(.02)
+
+
 def browser_test(output, deadline, suites, checks, *, browser_config=None, app_url=None,
                  fixture_host='127.0.0.1', fixture_port=0):
     runtime = BrowserRuntime.from_file(browser_config, root=output / 'browsers', project_root=ROOT) if browser_config else BrowserRuntime(
@@ -139,11 +178,8 @@ def browser_test(output, deadline, suites, checks, *, browser_config=None, app_u
             remaining = db.execute("SELECT count(*) FROM items").fetchone()[0]
         if remaining:
             raise RuntimeError("scoped_cleanup_incomplete")
-        report = ET.parse(output / "robot/output.xml")
-        tests = report.findall(".//test")
-        if not tests or any(test.find("status").get("status") != "PASS" for test in tests):
-            raise RuntimeError("robot_acceptance_incomplete")
-        return {"testsPassed": len(tests), "remainingItems": remaining, "origin": origin,
+        tests_passed = robot_pass_count(output / "robot/output.xml")
+        return {"testsPassed": tests_passed, "remainingItems": remaining, "origin": origin,
                 "commandElapsedSeconds": browser_check["elapsedSeconds"]}
     finally:
         cleanup = {"complete": True, "errors": []}
@@ -164,23 +200,10 @@ def browser_test(output, deadline, suites, checks, *, browser_config=None, app_u
                 # A dead Robot owner closes its worker's stdin. Wait only for
                 # this run's private journals, never provider-wide resources.
                 actor_deadline = time.monotonic() + runtime.cleanup_seconds + 2
-                actor_root = output / 'actors'
-                actor_journals = [directory / 'events.jsonl' for directory in actor_root.iterdir() if directory.is_dir()] if actor_root.exists() else []
-                while True:
-                    actor_results = []
-                    for journal in actor_journals:
-                        try:
-                            events = [json.loads(line) for line in journal.read_text().splitlines()]
-                            stopped = bool(events) and events[-1]['kind'] == 'worker_stopped'
-                            acquired = {e['generation'] for e in events if e['kind'] == 'acquisition_intent'}
-                            disposed = {e['generation'] for e in events if e['kind'] == 'cleanup_result' and e.get('complete') is True}
-                            actor_results.append(stopped and acquired <= disposed)
-                        except (OSError, ValueError, KeyError):
-                            actor_results.append(False)
-                    if all(actor_results) or time.monotonic() >= actor_deadline:
-                        break
-                    time.sleep(.02)
-                cleanup['actors'] = {'complete': all(actor_results), 'workers': len(actor_results)}
+                # The parent's acquisition bound project_id before Robot was
+                # started. Never derive our expected binding from a child log.
+                cleanup['actors'] = remote_workers_cleanup(output, project_id=getattr(runtime, 'project_id', None),
+                    exclude=getattr(runtime, 'evidence', None), deadline=actor_deadline)
                 cleanup['complete'] = cleanup['complete'] and cleanup['actors']['complete']
             for owner, session in owned:
                 try:

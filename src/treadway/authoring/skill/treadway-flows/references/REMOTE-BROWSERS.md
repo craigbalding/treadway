@@ -372,19 +372,46 @@ with BrowserRuntime.from_file("profile-browser.json", root=Path("artifacts/brows
 
 `principal` is the same origin/probe/expected-user binding used for saved logins.
 The initial setup actor is available to sign in; it does not establish the user
-until verification succeeds. Later acquisitions verify the actual application
-user before returning an actor:
+until verification succeeds. Later acquisitions require an explicit application
+landing URL and verify the actual user before returning an actor. Choose a page
+that works for your authenticated user; an application's origin root may redirect
+somewhere else:
 
 ```python
 with BrowserRuntime.from_file("profile-browser.json", root=Path("artifacts/browsers")) as browsers:
     member = browsers.acquire_provider_identity(
         "member", identity, principal=principal,
-        landing_url=principal["origin"] + "/",
+        landing_url=principal["origin"] + "/members",
     )
     with browsers.drive(member):
         run_flow(member.connection())  # Your application's flow.
     cleanup = browsers.release(member)
 ```
+
+When the application login expires, renew it explicitly in the same profile:
+
+```python
+member = browsers.acquire_provider_identity(
+    "member", identity, principal=principal, reauthenticate=True,
+)
+with browsers.drive(member):
+    sign_in(member.connection())  # Your normal sign-in flow, including MFA.
+browsers.verify_provider_identity(member)
+browsers.require_provider_identity(member)
+# Dependent operations must still check the live application user and resource.
+with browsers.drive(member):
+    run_flow(member.connection())
+browsers.release(member)
+```
+
+Renewal retains the original expected user and both writer leases. It never runs
+automatically or repeats a business operation. `require_provider_identity` checks
+that setup completed in this generation and its leases are current; it does not
+replace the live principal check in `ActorBrowser` or your application's adapter.
+Releasing an unverified renewal leaves the identity requiring explicit renewal.
+A fully returned principal mismatch or authentication refusal also requires
+renewal. Missing replies, incomplete probes and uncertain writes remain recovery
+cases; a later successful login cannot clear them.
 
 A new acquisition opens a new page and gets a new generation. Persistent profile
 state survives; page handles, tabs and session memory do not. Application login

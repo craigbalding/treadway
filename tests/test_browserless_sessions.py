@@ -1,5 +1,6 @@
 """Synthetic Session API lifecycle and identity exclusion; no browser/cloud."""
 import base64
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -8,7 +9,7 @@ import threading
 
 import pytest
 
-from treadway.browser_runtime import BrowserRuntime
+from treadway.browser_runtime import BrowserRuntime, BrowserRuntimeIncomplete
 from treadway.browser_state import BrowserIdentity, BrowserStateIncomplete
 from treadway.browserless_sessions import ProviderSessionIncomplete, canonical_identity, read_capability
 from treadway.cdp import CdpSocket, CommandSession
@@ -262,7 +263,7 @@ def test_profile_survives_clean_release_and_next_generation_verifies_before_retu
         assert facts['actors'][0]['engineObservations'] == [{'identity': engine['identity'], 'scope': 'connected-browser'}]
         assert facts['actors'][0]['cleanup']['profileReleased'] is True
     with runtime(tmp_path) as browsers:
-        member = browsers.acquire_provider_identity('member', state, principal=principal)
+        member = browsers.acquire_provider_identity('member', state, principal=principal, landing_url=principal['origin'] + '/members')
         assert member.generation != first_generation
         assert command(browsers, member, 'Runtime.evaluate', {'expression': 'read'})['result']['value'] == 'retained-profile'
         assert command(browsers, member, 'Storage.getCookies', {})['cookies'] == [{'name': 'session', 'value': 'synthetic-member'}]
@@ -270,7 +271,7 @@ def test_profile_survives_clean_release_and_next_generation_verifies_before_retu
             browsers.forget_provider_identity(state)
         with pytest.raises(BrowserStateIncomplete, match='in_use'):
             with runtime(tmp_path/'another') as other:
-                other.acquire_provider_identity('alias', state, principal=principal)
+                other.acquire_provider_identity('alias', state, principal=principal, landing_url=principal['origin'] + '/members')
         browsers.release(member)
         assert browsers.forget_provider_identity(state)['profileDeleted'] is True
         browsers.create_provider_identity(state, ttl_seconds=180)
@@ -402,3 +403,154 @@ def test_asynchronous_deletion_acceptance_is_not_a_remote_fence(tmp_path, servic
             browsers.forget_provider_identity(state, force=True, previous_run=previous)
         with pytest.raises(BrowserStateIncomplete, match='remote_fence_required'):
             browsers.recover_provider_identity(state, previous_run=previous)
+
+
+@pytest.mark.parametrize('missing', ['both', 'identity', 'canonical'])
+def test_recovery_binds_missing_manifest_generation_to_exact_retained_intent(tmp_path, service, missing):
+    from treadway.browser_receipts import inspect_browser_run, record_browser_reconciliation
+    seen, _ = service
+    state = identity(tmp_path)
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        previous, directory = abandoned_profile(tmp_path, browsers, state, unknown=True)
+        for path in state.root.glob('*/identity.json'):
+            manifest = json.loads(path.read_text())
+            canonical = path.parent.name == hashlib.sha256(canonical_identity(state, 'synthetic-session').resource.encode()).hexdigest()
+            if missing == 'both' or (missing == 'canonical') == canonical:
+                manifest['execution'].pop('generation')
+                path.write_text(json.dumps(manifest))
+        result = browsers.forget_provider_identity(state, force=True, previous_run=previous)
+        assert result['profileDeleted'] and result['recoveryRequired']
+        proof, = state.root.glob('*/provider-fence-*.json')
+        value = json.loads(proof.read_text())
+        observed = inspect_browser_run(directory, project_id=browsers.project_id, run_id=previous['run_id'])
+        assert value['execution']['generation'] == previous['generation']
+        assert value['acquisitionJournalSha256'] == observed['journalSha256']
+        observer = tmp_path / 'observer.json'
+        observer.write_text('{"effect":"applied"}')
+        observer.chmod(0o600)
+        record_browser_reconciliation(directory, project_id=browsers.project_id, run_id=previous['run_id'],
+            actor=previous['actor'], generation=previous['generation'], request_ref='client:1',
+            journal_sha256=observed['journalSha256'], outcome='applied', evidence=observer)
+        assert browsers.recover_provider_identity(state, previous_run=previous)['recovered']
+        assert [item[0] for item in seen] == ['POST', 'DELETE'] and browsers.process is None
+
+
+@pytest.mark.parametrize('invalid', ['no-intent', 'wrong-generation', 'multiple-intents', 'torn', 'canonical-differs'])
+def test_missing_generation_never_authorizes_deletion_without_unambiguous_intent(tmp_path, service, invalid):
+    seen, _ = service
+    state = identity(tmp_path)
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        previous, directory = abandoned_profile(tmp_path, browsers, state)
+        for path in state.root.glob('*/identity.json'):
+            manifest = json.loads(path.read_text())
+            manifest['execution'].pop('generation')
+            if (invalid == 'canonical-differs'
+                    and path.parent.name == hashlib.sha256(canonical_identity(state, 'synthetic-session').resource.encode()).hexdigest()):
+                manifest['execution']['generation'] = 'different-generation'
+            path.write_text(json.dumps(manifest))
+        path = directory / 'events.jsonl'
+        events = [json.loads(line) for line in path.read_text().splitlines()]
+        if invalid == 'no-intent':
+            events = events[:1]
+        elif invalid == 'wrong-generation':
+            for event in events[1:-1]:
+                event['generation'] = 'different-generation'
+        elif invalid == 'multiple-intents':
+            events.insert(-1, {'kind': 'acquisition_intent', 'mode': 'provider-session',
+                'actor': previous['actor'], 'generation': 'another-generation'})
+        path.write_text(''.join(json.dumps(event) + '\n' for event in events) + ('{"kind":' if invalid == 'torn' else ''))
+        with pytest.raises(BrowserStateIncomplete):
+            browsers.forget_provider_identity(state, force=True, previous_run=previous)
+        assert [item[0] for item in seen] == ['POST']
+
+
+def test_expired_profile_requires_explicit_same_principal_renewal_then_verification(tmp_path, protocol_service):
+    state = identity(tmp_path)
+    principal = {'origin': state.origins[0], 'probe': '/principal', 'expected': {'principal': 'member'}}
+    landing = principal['origin'] + '/members'
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        member = browsers.acquire_provider_identity('member', state, principal=principal, initial_setup=True)
+        assert member._identity_lease._record['providerPrincipalBinding'] == principal
+        with pytest.raises(BrowserRuntimeIncomplete, match='principal_verification_required'):
+            browsers.require_provider_identity(member)
+        browsers.verify_provider_identity(member)
+        browsers.require_provider_identity(member)
+        command(browsers, member, 'Runtime.evaluate', {'expression': 'fixture:principal:anonymous'})
+        assert not browsers.release(member)['identity']['recoveryRequired']
+    with runtime(tmp_path) as browsers:
+        with pytest.raises(ValueError, match='explicit_provider_landing_url_required'):
+            browsers.acquire_provider_identity('member', state, principal=principal)
+        assert browsers.process is None
+        with pytest.raises(BrowserRuntimeIncomplete) as refused:
+            browsers.acquire_provider_identity('member', state, principal=principal, landing_url=landing)
+        assert refused.value.details == {'authenticationRequired': True}
+        assert not browsers.last_cleanup['identity']['recoveryRequired']
+    with runtime(tmp_path) as browsers:
+        with pytest.raises(BrowserStateIncomplete, match='reauthentication_required'):
+            browsers.acquire_provider_identity('member', state, principal=principal, landing_url=landing)
+        assert browsers.process is None
+        member = browsers.acquire_provider_identity('member', state, principal=principal, reauthenticate=True)
+        with pytest.raises(BrowserRuntimeIncomplete, match='principal_verification_required'):
+            browsers.require_provider_identity(member)
+        with runtime(tmp_path / 'other-project') as other:
+            with pytest.raises(BrowserStateIncomplete, match='in_use'):
+                other.acquire_provider_identity('alias', state, principal=principal, reauthenticate=True)
+        command(browsers, member, 'Runtime.evaluate', {'expression': 'fixture:principal:member'})
+        browsers.verify_provider_identity(member)
+        browsers.require_provider_identity(member)
+        assert not browsers.release(member)['identity']['recoveryRequired']
+    with runtime(tmp_path) as browsers:
+        member = browsers.acquire_provider_identity('member', state, principal=principal, landing_url=landing)
+        browsers.require_provider_identity(member)
+        browsers.release(member)
+        browsers.forget_provider_identity(state)
+
+
+def test_unverified_renewal_does_not_promote_profile_and_unknown_failure_cannot_be_cleared(tmp_path, protocol_service, monkeypatch):
+    state = identity(tmp_path)
+    principal = {'origin': state.origins[0], 'probe': '/principal', 'expected': {'principal': 'member'}}
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        member = browsers.acquire_provider_identity('member', state, principal=principal, initial_setup=True)
+        browsers.verify_provider_identity(member)
+        browsers.release(member)
+        member = browsers.acquire_provider_identity('renewal', state, principal=principal, reauthenticate=True)
+        browsers.release(member)
+    with runtime(tmp_path) as browsers:
+        with pytest.raises(BrowserStateIncomplete, match='reauthentication_required'):
+            browsers.acquire_provider_identity('member', state, principal=principal)
+        member = browsers.acquire_provider_identity('member', state, principal=principal, reauthenticate=True)
+        import treadway.browser_runtime as module
+        with monkeypatch.context() as patch:
+            patch.setattr(module, 'run_json_process', lambda *args, **kwargs: {
+                'failure': 'process_deadline', 'exitCode': None, 'payload': None})
+            with pytest.raises(BrowserRuntimeIncomplete):
+                browsers.verify_provider_identity(member)
+        with pytest.raises(BrowserStateIncomplete, match='execution_recovery_required'):
+            browsers.verify_provider_identity(member)
+        with pytest.raises(BrowserRuntimeIncomplete, match='principal_verification_required'):
+            browsers.require_provider_identity(member)
+        assert browsers.release(member)['identity']['recoveryRequired']
+
+
+@pytest.mark.parametrize('observation,failure', [({'complete': False, 'status': 200}, 'nonzero_exit'),
+    ({'complete': True, 'status': 500}, 'nonzero_exit'), ({'complete': True, 'status': 401}, 'process_deadline')])
+def test_incomplete_probe_is_not_reclassified_as_a_definite_authentication_refusal(
+        tmp_path, protocol_service, monkeypatch, observation, failure):
+    import treadway.browser_runtime as module
+    state = identity(tmp_path)
+    principal = {'origin': state.origins[0], 'probe': '/principal', 'expected': {'principal': 'member'}}
+    with runtime(tmp_path) as browsers:
+        browsers.create_provider_identity(state, ttl_seconds=180)
+        member = browsers.acquire_provider_identity('member', state, principal=principal, initial_setup=True)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, 'run_json_process', lambda *args, **kwargs: {'failure': failure,
+                'exitCode': 1, 'payload': {'complete': False, 'code': 'browser_state_actual_principal_differs',
+                    'observation': observation}})
+            with pytest.raises(BrowserRuntimeIncomplete) as result:
+                browsers.verify_provider_identity(member)
+        assert result.value.details.get('authenticationRequired') is not True
+        assert browsers.release(member)['identity']['recoveryRequired']

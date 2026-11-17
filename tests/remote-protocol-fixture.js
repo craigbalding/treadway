@@ -84,6 +84,7 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true, s
         if (!current) error = {code: -1, message: 'context required'};
         else current.cookies = params.cookies;
       } else if (method === 'Runtime.evaluate') {
+        if (params.expression.startsWith('fixture:principal:')) controls.principal = params.expression.slice('fixture:principal:'.length);
         if (!context) error = {code: -1, message: 'page attachment required'};
         else if (params.expression === '({origin:location.origin,timeOrigin:performance.timeOrigin})') result = {
           result: {value: {origin: 'https://app.example.invalid', timeOrigin: 1}}};

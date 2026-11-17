@@ -275,9 +275,9 @@ extension reference](https://docs.browserless.io/api-reference/cdp-extensions).
 
 Browserless's cloud/Enterprise Session API is different: creation returns `connect` and
 `stop` URLs with tokens already embedded; stored profile state may survive a browser
-restart while tabs do not. Its `stop` URL deletes saved session data. A later adapter
+restart while tabs do not. Its `stop` URL deletes saved session data. The adapter
 takes an explicit Session API creation URL, retains the returned lifecycle URLs
-privately, and separates `release connection` from `forget saved identity`. It must not
+privately, and separates `release connection` from `forget saved identity`. It does not
 infer this API from an OSS launch URL. [Persisting
 state](https://docs.browserless.io/baas/session-management/persisting-state).
 

@@ -233,14 +233,14 @@ def _check(runtime, identity):
         raise ValueError('browser_identity_provider_binding_differs')
 
 
-def acquire(runtime, actor, identity, *, principal, initial_setup=False, landing_url=None, verify_seconds=10):
+def acquire(runtime, actor, identity, *, principal, initial_setup=False, reauthenticate=False, landing_url=None, verify_seconds=10):
     from .browser_runtime import RuntimeSession, BrowserRuntimeIncomplete, _project_identity, _seconds
     _check(runtime, identity)
     if not isinstance(actor, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', actor):
         raise ValueError('path_safe_session_name_required')
     if any(item.name == actor for item in runtime.sessions.values()):
         raise BrowserStateIncomplete('browser_actor_already_acquired')
-    if type(initial_setup) is not bool:
+    if type(initial_setup) is not bool or type(reauthenticate) is not bool or initial_setup and reauthenticate:
         raise ValueError('explicit_provider_initial_setup_required')
     _seconds(verify_seconds, 30)
     principal = json.loads(json.dumps(principal, allow_nan=False))
@@ -263,8 +263,20 @@ def acquire(runtime, actor, identity, *, principal, initial_setup=False, landing
             raise BrowserStateIncomplete('browserless_session_initial_setup_refused' if initial_setup else 'browserless_session_initial_setup_required')
         if lease._record.get('providerPrincipalBinding', principal) != principal:
             raise BrowserStateIncomplete('browser_identity_principal_binding_differs')
+        if reauthenticate and not initialized:
+            raise BrowserStateIncomplete('browserless_session_initial_setup_required')
+        setup = initial_setup or reauthenticate
+        if not setup and lease._record.get('providerAuthenticationRequired') is True:
+            raise BrowserStateIncomplete('browserless_session_reauthentication_required')
+        if not setup and landing_url is None:
+            raise ValueError('explicit_provider_landing_url_required')
         canonical = canonical_identity(identity, capability['session']['id']).acquire(project_id)
         canonical.require_storage_kind('provider-session')
+        # Bind the intended user before exposing a login-capable connection.
+        # Only successful verification clears this explicit setup requirement.
+        if setup:
+            lease._record.update(providerPrincipalBinding=principal, providerAuthenticationRequired=True)
+            _write(lease.directory / 'identity.json', lease._record)
         headers = _headers(runtime)
         if origin(capability['session']['connect'], websocket=True) != capability['apiOrigin']:
             headers = {}
@@ -285,12 +297,16 @@ def acquire(runtime, actor, identity, *, principal, initial_setup=False, landing
         runtime.sessions[session.generation] = session
         for item in (lease, canonical):
             item.record_generation(session.generation)
-        if not initial_setup:
-            _verify(runtime, session, landing_url=landing_url or principal['origin'] + '/', timeout_seconds=verify_seconds)
+        if not setup:
+            _verify(runtime, session, landing_url=landing_url, timeout_seconds=verify_seconds)
         return session
     except BaseException as error:
         if session is not None:
-            session._identity_failed = True
+            if isinstance(error, BrowserRuntimeIncomplete) and error.details.get('authenticationRequired') is True:
+                lease._record['providerAuthenticationRequired'] = True
+                _write(lease.directory / 'identity.json', lease._record)
+            else:
+                session._identity_failed = True
             try:
                 runtime.release(session)
             except Exception:
@@ -310,14 +326,19 @@ def acquire(runtime, actor, identity, *, principal, initial_setup=False, landing
 def _verify(runtime, session, *, landing_url=None, timeout_seconds=10):
     lease = session._identity_lease
     lease.require_storage_kind('provider-session')
-    result = runtime._state_operation(session, 'verify', timeout_seconds=timeout_seconds,
+    if session._identity_failed:
+        raise BrowserStateIncomplete('browserless_session_execution_recovery_required')
+    session._provider_verified = False
+    result = runtime._state_operation(session, 'verify', timeout_seconds=timeout_seconds, authentication_check=True,
         **({'landingUrl': landing_url} if landing_url is not None else {}))
     reference = 'provider-principal-' + str(uuid.uuid4()) + '.json'
     path = lease.directory / reference
     _write(path, result)
     lease._record.update(providerInitialized=True, providerPrincipalBinding=session._identity_principal,
+        providerAuthenticationRequired=False,
         lastProviderVerification={'file': reference, 'sha256': hashlib.sha256(_read(path)).hexdigest()})
     _write(lease.directory / 'identity.json', lease._record)
+    session._provider_verified = True
     return {'verified': True, 'generation': session.generation, 'evidence': reference}
 
 
@@ -341,10 +362,19 @@ def _prior_execution(lease, project_id, previous_run):
     if (not isinstance(execution, dict) or execution.get('provider') != 'browserless'
             or execution.get('mode') != 'provider-session' or execution.get('projectId') != project_id
             or execution.get('runId') != previous_run['run_id'] or execution.get('actor') != previous_run['actor']
-            or execution.get('generation') != previous_run['generation']
+            or execution.get('generation') not in (None, previous_run['generation'])
             or not isinstance(execution.get('directory'), str) or not Path(execution['directory']).is_absolute()):
         raise BrowserStateIncomplete('browserless_session_previous_run_differs')
-    return execution
+    # An RPC reply can be lost, or Python can stop between recording the two
+    # generation manifests. Only the worker's retained intent can fill that gap.
+    from .browser_receipts import inspect_browser_run
+    observed = inspect_browser_run(execution['directory'], project_id=project_id, run_id=execution['runId'])
+    actors = [item for item in observed['actors'] if item['actor'] == previous_run['actor']
+              and item['mode'] == 'provider-session'
+              and (execution.get('generation') is None or item['generation'] == previous_run['generation'])]
+    if not observed['journalComplete'] or len(actors) != 1 or actors[0]['generation'] != previous_run['generation']:
+        raise BrowserStateIncomplete('browserless_session_run_evidence_incomplete')
+    return {**execution, 'generation': previous_run['generation']}
 
 
 def _force_url(url):
@@ -393,6 +423,7 @@ def forget(runtime, identity, *, force=False, previous_run=None):
         canonical.require_storage_kind('provider-session')
         if force and _prior_execution(canonical, project_id, previous_run) != execution:
             raise BrowserStateIncomplete('browserless_session_previous_run_differs')
+        prior_observation = _effects(execution, previous_run)[0] if force else None
         headers = _headers(runtime)
         if origin(capability['session']['stop']) != capability['apiOrigin']:
             headers = {}
@@ -405,7 +436,8 @@ def forget(runtime, identity, *, force=False, previous_run=None):
         lease._record['lastProviderForget'] = {'capability': capability, 'evidence': evidence}
         if force:
             proof = {'version': 'treadway.browserless-profile-fence/1', 'binding': lease.binding,
-                'execution': execution, 'capability': lease._record['providerSession'], 'evidence': evidence}
+                'execution': execution, 'acquisitionJournalSha256': prior_observation['journalSha256'],
+                'capability': lease._record['providerSession'], 'evidence': evidence}
             path = lease.directory / ('provider-fence-' + str(uuid.uuid4()) + '.json')
             _write(path, proof)
             lease._record['providerFence'] = {'file': path.name, 'sha256': hashlib.sha256(_read(path)).hexdigest()}

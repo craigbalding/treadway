@@ -129,6 +129,7 @@ class RuntimeSession:
     _context_lease: IdentityLease | None = field(default=None, repr=False)
     _identity_principal: dict | None = field(default=None, repr=False)
     _identity_failed: bool = field(default=False, repr=False)
+    _provider_verified: bool = field(default=False, repr=False)
 
     def connection(self):
         """Private subprocess input; do not pass this mapping as Robot arguments."""
@@ -491,7 +492,7 @@ class BrowserRuntime:
                     pass  # Preserve the first failure; the manifest remains unavailable.
             raise
 
-    def _state_operation(self, session, operation, *, timeout_seconds=10, **arguments):
+    def _state_operation(self, session, operation, *, timeout_seconds=10, authentication_check=False, **arguments):
         self._owned(session)
         if session._identity_lease is None:
             raise ValueError('browser_identity_lease_required')
@@ -513,10 +514,21 @@ class BrowserRuntime:
                     or not isinstance(value, dict) or value.get('complete') is not True):
                 code = value.get('code') if isinstance(value, dict) else None
                 code = code if isinstance(code, str) and re.fullmatch(r'(?:browser_|multi_origin_)[a-z_]+', code) else 'browser_state_operation_incomplete'
-                raise BrowserRuntimeIncomplete(code, evidence=evidence)
+                observation = value.get('observation', {}) if isinstance(value, dict) else {}
+                # A fully returned principal response is an authentication
+                # refusal, distinct from a missing reply or incomplete read.
+                authentication_required = (authentication_check and operation == 'verify'
+                    and session._identity_lease._record.get('storageKind') == 'provider-session'
+                    and transport.get('failure') == 'nonzero_exit' and transport.get('exitCode') == 1
+                    and code == 'browser_state_actual_principal_differs' and isinstance(observation, dict)
+                    and observation.get('complete') is True and type(observation.get('status')) is int
+                    and observation['status'] in {200, 401, 403})
+                raise BrowserRuntimeIncomplete(code, evidence=evidence,
+                    details={'authenticationRequired': True} if authentication_required else None)
             return value['result']
-        except BaseException:
-            session._identity_failed = True
+        except BaseException as error:
+            if not isinstance(error, BrowserRuntimeIncomplete) or error.details.get('authenticationRequired') is not True:
+                session._identity_failed = True
             raise
 
     def save_identity(self, session, *, timeout_seconds=10):
@@ -624,10 +636,21 @@ class BrowserRuntime:
             raise ValueError('remote_engine_observation_required')
         return self._rpc(operation='engine_identity', connection=session.connection())
 
-    def acquire_provider_identity(self, actor, identity, *, principal, initial_setup=False, landing_url=None, verify_seconds=10):
+    def acquire_provider_identity(self, actor, identity, *, principal, initial_setup=False, reauthenticate=False,
+                                  landing_url=None, verify_seconds=10):
         from .browserless_sessions import acquire
         return acquire(self, actor, identity, principal=principal, initial_setup=initial_setup,
-            landing_url=landing_url, verify_seconds=verify_seconds)
+            reauthenticate=reauthenticate, landing_url=landing_url, verify_seconds=verify_seconds)
+
+    def require_provider_identity(self, session):
+        """Require completed setup; dependent operations still check the live principal."""
+        self._owned(session)
+        if (session._identity_lease is None
+                or session._identity_lease._record.get('storageKind') != 'provider-session'
+                or not session._provider_verified or session._identity_failed):
+            raise BrowserRuntimeIncomplete('browserless_session_principal_verification_required')
+        session._identity_lease._current()
+        session._context_lease._current()
 
     def verify_provider_identity(self, session, *, timeout_seconds=10):
         from .browserless_sessions import verify
