@@ -195,6 +195,29 @@ evidence copy still matches its recorded digest. `journalComplete` describes the
 record syntax, not application success or remote termination. This reader grants
 no new lease and performs no recovery, reconnect or replay.
 
+You can also retain an independent application observation after worker exit:
+
+```python
+from treadway.browser_receipts import record_browser_reconciliation
+
+record_browser_reconciliation(
+    saved_run_directory, project_id=saved_project_id, run_id=saved_run_id,
+    actor="author", generation=saved_generation,
+    request_ref=unknown_request_ref, journal_sha256=observed["journalSha256"],
+    outcome="applied", evidence="artifacts/private-application-observation.json",
+)
+observed = inspect_browser_run(
+    saved_run_directory, project_id=saved_project_id, run_id=saved_run_id,
+)
+```
+
+This writes a separate private receipt and leaves the journal intact. A later
+journal append makes that observation stale. Conflicting conclusions or changed
+evidence keep the effect unresolved. A torn journal stays incomplete even when
+an observation resolves one effect. Recovery still requires independent proof
+that the previous remote execution was fenced; application state alone is
+insufficient.
+
 ## Borrow an existing page
 
 Use borrowing when an operator supplies an existing browser context and exact

@@ -241,3 +241,22 @@ def test_recovery_requires_actual_context_disposal_and_resolved_effects(tmp_path
         state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')
     with pytest.raises(BrowserStateIncomplete, match='recovery_required'):
         state.acquire('project-one')
+
+
+@pytest.mark.parametrize('cleanup', [True, False])
+def test_offline_application_reconciliation_cannot_replace_the_remote_cleanup_fence(tmp_path, cleanup):
+    from treadway.browser_receipts import inspect_browser_run, record_browser_reconciliation
+    state = failed_run(tmp_path, cleanup=cleanup, unknown=True)
+    directory = tmp_path/'run-evidence'
+    observed = inspect_browser_run(directory, project_id='project-one', run_id='run-one')
+    source = tmp_path/'application-observation.json'
+    source.write_bytes(b'{"resource":"synthetic-item","observed":"applied"}')
+    source.chmod(0o600)
+    record_browser_reconciliation(directory, project_id='project-one', run_id='run-one', actor='member',
+        generation='generation-one', request_ref='client:1', journal_sha256=observed['journalSha256'],
+        outcome='applied', evidence=source)
+    if cleanup:
+        assert state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')['recovered'] is True
+    else:
+        with pytest.raises(BrowserStateIncomplete, match='remote_fence_required'):
+            state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')

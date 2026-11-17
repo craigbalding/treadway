@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from treadway.browser_receipts import BrowserEvidenceIncomplete, inspect_browser_run
+from treadway.browser_receipts import BrowserEvidenceIncomplete, inspect_browser_run, record_browser_reconciliation
 
 
 def record(kind, **fields):
@@ -102,3 +102,73 @@ def test_unknown_acquisition_mode_cannot_be_read_as_fresh(tmp_path):
     result = inspect(tmp_path)
     assert result['journalComplete'] is False
     assert result['actors'] == []
+
+
+def reconcile(tmp_path, evidence, **changes):
+    return record_browser_reconciliation(tmp_path, **{'project_id': 'project-one', 'run_id': 'run-one',
+        'actor': 'member', 'generation': 'generation-one', 'request_ref': 'client:1',
+        'journal_sha256': inspect(tmp_path)['journalSha256'], 'outcome': 'applied', 'evidence': evidence, **changes})
+
+
+def pending(tmp_path, *, tail=b''):
+    path = journal(tmp_path, [record('acquisition_intent'),
+        record('command_dispatch', requestRef='client:1', method='Runtime.evaluate'),
+        record('cleanup_result', contextDisposed=True, connectionClosed=True), {'kind': 'worker_stopped'}], tail=tail)
+    evidence = tmp_path/'application-observation.json'
+    evidence.write_bytes(b'{"resource":"synthetic-item","revision":2}')
+    evidence.chmod(0o600)
+    return path, evidence
+
+
+def test_offline_application_observation_resolves_only_the_bound_unknown_and_never_resumes(tmp_path):
+    path, evidence = pending(tmp_path)
+    original = path.read_bytes()
+    saved = reconcile(tmp_path, evidence)
+    assert saved['recorded'] and saved['resumePermitted'] is False
+    evidence.unlink()  # The observer's source is copied into the retained run.
+    result = inspect(tmp_path)
+    assert result['offlineEvidenceComplete'] and result['resumePermitted'] is False
+    assert result['actors'][0]['unresolvedEffects'] == []
+    command, = result['actors'][0]['commands']
+    assert command['outcome'] == 'unknown' and command['replyObserved'] is False
+    assert command['offlineReconciliations'][0]['outcome'] == 'applied'
+    assert path.read_bytes() == original
+    retained = tmp_path/'reconciliations'/saved['evidence']['reference']
+    retained.write_bytes(b'{}')
+    assert inspect(tmp_path)['actors'][0]['unresolvedEffects'] == ['client:1']
+
+
+def test_offline_observation_preserves_a_torn_journal_and_becomes_stale_after_an_append(tmp_path):
+    path, evidence = pending(tmp_path, tail=b'{"kind":')
+    original = path.read_bytes()
+    reconcile(tmp_path, evidence)
+    observed = inspect(tmp_path)
+    assert observed['actors'][0]['unresolvedEffects'] == []
+    assert observed['journalComplete'] is False
+    assert path.read_bytes() == original
+    path.write_bytes(original + b'"unobserved"}')
+    assert inspect(tmp_path)['actors'][0]['unresolvedEffects'] == ['client:1']
+
+
+def test_wrong_offline_bindings_and_replied_commands_are_refused_without_sidecars(tmp_path):
+    path, evidence = pending(tmp_path)
+    for changes in [{'journal_sha256': '0'*64}, {'actor': 'other'}, {'generation': 'other'}, {'request_ref': 'client:2'}]:
+        with pytest.raises(BrowserEvidenceIncomplete):
+            reconcile(tmp_path, evidence, **changes)
+    path.write_bytes(path.read_bytes()+json.dumps(record('command_replied', requestRef='client:1')).encode()+b'\n')
+    with pytest.raises(BrowserEvidenceIncomplete, match='unknown_dispatch_required'):
+        reconcile(tmp_path, evidence)
+    assert not (tmp_path/'offline-reconciliations').exists()
+
+
+def test_conflicting_or_invalid_offline_evidence_keeps_the_effect_unknown(tmp_path):
+    _, evidence = pending(tmp_path)
+    reconcile(tmp_path, evidence, outcome='unknown')
+    assert inspect(tmp_path)['actors'][0]['unresolvedEffects'] == ['client:1']
+    reconcile(tmp_path, evidence, outcome='applied')
+    assert inspect(tmp_path)['actors'][0]['unresolvedEffects'] == []
+    reconcile(tmp_path, evidence, outcome='not_applied')
+    assert inspect(tmp_path)['actors'][0]['unresolvedEffects'] == ['client:1']
+    (tmp_path/'offline-reconciliations'/'unexpected.json').write_text('{}')
+    assert inspect(tmp_path)['offlineEvidenceComplete'] is False
+    assert inspect(tmp_path)['actors'][0]['unresolvedEffects'] == ['client:1']

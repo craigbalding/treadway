@@ -9,7 +9,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import fcntl
-import hashlib
 import json
 import math
 import os
@@ -687,29 +686,11 @@ class BrowserRuntime:
         self._owned(session)
         if session.provider != 'browserless' or outcome not in {'applied', 'not_applied', 'unknown'}:
             raise ValueError('remote_reconciliation_evidence_required')
-        source = Path(evidence)
-        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
-        try:
-            import stat
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077 or metadata.st_size > 16 * 1024 * 1024:
-                raise ValueError('private_bounded_reconciliation_evidence_required')
-            with os.fdopen(descriptor, 'rb', closefd=False) as stream:
-                data = stream.read(16 * 1024 * 1024 + 1)
-            if len(data) > 16 * 1024 * 1024:
-                raise ValueError('private_bounded_reconciliation_evidence_required')
-        finally:
-            os.close(descriptor)
-        reference = str(uuid.uuid4())
-        directory = _private_directory(self.evidence / 'reconciliations')
-        output = os.open(directory / reference, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(output, 'wb') as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
+        from .browser_receipts import retain_reconciliation_evidence
+        retained = retain_reconciliation_evidence(self.evidence, evidence)
         return self._rpc(operation='reconcile', connection=session.connection(), arguments={
             'requestRef': request_ref, 'outcome': outcome,
-            'evidence': {'reference': reference, 'sha256': hashlib.sha256(data).hexdigest()}})
+            'evidence': retained})
 
     def close(self):
         if self._closed:
