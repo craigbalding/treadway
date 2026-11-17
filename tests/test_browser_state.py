@@ -186,3 +186,58 @@ def test_invalid_identity_acquisition_is_passive(tmp_path, changes):
     with pytest.raises(ValueError):
         runtime.acquire_identity(identity=identity(tmp_path), **arguments)
     assert not list(tmp_path.iterdir())
+
+
+def failed_run(tmp_path, *, cleanup=True, unknown=False):
+    import json
+    state = identity(tmp_path)
+    lease = state.acquire('project-one')
+    lease.save(snapshot(lease))
+    directory = tmp_path/'run-evidence'
+    directory.mkdir(mode=0o700)
+    lease.record_run(directory=directory, project_id='project-one', run_id='run-one', actor='member')
+    lease.record_generation('generation-one')
+    events = [{'kind': 'worker_started', 'projectId': 'project-one', 'runId': 'run-one'},
+              {'kind': 'acquisition_intent', 'actor': 'member', 'generation': 'generation-one'}]
+    if unknown:
+        events.append({'kind': 'command_dispatch', 'actor': 'member', 'generation': 'generation-one',
+                       'requestRef': 'client:1', 'method': 'Runtime.evaluate'})
+    if cleanup is not None:
+        events.append({'kind': 'cleanup_result', 'actor': 'member', 'generation': 'generation-one',
+                       'contextDisposed': cleanup, 'connectionClosed': True})
+    path = directory/'events.jsonl'
+    path.write_text(''.join(json.dumps(event)+'\n' for event in events))
+    path.chmod(0o600)
+    lease.release(context_disposed=cleanup is True, uncertain=True)
+    return state
+
+
+def test_recovery_is_explicit_bound_to_prior_run_and_preserves_snapshot(tmp_path):
+    state = failed_run(tmp_path)
+    with pytest.raises(BrowserStateIncomplete, match='recovery_binding_differs'):
+        state.recover('project-one', run_id='run-one', actor='member', generation='other-generation')
+    assert state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')['recovered'] is True
+    current = state.acquire('project-one')
+    try:
+        assert current.read()['sourceGeneration'] == 'synthetic-generation'
+        assert 'execution' not in current._record  # Prior cleanup cannot fence a new owner.
+        with pytest.raises(BrowserStateIncomplete, match='identity_in_use'):
+            state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')
+    finally:
+        current.release(context_disposed=True, uncertain=False)
+    proof, = state.root.rglob('recovery-*.json')
+    proof.write_text('{}')
+    with pytest.raises(BrowserStateIncomplete, match='recovery_evidence_differs'):
+        state.acquire('project-one')
+
+
+@pytest.mark.parametrize('cleanup,unknown,code', [
+    (None, False, 'remote_fence_required'), (False, False, 'remote_fence_required'),
+    (True, True, 'effect_reconciliation_required'),
+])
+def test_recovery_requires_actual_context_disposal_and_resolved_effects(tmp_path, cleanup, unknown, code):
+    state = failed_run(tmp_path, cleanup=cleanup, unknown=unknown)
+    with pytest.raises(BrowserStateIncomplete, match=code):
+        state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')
+    with pytest.raises(BrowserStateIncomplete, match='recovery_required'):
+        state.acquire('project-one')

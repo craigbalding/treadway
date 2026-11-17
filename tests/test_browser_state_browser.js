@@ -112,6 +112,13 @@ with runtime('blocked') as blocked:
  except BrowserStateIncomplete as error: assert str(error) == 'browser_identity_recovery_required'
  else: raise AssertionError('failed restore silently reused')
  assert blocked.process is None
+if sys.argv[3] == 'browserless':
+ failed_actor, = wrong.sessions.values()
+ assert identity.recover(wrong.project_id,run_id=wrong.run_id,actor=failed_actor.name,
+  generation=failed_actor.generation)['recovered'] is True
+ with runtime('recovered') as recovered:
+  actor = recovered.acquire_identity('member',identity,principal=principal,landing_url=origin+'/editor')
+  assert call(recovered,actor,expression='localStorage.getItem("app-key")') == 'original'
 print(json.dumps({'complete':True,'generationChanged':True,'actual':actual}))
 `;
   const observed = await new Promise((resolve, reject) => {

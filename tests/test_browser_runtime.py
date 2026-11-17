@@ -294,6 +294,43 @@ def test_one_local_cleanup_failure_does_not_skip_other_owned_browsers(tmp_path, 
     assert not list(tmp_path.iterdir())
 
 
+def test_saved_identity_owner_death_requires_recorded_cleanup_before_explicit_recovery(tmp_path, endpoint):
+    import sys
+    import time
+    from treadway.browser_state import BrowserIdentity, BrowserStateIncomplete
+
+    source = '''
+import json,os,sys
+from pathlib import Path
+from treadway.browser_runtime import BrowserRuntime
+from treadway.browser_state import BrowserIdentity
+root=Path(sys.argv[1])
+identity=BrowserIdentity(root/'identities','member-resource','workboard','member','service',('https://app.example.invalid',))
+runtime=BrowserRuntime(root/'run',project_root=root/'project',configuration={
+ 'provider':'browserless','binding':'service','endpoint_env':'TREADWAY_FIXTURE_ENDPOINT'})
+actor=runtime.acquire_identity('member',identity,restore=False,principal={
+ 'origin':identity.origins[0],'probe':'/principal','expected':{'principal':'member'}})
+print(json.dumps({'projectId':runtime.project_id,'runId':runtime.run_id,'generation':actor.generation,
+ 'evidence':str(runtime.evidence)}),flush=True)
+os._exit(0)
+'''
+    child = subprocess.run([sys.executable, '-c', source, str(tmp_path)], text=True, capture_output=True, timeout=10)
+    assert child.returncode == 0, child.stderr
+    binding = json.loads(child.stdout)
+    state = BrowserIdentity(tmp_path/'identities', 'member-resource', 'workboard', 'member', 'service', ('https://app.example.invalid',))
+    with pytest.raises(BrowserStateIncomplete, match='recovery_required'):
+        state.acquire(binding['projectId'])
+    journal = Path(binding['evidence'])/'events.jsonl'
+    deadline = time.monotonic()+5
+    while 'worker_stopped' not in journal.read_text():
+        assert time.monotonic() < deadline, 'owned worker did not record bounded cleanup'
+        time.sleep(.01)
+    assert state.recover(binding['projectId'], run_id=binding['runId'], actor='member',
+                         generation=binding['generation'])['previousGenerationResumed'] is False
+    lease = state.acquire(binding['projectId'])
+    lease.release(context_disposed=True, uncertain=False)
+
+
 def test_startup_failure_stops_the_partially_started_worker(tmp_path, endpoint, monkeypatch):
     runtime = BrowserRuntime(tmp_path / 'artifacts', configuration=CONFIG, project_root=tmp_path)
     original = runtime._rpc

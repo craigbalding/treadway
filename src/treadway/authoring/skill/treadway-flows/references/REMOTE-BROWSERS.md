@@ -131,6 +131,21 @@ recovery-required. A free local file lock does not establish that the old remote
 browser stopped. Do not delete the manifest or force another login to bypass it;
 retain its run evidence and establish cleanup and application outcomes first.
 
+For a Browserless snapshot owner, request recovery using the previous run's
+retained binding:
+
+```python
+identity.recover(saved_project_id, run_id=saved_run_id,
+                 actor="member", generation=saved_generation)
+```
+
+This reads the run recorded before that owner's allocation. It requires an
+acknowledged disposal of its exact context and no unresolved application effects.
+It refuses a live identity lease, mismatched binding, incomplete journal or
+unconfirmed cleanup. A successful recovery permits a new `acquire_identity()`;
+it never resumes the old generation. The next restore checks the actual user
+again. This path does not recover local browser owners or provider profiles.
+
 After a clean release, `identity.forget(project_id)` explicitly removes saved
 snapshots. It refuses active or recovery-required resources, retains their
 project binding and does not revoke credentials or erase run evidence. Ordinary

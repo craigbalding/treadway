@@ -128,6 +128,9 @@ class BrowserIdentity:
 
     def acquire(self, project_id):
         """Acquire once, before restore/login/drive. Never steal an old owner."""
+        return self._acquire(project_id)
+
+    def _acquire(self, project_id, *, recovery=False):
         binding = self.binding(project_id)
         root = _directory(self.root)
         directory = _directory(root / hashlib.sha256(self.resource.encode()).hexdigest())
@@ -147,17 +150,78 @@ class BrowserIdentity:
                     record = json.loads(_read(manifest, 65536))
                 except (OSError, ValueError):
                     raise BrowserStateIncomplete('browser_identity_manifest_incomplete') from None
-                if record.get('version') != 'treadway.browser-identity/1' or record.get('binding') != binding:
+                if not isinstance(record, dict) or record.get('version') != 'treadway.browser-identity/1' or record.get('binding') != binding:
                     raise BrowserStateIncomplete('browser_identity_binding_differs')
-                if record.get('state') != 'released':
+                if recovery and record.get('state') not in {'leased', 'recovery_required', 'recovering'}:
+                    raise BrowserStateIncomplete('browser_identity_recovery_not_required')
+                if not recovery and record.get('state') != 'released':
                     raise BrowserStateIncomplete('browser_identity_recovery_required')
+                proof = record.get('lastRecovery')
+                if proof is not None:
+                    try:
+                        valid = (isinstance(proof, dict) and isinstance(proof.get('file'), str)
+                            and re.fullmatch(r'recovery-[0-9a-f-]{36}\.json', proof['file'])
+                            and hashlib.sha256(_read(directory / proof['file'])).hexdigest() == proof.get('sha256'))
+                    except OSError:
+                        valid = False
+                    if not valid:
+                        raise BrowserStateIncomplete('browser_identity_recovery_evidence_differs')
             else:
+                if recovery:
+                    raise BrowserStateIncomplete('browser_identity_manifest_missing')
                 record = {'version': 'treadway.browser-identity/1', 'binding': binding, 'snapshot': None}
-            record.update(state='leased', owner=str(uuid.uuid4()))
+            if not recovery:
+                record.pop('execution', None)
+            record.update(state='recovering' if recovery else 'leased', owner=str(uuid.uuid4()))
             _write(manifest, record)
             return IdentityLease(directory, descriptor, record)
         except BaseException:
             os.close(descriptor)
+            raise
+
+    def recover(self, project_id, *, run_id, actor, generation):
+        """Re-enable a saved snapshot after evidence-bound, scoped cleanup.
+
+        Reads only the previously recorded Browserless run. It never contacts a
+        provider, kills a process, steals a live lease or resumes an old target.
+        Unconfirmed cleanup and unresolved effects still require their owners.
+        """
+        if any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value)
+               for value in (run_id, actor, generation)):
+            raise ValueError('explicit_browser_run_binding_required')
+        lease = self._acquire(project_id, recovery=True)
+        try:
+            execution = lease._record.get('execution')
+            if (not isinstance(execution, dict) or execution.get('provider') != 'browserless'
+                    or execution.get('mode') != 'snapshot-fresh' or execution.get('projectId') != project_id
+                    or execution.get('runId') != run_id or execution.get('actor') != actor
+                    or not isinstance(execution.get('directory'), str) or not Path(execution['directory']).is_absolute()
+                    or execution.get('generation', generation) != generation):
+                raise BrowserStateIncomplete('browser_identity_recovery_binding_differs')
+            from .browser_receipts import inspect_browser_run
+            observed = inspect_browser_run(execution['directory'], project_id=project_id, run_id=run_id)
+            matches = [item for item in observed['actors'] if item['actor'] == actor and item['generation'] == generation]
+            if not observed['journalComplete'] or len(matches) != 1:
+                raise BrowserStateIncomplete('browser_identity_run_evidence_incomplete')
+            previous, = matches
+            if previous['cleanup'] is None or previous['cleanup']['contextDisposed'] is not True:
+                raise BrowserStateIncomplete('browser_identity_remote_fence_required')
+            if previous['unresolvedEffects']:
+                raise BrowserStateIncomplete('browser_identity_effect_reconciliation_required')
+            proof = {'version': 'treadway.browser-identity-recovery/1', 'binding': lease.binding,
+                'execution': execution, 'generation': generation, 'journalSha256': observed['journalSha256'],
+                'cleanup': previous['cleanup'], 'reconciliations': [item for item in previous['commands'] if item['outcome'] == 'unknown']}
+            path = lease.directory / ('recovery-' + str(uuid.uuid4()) + '.json')
+            _write(path, proof)
+            lease._record['lastRecovery'] = {'file': path.name, 'sha256': hashlib.sha256(_read(path)).hexdigest()}
+            _write(lease.directory / 'identity.json', lease._record)
+            lease.release(context_disposed=True, uncertain=False)
+            return {'recovered': True, 'previousGeneration': generation, 'previousGenerationResumed': False}
+        except BaseException:
+            try:
+                lease.release()
+            except Exception:
+                pass
             raise
 
     def forget(self, project_id):
@@ -213,7 +277,10 @@ class IdentityLease:
         if (not isinstance(snapshot, dict) or not isinstance(snapshot.get('file'), str)
                 or not re.fullmatch(r'state-[0-9a-f-]{36}\.json', snapshot['file'])):
             raise BrowserStateIncomplete('browser_identity_snapshot_incomplete')
-        raw = _read(self.directory / snapshot['file'])
+        try:
+            raw = _read(self.directory / snapshot['file'])
+        except OSError:
+            raise BrowserStateIncomplete('browser_identity_snapshot_incomplete') from None
         if hashlib.sha256(raw).hexdigest() != snapshot.get('sha256'):
             raise BrowserStateIncomplete('browser_identity_snapshot_differs')
         try:
@@ -222,6 +289,23 @@ class IdentityLease:
             raise BrowserStateIncomplete('browser_identity_snapshot_incomplete') from None
         self._validate(value)
         return value
+
+    def record_run(self, *, directory, project_id, run_id, actor):
+        """Durably bind this owner before the worker's allocation request."""
+        self._current()
+        if (project_id != self.binding['projectId'] or any(not isinstance(value, str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value) for value in (run_id, actor))):
+            raise ValueError('explicit_browser_run_binding_required')
+        self._record['execution'] = {'provider': 'browserless', 'mode': 'snapshot-fresh',
+            'directory': str(Path(directory).absolute()), 'projectId': project_id, 'runId': run_id, 'actor': actor}
+        _write(self.directory / 'identity.json', self._record)
+
+    def record_generation(self, generation):
+        self._current()
+        if not isinstance(generation, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', generation):
+            raise ValueError('explicit_browser_generation_required')
+        self._record['execution']['generation'] = generation
+        _write(self.directory / 'identity.json', self._record)
 
     def _validate(self, snapshot):
         if (not isinstance(snapshot, dict) or snapshot.get('version') != 'treadway.browser-state/1'

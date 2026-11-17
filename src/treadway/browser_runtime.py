@@ -204,7 +204,7 @@ class BrowserRuntime:
             except Exception:
                 raise BrowserRuntimeIncomplete("remote_control_incomplete", evidence=self.evidence) from None
 
-    def acquire(self, actor, *, deadline=None, **local_options):
+    def acquire(self, actor, *, deadline=None, _identity_lease=None, **local_options):
         if self._closed:
             raise BrowserRuntimeIncomplete("browser_runtime_closed")
         if not isinstance(actor, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", actor):
@@ -242,6 +242,9 @@ class BrowserRuntime:
                     except Exception:
                         pass
                     raise
+                if _identity_lease is not None:
+                    _identity_lease.record_run(directory=self.evidence, project_id=self.project_id,
+                                               run_id=self.run_id, actor=actor)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise BrowserRuntimeIncomplete("remote_acquisition_deadline", evidence=self.evidence)
@@ -314,8 +317,10 @@ class BrowserRuntime:
         try:
             snapshot = lease.read() if restore else None
             browser_attempted = True
-            session = self.acquire(actor, **local_options)
+            session = self.acquire(actor, _identity_lease=lease, **local_options)
             session._identity_lease, session._identity_principal = lease, principal
+            if self.provider == 'browserless':
+                lease.record_generation(session.generation)
             if restore:
                 self._state_operation(session, 'restore', snapshot=snapshot,
                     landingUrl=landing_url or principal['origin'] + '/', timeout_seconds=state_timeout_seconds)
@@ -329,6 +334,8 @@ class BrowserRuntime:
                     pass
             else:
                 try:
+                    if self.provider == 'browserless' and lease._record.get('execution') is None:
+                        browser_attempted = False  # The durable intent precedes every allocation RPC.
                     lease.release(context_disposed=not browser_attempted, uncertain=browser_attempted)
                 except Exception:
                     pass  # Preserve the first failure; the manifest remains unavailable.
