@@ -358,7 +358,12 @@ assumption or direct-HTTP substitute for a browser action.
 
 ## Reuse decisions
 
-Robot Framework composes flows; `ws` supplies the WebSocket client. Environment
+Flows use native Robot suites, keywords and teardown. The generated runner reads
+results through Robot's public [`ExecutionResult` API](https://github.com/robotframework/robotframework/blob/v7.5.1/src/robot/api/__init__.py)
+and uses Treadway's shared receipt reader for worker cleanup, avoiding separate
+XML and journal parsers in the runner.
+
+The transport uses `ws` as its WebSocket client. Environment
 proxy selection uses [proxy-from-env 2.1.0](https://github.com/Rob--W/proxy-from-env/blob/v2.1.0/index.js),
 including case precedence, exclusions and `ALL_PROXY`. Node's HTTP/TLS APIs handle
 CONNECT and certificate-chain validation; OpenSSL's `X509Certificate.checkIP`

@@ -34,15 +34,15 @@ def test_missing_or_truncated_robot_result_cannot_pass(tmp_path, runner):
     output = tmp_path / 'output.xml'
     with pytest.raises(Exception):
         runner['robot_pass_count'](output)
+    output.write_text('<robot><suite>')
+    with pytest.raises(Exception):
+        runner['robot_pass_count'](output)
 
 
 def test_native_robot_result_with_no_tests_cannot_pass(tmp_path, runner):
     output = tmp_path / 'empty.xml'
     RobotSuite('Empty').run(output=str(output), log='NONE', report='NONE', stdout=io.StringIO())
     with pytest.raises(RuntimeError, match='robot_acceptance_incomplete'):
-        runner['robot_pass_count'](output)
-    output.write_text('<robot><suite>')
-    with pytest.raises(Exception):
         runner['robot_pass_count'](output)
 
 
