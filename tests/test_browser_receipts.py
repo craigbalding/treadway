@@ -86,3 +86,19 @@ def test_malformed_middle_record_cannot_hide_an_unresolved_prior_dispatch(tmp_pa
     result = inspect(tmp_path)
     assert result['journalComplete'] is False
     assert result['actors'][0]['unresolvedEffects'] == ['client:1']
+
+
+def test_borrowed_attachment_cleanup_is_distinct_from_context_disposal(tmp_path):
+    journal(tmp_path, [record('acquisition_intent', mode='borrowed'), record('acquisition_ready'),
+        record('cleanup_result', contextDisposed=False, connectionClosed=True, attachmentDetached=True)])
+    actor, = inspect(tmp_path)['actors']
+    assert actor['mode'] == 'borrowed'
+    assert actor['cleanup'] == {'contextDisposed': False, 'connectionClosed': True,
+                               'attachmentDetached': True, 'remoteTermination': False}
+
+
+def test_unknown_acquisition_mode_cannot_be_read_as_fresh(tmp_path):
+    journal(tmp_path, [record('acquisition_intent', mode='unsupported')])
+    result = inspect(tmp_path)
+    assert result['journalComplete'] is False
+    assert result['actors'] == []

@@ -16,7 +16,9 @@ CONFIG = {"browser": {"provider": "browserless", "endpoint_env": "TREADWAY_FIXTU
 
 @pytest.fixture
 def endpoint(monkeypatch, request):
-    child = subprocess.Popen(["node", str(ROOT / "tests/remote-protocol-server.js"), str(getattr(request, "param", "Infinity"))],
+    option = getattr(request, 'param', 'Infinity')
+    child = subprocess.Popen(["node", str(ROOT / "tests/remote-protocol-server.js"), 'Infinity' if option == 'shared' else str(option),
+                              'shared' if option == 'shared' else 'separate'],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     value = json.loads(child.stdout.readline())["endpoint"]
     monkeypatch.setenv("TREADWAY_FIXTURE_ENDPOINT", value)
@@ -329,6 +331,112 @@ os._exit(0)
                          generation=binding['generation'])['previousGenerationResumed'] is False
     lease = state.acquire(binding['projectId'])
     lease.release(context_disposed=True, uncertain=False)
+
+
+def borrowed_identity(tmp_path, resource='member', **changes):
+    from treadway.browser_state import BrowserIdentity
+    return BrowserIdentity(**{'root': tmp_path/'shared-identities', 'resource': resource,
+        'application': 'workboard', 'identity_ref': 'member', 'provider_binding': 'service',
+        'origins': ('https://app.example.invalid',), **changes})
+
+
+def provide_attachment(monkeypatch, operator, endpoint, *, permission='drive'):
+    events = [json.loads(line) for line in (operator.evidence/'events.jsonl').read_text().splitlines()]
+    binding = {'version': 1, 'endpoint': endpoint, 'contextId': next(event['contextId'] for event in events if event['kind'] == 'context_acquired'),
+        'targetId': next(event['targetId'] for event in events if event['kind'] == 'acquisition_ready'),
+        'scope': 'context', 'permission': permission}
+    monkeypatch.setenv('TREADWAY_BORROWED_ATTACHMENT', json.dumps(binding))
+    return binding
+
+
+BORROWED = {'provider': 'browserless', 'binding': 'service', 'mode': 'borrowed', 'attachment_env': 'TREADWAY_BORROWED_ATTACHMENT'}
+
+
+@pytest.mark.parametrize('endpoint', ['shared'], indirect=True)
+def test_borrowed_context_aliases_share_one_lifetime_lease_and_preserve_operator_state(tmp_path, endpoint, monkeypatch):
+    from treadway.browser_state import BrowserStateIncomplete
+    with BrowserRuntime(tmp_path/'operator', configuration=CONFIG, project_root=tmp_path/'operator-project') as operator:
+        original = operator.acquire('operator')
+        assert operation(original.connection(), 'save:operator-value') is True
+        binding = provide_attachment(monkeypatch, operator, endpoint)
+        state = borrowed_identity(tmp_path)
+        with BrowserRuntime(tmp_path/'one', configuration=BORROWED, project_root=tmp_path/'project') as one:
+            member = one.borrow('member', state, permission='drive')
+            with one.drive(member):
+                assert operation(member.connection(), 'read') == 'operator-value'
+                assert operation(member.connection(), 'save:borrowed-value') is True
+            with BrowserRuntime(tmp_path/'alias', configuration=BORROWED, project_root=tmp_path/'project') as alias:
+                with pytest.raises(BrowserStateIncomplete, match='identity_in_use'):
+                    alias.borrow('different-name', borrowed_identity(tmp_path, resource='different-resource'))
+                assert alias.process is None
+            with BrowserRuntime(tmp_path/'other-project', configuration=BORROWED, project_root=tmp_path/'other-project') as other:
+                with pytest.raises(BrowserStateIncomplete, match='identity_in_use'):
+                    other.borrow('member', borrowed_identity(tmp_path, resource='another-resource'))
+                assert other.process is None
+            assert binding['contextId'] not in repr(member) and binding['endpoint'] not in repr(member)
+            result = one.release(member)
+            assert result['attachmentDetached'] and not result['contextDisposed']
+            assert not result['identity']['recoveryRequired'] and not result['contextLease']['recoveryRequired']
+        with BrowserRuntime(tmp_path/'later', configuration=BORROWED, project_root=tmp_path/'project') as later:
+            member = later.borrow('member', state, permission='drive')
+            assert operation(member.connection(), 'read') == 'borrowed-value'
+        assert operation(original.connection(), 'read') == 'borrowed-value'
+
+
+@pytest.mark.parametrize('endpoint', ['shared'], indirect=True)
+def test_borrowed_observation_uses_python_bridge_without_page_initialization(tmp_path, endpoint, monkeypatch):
+    from treadway.cdp import CdpSocket, CommandSession
+    with BrowserRuntime(tmp_path/'operator', configuration=CONFIG, project_root=tmp_path/'operator-project') as operator:
+        original = operator.acquire('operator')
+        assert operation(original.connection(), 'save:operator-value') is True
+        provide_attachment(monkeypatch, operator, endpoint, permission='observe')
+        with BrowserRuntime(tmp_path/'observer', configuration=BORROWED, project_root=tmp_path/'project') as observer:
+            with pytest.raises(BrowserRuntimeIncomplete, match='borrowed_binding_invalid'):
+                observer.borrow('forbidden', borrowed_identity(tmp_path), permission='drive')
+            assert observer.process is None
+            member = observer.borrow('member', borrowed_identity(tmp_path))
+            with observer.drive(member):
+                socket = CdpSocket(connection=member.connection(), observation_only=True)
+                try:
+                    cdp = CommandSession(socket)
+                    assert cdp.command('Storage.getCookies') == {'cookies': []}
+                    with pytest.raises(RuntimeError, match='remote_observation_only; outcome not_dispatched'):
+                        cdp.command('Runtime.evaluate', {'expression': 'save:forbidden'})
+                finally:
+                    socket.close()
+            assert observer.release(member)['contextLease']['recoveryRequired'] is False
+        assert operation(original.connection(), 'read') == 'operator-value'
+
+
+def test_borrowed_construction_and_wrong_entry_points_are_passive(tmp_path, monkeypatch):
+    monkeypatch.delenv('TREADWAY_BORROWED_ATTACHMENT', raising=False)
+    runtime = BrowserRuntime(tmp_path/'run', configuration=BORROWED, project_root=tmp_path/'project')
+    with pytest.raises(ValueError, match='explicit_borrow_required'):
+        runtime.acquire('member')
+    with pytest.raises(BrowserRuntimeIncomplete, match='borrowed_binding_invalid'):
+        runtime.borrow('member', borrowed_identity(tmp_path))
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('endpoint', ['shared'], indirect=True)
+def test_borrowed_unknown_write_keeps_all_resource_aliases_blocked_after_detach(tmp_path, endpoint, monkeypatch):
+    from treadway.browser_state import BrowserStateIncomplete
+    with BrowserRuntime(tmp_path/'operator', configuration=CONFIG, project_root=tmp_path/'operator-project') as operator:
+        original = operator.acquire('operator')
+        provide_attachment(monkeypatch, operator, endpoint)
+        with BrowserRuntime(tmp_path/'borrower', configuration=BORROWED, project_root=tmp_path/'project') as borrower:
+            member = borrower.borrow('member', borrowed_identity(tmp_path), permission='drive')
+            with borrower.drive(member):
+                with pytest.raises(AssertionError, match='unknown|timed out|remote_command_incomplete'):
+                    operation(member.connection(), 'lose-reply', timeout_ms=100)
+            released = borrower.release(member)
+            assert released['attachmentDetached'] and not released['contextDisposed']
+            assert released['identity']['recoveryRequired'] and released['contextLease']['recoveryRequired']
+        with BrowserRuntime(tmp_path/'alias', configuration=BORROWED, project_root=tmp_path/'project') as alias:
+            with pytest.raises(BrowserStateIncomplete, match='recovery_required'):
+                alias.borrow('member', borrowed_identity(tmp_path, resource='alias'), permission='drive')
+            assert alias.process is None
+        assert operation(original.connection(), 'read') == 'committed'
 
 
 def test_startup_failure_stops_the_partially_started_worker(tmp_path, endpoint, monkeypatch):

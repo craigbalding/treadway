@@ -13,6 +13,7 @@ async function connectSession(configuration, options = {}) {
     reconciliation: options.reconciliation === true});
   let client;
   try {
+    if (channel.capabilities?.observationOnly) throw new Error('remote_observation_entry_required');
     client = makeCdpClient(channel, options);
     client.capabilities = channel.capabilities;
     return await initializeSession(client, channel.target, channel.capabilities);

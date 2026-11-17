@@ -5,8 +5,9 @@ const crypto = require('node:crypto');
 const {once} = require('node:events');
 const {WebSocketServer} = require('ws');
 
-async function protocolFixture(t, {capacity = Infinity, contextSupport = true} = {}) {
+async function protocolFixture(t, {capacity = Infinity, contextSupport = true, sharedBrowser = false} = {}) {
   const browsers = [], seen = [], writes = [];
+  const sharedContexts = new Map(), sharedTargets = new Map();
   const server = http.createServer((_req, res) => { res.writeHead(500); res.end('global discovery forbidden'); });
   const wss = new WebSocketServer({noServer: true});
   server.on('upgrade', (req, socket, head) => {
@@ -14,7 +15,8 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true} =
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
   });
   wss.on('connection', ws => {
-    const browser = {open: true, contexts: new Map(), targets: new Map(), sessions: new Map(), ws}; browsers.push(browser);
+    const browser = {open: true, contexts: sharedBrowser ? sharedContexts : new Map(),
+      targets: sharedBrowser ? sharedTargets : new Map(), sessions: new Map(), ws}; browsers.push(browser);
     ws.on('error', () => {}); ws.on('close', () => { browser.open = false; });
     ws.on('message', raw => {
       const input = JSON.parse(raw); seen.push(input);
@@ -36,7 +38,8 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true} =
       else if (method === 'Target.disposeBrowserContext') {
         browser.contexts.delete(params.browserContextId);
         for (const [key, value] of browser.targets) if (value.browserContextId === params.browserContextId) browser.targets.delete(key);
-      } else if (method === 'Storage.getCookies') {
+      } else if (method === 'Page.getFrameTree') result = {frameTree: {frame: {id: 'frame-' + target?.targetId, url: 'about:blank'}}};
+      else if (method === 'Storage.getCookies') {
         result = {cookies: browser.contexts.get(params.browserContextId)?.cookies ?? [{name: 'unrelated-default', value: 'must-not-export'}]};
       } else if (method === 'Storage.setCookies') {
         const current = browser.contexts.get(params.browserContextId);

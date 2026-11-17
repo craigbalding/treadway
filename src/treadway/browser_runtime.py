@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit
 
 from .browsers import BrowserManager, BrowserSession, private_json
 from .credentials import CredentialRef, EnvironmentProvider
@@ -99,6 +100,7 @@ class RuntimeSession:
     capabilities: dict = field(default_factory=dict)
     _local: BrowserSession | None = field(default=None, repr=False)
     _identity_lease: IdentityLease | None = field(default=None, repr=False)
+    _context_lease: IdentityLease | None = field(default=None, repr=False)
     _identity_principal: dict | None = field(default=None, repr=False)
     _identity_failed: bool = field(default=False, repr=False)
 
@@ -120,16 +122,20 @@ class BrowserRuntime:
         if provider == 'local' and set(config) - {'provider', 'binding', 'acquire_seconds', 'session_seconds', 'cleanup_seconds'}:
             raise ValueError('local_browser_configuration_invalid')
         if provider == "browserless":
-            allowed = {"provider", "binding", "endpoint_env", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds"}
-            if set(config) - allowed or config.get("mode", "fresh") != "fresh":
+            allowed = {"provider", "binding", "endpoint_env", "attachment_env", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds"}
+            mode = config.get('mode', 'fresh')
+            if set(config) - allowed or mode not in {'fresh', 'borrowed'}:
                 raise ValueError("remote_browser_capability_unsupported")
-            for key in ("endpoint_env", "headers_env"):
+            required = 'attachment_env' if mode == 'borrowed' else 'endpoint_env'
+            if ('endpoint_env' if mode == 'borrowed' else 'attachment_env') in config:
+                raise ValueError('remote_browser_configuration_conflicts')
+            for key in (required, "headers_env"):
                 value = config.get(key)
-                if (key == "endpoint_env" or value is not None) and (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)):
+                if (key == required or value is not None) and (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)):
                     raise ValueError("browser_secret_reference_invalid")
         self.configuration = config
         self.provider = provider
-        self.provider_binding = config.get('binding', config.get('endpoint_env', 'local'))
+        self.provider_binding = config.get('binding', config.get('endpoint_env', config.get('attachment_env', 'local')))
         if not isinstance(self.provider_binding, str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', self.provider_binding):
             raise ValueError('safe_browser_provider_binding_required')
         self.root = Path(root).absolute()
@@ -190,7 +196,7 @@ class BrowserRuntime:
                         if "error" in result:
                             error = result["error"]
                             raise BrowserRuntimeIncomplete(error.get("code", "remote_control_incomplete"), evidence=self.evidence,
-                                details={key: value for key, value in error.items() if key in {"phase", "status", "allocation"}})
+                                details={key: value for key, value in error.items() if key in {"phase", "status", "allocation", "cleanup"}})
                         return result["result"]
                     remaining = deadline - time.monotonic()
                     if remaining <= 0 or not self.selector.select(remaining):
@@ -207,6 +213,8 @@ class BrowserRuntime:
     def acquire(self, actor, *, deadline=None, _identity_lease=None, **local_options):
         if self._closed:
             raise BrowserRuntimeIncomplete("browser_runtime_closed")
+        if self.configuration.get('mode') == 'borrowed':
+            raise ValueError('remote_explicit_borrow_required')
         if not isinstance(actor, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", actor):
             raise ValueError("path_safe_session_name_required")
         if any(session.name == actor for session in self.sessions.values()):
@@ -281,6 +289,109 @@ class BrowserRuntime:
             raise BrowserRuntimeIncomplete("browser_runtime_binding_differs")
         return session
 
+    def borrow(self, actor, identity, *, permission='observe', principal=None):
+        """Attach the operator's exact existing context/page, without owning it.
+
+        The attachment environment value is private JSON: version, endpoint,
+        contextId, targetId, scope='context' and permission='observe' or 'drive'.
+        All cooperating users must share the identity root on one host.
+        """
+        if self._closed:
+            raise BrowserRuntimeIncomplete('browser_runtime_closed')
+        if self.provider != 'browserless' or self.configuration.get('mode') != 'borrowed':
+            raise ValueError('explicit_borrowed_browser_configuration_required')
+        if not isinstance(actor, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', actor):
+            raise ValueError('path_safe_session_name_required')
+        if any(session.name == actor for session in self.sessions.values()):
+            raise BrowserRuntimeIncomplete('browser_actor_already_acquired')
+        if not isinstance(identity, BrowserIdentity) or identity.provider_binding != self.provider_binding:
+            raise ValueError('browser_identity_provider_binding_differs')
+        if permission not in {'observe', 'drive'}:
+            raise ValueError('explicit_borrowed_browser_permission_required')
+        if principal is not None:
+            principal = json.loads(json.dumps(principal, allow_nan=False))
+            if (not isinstance(principal, dict) or principal.get('origin') not in identity.origins
+                    or not isinstance(principal.get('probe'), str) or not isinstance(principal.get('expected'), dict)
+                    or not principal['expected']):
+                raise ValueError('browser_identity_principal_binding_required')
+        deadline = time.monotonic() + self.acquire_seconds
+        try:
+            provider = EnvironmentProvider()
+            raw = provider.read(CredentialRef('env', self.configuration['attachment_env']))
+            if len(raw) > 32768:
+                raise ValueError()
+            binding = json.loads(raw)
+            if (not isinstance(binding, dict) or set(binding) != {'version', 'endpoint', 'contextId', 'targetId', 'scope', 'permission'}
+                    or type(binding['version']) is not int or binding['version'] != 1 or binding['scope'] != 'context'
+                    or binding['permission'] not in {'observe', 'drive'} or permission == 'drive' and binding['permission'] != 'drive'
+                    or any(not isinstance(binding[key], str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,200}', binding[key])
+                           for key in ('contextId', 'targetId'))):
+                raise ValueError()
+            endpoint = binding['endpoint']
+            if not isinstance(endpoint, str) or not re.fullmatch(r'[!-~]+', endpoint):
+                raise ValueError()
+            url = urlsplit(endpoint)
+            if (url.scheme not in {'http', 'https', 'ws', 'wss'} or not url.hostname or url.username or url.password
+                    or '#' in endpoint or url.port is not None and not 0 < url.port <= 65535):
+                raise ValueError()
+            headers = json.loads(provider.read(CredentialRef('env', self.configuration['headers_env']))) if self.configuration.get('headers_env') else {}
+        except Exception:
+            raise BrowserRuntimeIncomplete('remote_borrowed_binding_invalid') from None
+        canonical = BrowserIdentity(identity.root, 'treadway.borrowed-context.v1:' + binding['contextId'],
+            identity.application, identity.identity_ref, identity.provider_binding, identity.origins, identity.components)
+        if identity.resource == canonical.resource:
+            raise ValueError('distinct_browser_identity_resource_required')
+        project_id = _project_identity(self.project_root, deadline)
+        self.project_id = project_id
+        leases, attempted, session = [], False, None
+        try:
+            leases.append(identity.acquire(project_id))
+            leases.append(canonical.acquire(project_id))
+            with self._rpc_lock:
+                try:
+                    self._start_worker(deadline)
+                except BaseException:
+                    try:
+                        self.close()
+                    except Exception:
+                        pass
+                    raise
+                for lease in leases:
+                    lease.record_run(directory=self.evidence, project_id=project_id, run_id=self.run_id, actor=actor, mode='borrowed')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BrowserRuntimeIncomplete('remote_acquisition_deadline', evidence=self.evidence)
+                attempted = True
+                result = self._rpc(operation='acquire', arguments={'actor': actor, 'endpoint': endpoint, 'headers': headers,
+                    'mode': 'borrowed', 'borrowed': {'contextId': binding['contextId'], 'targetId': binding['targetId'],
+                    'scope': 'context', 'permission': permission}, 'budgetMs': max(1, int(remaining * 1000))},
+                    timeout=remaining + self.cleanup_seconds + 1)
+            connection = result['connection']
+            session = RuntimeSession(actor, 'browserless', connection['generation'], connection,
+                capabilities=result['capabilities'], _identity_lease=leases[0], _context_lease=leases[1],
+                _identity_principal=principal)
+            self.sessions[session.generation] = session
+            for lease in leases:
+                lease.record_generation(session.generation)
+            return session
+        except BaseException as error:
+            if session is not None:
+                session._identity_failed = True
+                try:
+                    self.release(session)
+                except Exception:
+                    pass
+            else:
+                cleanup = error.details.get('cleanup', {}) if isinstance(error, BrowserRuntimeIncomplete) else {}
+                clean = (not attempted or cleanup.get('ownership') == 'borrowed' and cleanup.get('attachmentDetached') is True
+                         and cleanup.get('uncertainDispatches') is False)
+                for lease in reversed(leases):
+                    try:
+                        lease.release(context_disposed=not attempted, attachment_detached=clean, uncertain=not clean)
+                    except Exception:
+                        pass
+            raise
+
     def acquire_identity(self, actor, identity, *, principal, restore=True, landing_url=None,
                          state_timeout_seconds=10, **local_options):
         """Lease a saved identity for this whole browser lifetime.
@@ -345,6 +456,8 @@ class BrowserRuntime:
         self._owned(session)
         if session._identity_lease is None:
             raise ValueError('browser_identity_lease_required')
+        if session._identity_principal is None or session.capabilities.get('observationOnly'):
+            raise ValueError('browser_identity_principal_binding_required')
         timeout_seconds = _seconds(timeout_seconds, 30)
         evidence_root = _private_directory(self.root / 'state-attempts')
         evidence = evidence_root / (str(uuid.uuid4()) + '.json')
@@ -381,6 +494,8 @@ class BrowserRuntime:
         self._owned(session)
         if session._identity_lease is not None:
             session._identity_lease._current()
+        if session._context_lease is not None:
+            session._context_lease._current()
         if session.provider == "local":
             try:
                 with self.local.drive(session._local):
@@ -424,12 +539,27 @@ class BrowserRuntime:
                     self.last_cleanup['identity'] = session._identity_lease.release()
                 except Exception:
                     self.last_cleanup['identityRecoveryRequired'] = True
+            if session._context_lease is not None:
+                try:
+                    self.last_cleanup['contextLease'] = session._context_lease.release()
+                except Exception:
+                    self.last_cleanup['contextRecoveryRequired'] = True
             raise
         self.last_cleanup = result
-        if session._identity_lease is not None:
-            result['identity'] = session._identity_lease.release(
-                context_disposed=result.get('contextDisposed', result.get('complete')) is True,
-                uncertain=session._identity_failed or result.get('uncertainDispatches', False))
+        failures = []
+        for key, lease in [('identity', session._identity_lease), ('contextLease', session._context_lease)]:
+            if lease is not None:
+                try:
+                    result[key] = lease.release(
+                        context_disposed=result.get('contextDisposed', result.get('complete')) is True,
+                        attachment_detached=result.get('attachmentDetached') is True,
+                        uncertain=session._identity_failed or result.get('uncertainDispatches', False))
+                except BaseException as error:
+                    result[key] = {'released': False, 'recoveryRequired': True}
+                    result['complete'] = False
+                    failures.append(error)
+        if failures:
+            raise failures[0]
         return result
 
     def inspect(self, session):

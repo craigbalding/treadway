@@ -204,7 +204,7 @@ class BrowserIdentity:
             if not observed['journalComplete'] or len(matches) != 1:
                 raise BrowserStateIncomplete('browser_identity_run_evidence_incomplete')
             previous, = matches
-            if previous['cleanup'] is None or previous['cleanup']['contextDisposed'] is not True:
+            if previous['mode'] != 'fresh' or previous['cleanup'] is None or previous['cleanup']['contextDisposed'] is not True:
                 raise BrowserStateIncomplete('browser_identity_remote_fence_required')
             if previous['unresolvedEffects']:
                 raise BrowserStateIncomplete('browser_identity_effect_reconciliation_required')
@@ -290,13 +290,13 @@ class IdentityLease:
         self._validate(value)
         return value
 
-    def record_run(self, *, directory, project_id, run_id, actor):
+    def record_run(self, *, directory, project_id, run_id, actor, mode='snapshot-fresh'):
         """Durably bind this owner before the worker's allocation request."""
         self._current()
-        if (project_id != self.binding['projectId'] or any(not isinstance(value, str)
+        if (mode not in {'snapshot-fresh', 'borrowed'} or project_id != self.binding['projectId'] or any(not isinstance(value, str)
                 or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value) for value in (run_id, actor))):
             raise ValueError('explicit_browser_run_binding_required')
-        self._record['execution'] = {'provider': 'browserless', 'mode': 'snapshot-fresh',
+        self._record['execution'] = {'provider': 'browserless', 'mode': mode,
             'directory': str(Path(directory).absolute()), 'projectId': project_id, 'runId': run_id, 'actor': actor}
         _write(self.directory / 'identity.json', self._record)
 
@@ -322,13 +322,18 @@ class IdentityLease:
         _write(self.directory / 'identity.json', self._record)
         return {'saved': True, 'components': self.binding['components'], 'sourceGeneration': snapshot['sourceGeneration']}
 
-    def release(self, *, context_disposed=False, uncertain=True):
+    def release(self, *, context_disposed=False, attachment_detached=False, uncertain=True):
         if self._closed:
             return self.last_release
+        self.last_release = {'released': False, 'recoveryRequired': True}
         try:
             self._current()
-            self._record.update(state='released' if context_disposed is True and uncertain is False else 'recovery_required',
-                                cleanup={'contextDisposed': context_disposed is True, 'uncertain': uncertain is not False})
+            execution = self._record.get('execution')
+            borrowed = isinstance(execution, dict) and execution.get('mode') == 'borrowed'
+            finished = attachment_detached is True if borrowed else context_disposed is True
+            self._record.update(state='released' if finished and uncertain is False else 'recovery_required',
+                                cleanup={'contextDisposed': context_disposed is True,
+                                         'attachmentDetached': attachment_detached is True, 'uncertain': uncertain is not False})
             self._record.pop('owner', None)
             _write(self.directory / 'identity.json', self._record)
             self.last_release = {'released': True, 'recoveryRequired': self._record['state'] != 'released'}

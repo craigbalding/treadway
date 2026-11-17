@@ -74,9 +74,10 @@ def inspect_browser_run(directory, *, project_id, run_id):
                 raise ValueError()
             key = (event['actor'], event['generation'])
             if kind == 'acquisition_intent':
-                if key in actors or stopped:
+                mode = event.get('mode', 'fresh')
+                if key in actors or stopped or mode not in {'fresh', 'borrowed'}:
                     raise ValueError()
-                actors[key] = {'actor': key[0], 'generation': key[1], 'allocation': 'unknown',
+                actors[key] = {'actor': key[0], 'generation': key[1], 'mode': mode, 'allocation': 'unknown',
                                'contextAcquired': False, 'commands': {}, 'cleanup': None}
                 continue
             actor = actors[key]
@@ -89,7 +90,10 @@ def inspect_browser_run(directory, *, project_id, run_id):
             elif kind == 'cleanup_result':
                 if type(event.get('contextDisposed')) is not bool or type(event.get('connectionClosed')) is not bool:
                     raise ValueError()
+                if 'attachmentDetached' in event and type(event['attachmentDetached']) is not bool:
+                    raise ValueError()
                 actor['cleanup'] = {'contextDisposed': event['contextDisposed'], 'connectionClosed': event['connectionClosed'],
+                                    'attachmentDetached': event.get('attachmentDetached') is True,
                                     'remoteTermination': event.get('remoteTermination') == 'confirmed'}
             elif kind in {'command_dispatch', 'command_replied', 'command_unknown', 'application_reconciled'}:
                 reference = event['requestRef']

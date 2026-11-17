@@ -1,12 +1,15 @@
-# Browserless support: proposed design
+# Browserless support: design and implementation scope
 
 Let an operator supply their self-hosted or cloud Browserless URL and run existing
 Treadway flows remotely. Several projects and concurrent runs can use the same
 instance without sharing browser state or interfering with each other's cleanup.
 
-**Design only.** This proposal is based on the current implementation and
-Browserless's official documentation and public source. Remote support has not
-been implemented or tested against a live Browserless instance.
+Fresh sessions, selected saved state and explicit borrowed attachment are
+implemented. Fresh/state paths have passed checks against Browserless OSS
+2.63.1 as a local npm service; borrowed attachment has passed through a real
+Chromium relay. Reconnect and provider persistence remain separate work. See the
+[usage guide](REMOTE-BROWSERS.md) and [acceptance record](reference/BROWSERLESS-ACCEPTANCE.md)
+for current commands and the limits of those results.
 
 ## Operator experience
 
@@ -82,7 +85,8 @@ identity checks. Keep local browser APIs working. Validate the same flows throug
 an installed package and a pinned self-hosted Browserless deployment; verify cloud
 behavior separately before claiming it.
 
-Add saved-state reuse, borrowed sessions and reconnection as explicit capabilities.
+Saved-state reuse and borrowed sessions use explicit capabilities. Add reconnection
+under its own lifecycle contract.
 Persistent identities need exclusive access to the actual remote profile/session,
 including when different projects refer to it. Multi-host writers need a real
 shared coordination mechanism; a local lock cannot provide that guarantee.

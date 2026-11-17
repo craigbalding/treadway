@@ -1,7 +1,7 @@
 # Use a Browserless browser
 
-Select Browserless explicitly. Each acquired actor gets a fresh browser context
-and page. Its worker keeps the upstream connection alive across your operation
+Select Browserless explicitly. In the default fresh mode, each acquired actor
+gets a fresh browser context and page. Its worker keeps the upstream connection alive across your operation
 subprocesses; connecting again to the launch URL for every step would allocate
 another browser.
 
@@ -195,13 +195,74 @@ evidence copy still matches its recorded digest. `journalComplete` describes the
 record syntax, not application success or remote termination. This reader grants
 no new lease and performs no recovery, reconnect or replay.
 
+## Borrow an existing page
+
+Use borrowing when an operator supplies an existing browser context and exact
+page. Ownership stays with the operator. Release detaches Treadway's own CDP
+sessions; it does not close the page, dispose the context or erase its state.
+
+Configure a distinct entry point:
+
+```json
+{"browser":{"provider":"browserless","mode":"borrowed","binding":"shared-browser-service","attachment_env":"TREADWAY_BORROWED_ATTACHMENT"}}
+```
+
+The named environment variable contains private JSON with these exact fields:
+
+```json
+{"version":1,"endpoint":"wss://browser.example.invalid/devtools/browser/EXISTING","contextId":"EXACT_CONTEXT_ID","targetId":"EXACT_PAGE_ID","scope":"context","permission":"observe"}
+```
+
+Use the actual existing-browser endpoint supplied by your operator or provider.
+A launch endpoint is unsuitable: Treadway never discovers a browser by listing
+all sessions or falls back to a new page when the selected target is absent.
+The context must be explicit; borrowing the browser's default context is not
+supported. Context scope permits reading that context's complete cookie jar,
+including cookies belonging to its other pages. This is not a page-only grant.
+
+Use a `BrowserIdentity` and the same trusted state root for every cooperating
+writer, as above. Treadway leases both the named identity and the actual context
+resource. A second alias or project cannot bypass that context lease.
+
+```python
+from treadway.cdp import CdpSocket, CommandSession
+
+with BrowserRuntime.from_file("borrowed-browser.json", root=Path("artifacts/browsers")) as browsers:
+    observer = browsers.borrow("member", identity)  # Read-only by default.
+    with browsers.drive(observer):
+        socket = CdpSocket(connection=observer.connection(), observation_only=True)
+        try:
+            page = CommandSession(socket).command("DOM.getDocument", {"depth": 1})
+        finally:
+            socket.close()
+```
+
+Observation uses an allowlist of DOM, accessibility, cookie and screenshot
+queries. It cannot evaluate arbitrary JavaScript, navigate, enter data or modify
+cookies. Normal form/widget initialization therefore requires an explicit
+`permission="drive"` in both the operator's attachment and `borrow()`. An
+observation connection remains read-only even when its actor has drive permission.
+
+Borrowing does not verify the application's user. Driving flows must retain their
+actual-principal and resource checks inside dependent operations. To explicitly
+export selected state, supply the same `principal=` binding used for saved
+identities and call `save_identity()` from a drive-capable actor.
+
+Screenshots remain bounded observations. A hidden page may not supply a drawable
+surface, so retain an incomplete capture alongside other evidence. Treadway does
+not bring an operator's page to the front, change its viewport or retry the capture
+implicitly. Lost transport or unconfirmed detach leaves the resource
+recovery-required; snapshot recovery cannot establish a fence for a borrowed
+browser. Do not delete its state manifest to force reuse.
+
 ## Current capability boundaries
 
 Fresh contexts support existing page interactions, actual-user checks,
 context-scoped cookies, selected saved state and screenshots. Remote file
 transfers, origin clearing and global target monitoring are refused before
-dispatch. Borrowing, reconnect and provider persistence require their own explicit
-capabilities; they must not be inferred from a launch URL or a local profile flag.
+dispatch. Borrowing requires the explicit attachment above. Reconnect and provider
+persistence require their own capabilities; they must not be inferred from a launch
+URL or a local profile flag.
 
 The client session deadline cannot extend the provider's lifetime. Cleanup reports
 context disposal separately from provider process termination. Remote Chrome

@@ -3,12 +3,24 @@ import json
 import os
 from pathlib import Path
 import selectors
+import re
 import subprocess
 import time
 
 
+class CdpCommandError(RuntimeError):
+    """A safe transport code and dispatch observation, without provider text."""
+    def __init__(self, error):
+        code = error.get('code') if isinstance(error, dict) else None
+        self.code = code if isinstance(code, str) and re.fullmatch(r'(?:remote_|ipc_|cdp_)[a-z_]+', code) else 'cdp_command_incomplete'
+        self.outcome = 'not_dispatched' if isinstance(error, dict) and error.get('outcome') == 'not_dispatched' else 'unknown'
+        super().__init__(f'{self.code}; outcome {self.outcome}')
+
+
 class CdpSocket:
-    def __init__(self, *, host=None, port=None, target_id=None, connection=None, timeout_seconds=10, events=()):
+    def __init__(self, *, host=None, port=None, target_id=None, connection=None, timeout_seconds=10, events=(), observation_only=False):
+        if type(observation_only) is not bool or observation_only and (not isinstance(connection, dict) or connection.get('kind') != 'run-worker'):
+            raise ValueError('explicit_remote_observation_connection_required')
         if connection is not None and any(value is not None for value in (host, port, target_id)):
             raise ValueError("explicit_single_browser_connection_required")
         if connection is None and not target_id:
@@ -21,7 +33,8 @@ class CdpSocket:
         self.selector.register(self.process.stdout, selectors.EVENT_READ)
         try:
             self.send(json.dumps({"connection": connection or {"cdpHost": host, "cdpPort": port, "targetId": target_id},
-                                  "events": list(events), "commandTimeoutMs": int(timeout_seconds*1000)}))
+                                  "events": list(events), "commandTimeoutMs": int(timeout_seconds*1000),
+                                  "observationOnly": observation_only}))
             if json.loads(self.recv()).get("ready") is not True:
                 raise RuntimeError("cdp_bridge_setup_incomplete")
         except BaseException:
@@ -87,7 +100,7 @@ class CommandSession:
                 continue
             if reply.get("id") == command_id:
                 if reply.get("error"):
-                    raise RuntimeError("cdp_command_incomplete; outcome unknown")
+                    raise CdpCommandError(reply['error'])
                 return reply.get("result", {})
             if reply.get("method"):
                 if len(self.events) >= 1000:
