@@ -356,6 +356,24 @@ remote object ownership, and clean up only its objects. Browserless extension
 availability and file semantics must be verified separately; no shared filesystem
 assumption or direct-HTTP substitute for a browser action.
 
+## Reuse decisions
+
+Robot Framework composes flows; `ws` supplies the WebSocket client. Environment
+proxy selection uses [proxy-from-env 2.1.0](https://github.com/Rob--W/proxy-from-env/blob/v2.1.0/index.js),
+including case precedence, exclusions and `ALL_PROXY`. Node's HTTP/TLS APIs handle
+CONNECT and certificate-chain validation; OpenSSL's `X509Certificate.checkIP`
+checks numeric endpoint identities. Treadway adds ownership, deadlines, private
+receipts and the distinction between transport cleanup and application outcomes.
+
+The proxy-agent review retained the small Node adapter for concrete compatibility
+reasons. [https-proxy-agent 9.1.0](https://github.com/TooTallNate/proxy-agents/blob/https-proxy-agent%409.1.0/packages/https-proxy-agent/src/parse-proxy-response.ts)
+buffers CONNECT headers without a byte ceiling. [hpagent 1.2.0](https://github.com/delvedor/hpagent/blob/v1.2.0/index.js)
+builds CONNECT authorities without IPv6 brackets and discards the returned tunnel
+head. Adapting either version would require replacing those internals. The current
+adapter uses Node's parser with a 16 KiB header ceiling; local contracts check
+that ceiling, IPv6, exact peer identities and socket closure after cancellation.
+Reconsider these dependencies when their supported interfaces cover those gaps.
+
 ## Provider evidence and support claim
 
 Research used official documentation and public source only, on 2026-11-17; no provider
