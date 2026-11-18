@@ -4,7 +4,7 @@
 // controls only; there is no application workflow or completion evaluator here.
 const fs=require('node:fs');
 const diagnostics=require('./diagnostics.js');
-const {connectSession}=require('./connection.js');
+const {connectionFromInput,connectSession}=require('./connection.js');
 const {BrowserInteractions}=require('./interactions.js');
 const {Autocomplete,MultiSelect,DateRange,RichTextEditor,InlineEditor,PreparedEdit}=require('./widgets.js');
 function createWidget(ui,kind,profile){
@@ -55,7 +55,7 @@ async function main(){
   return diagnostics.withDiagnostics(input._diagnostics,()=>executeMain(input));
 }
 async function executeMain(input){
-  const connection=input.connection||input;
+  const connection=connectionFromInput(input);
   if((!connection.kind&&(!connection.cdpHost||!connection.cdpPort))||!connection.targetId||!input.origin||!input.recordPath)throw new Error('explicit_browser_origin_target_and_journal_required');
   createWidget(null,input.kind,input.profile); // Offline validation before connect.
   const record=entry=>{

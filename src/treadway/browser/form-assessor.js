@@ -3,7 +3,7 @@
 // Agent-assisted form mechanics with explicit inputs, actions and observations.
 const fs = require('node:fs');
 const path = require('node:path');
-const { connectSession } = require('./connection.js');
+const { connectionFromInput, connectSession } = require('./connection.js');
 const {choiceContext}=require('./choice-binding.js');
 const diagnostics=require('./diagnostics.js');
 const runtime = fs.readFileSync(path.join(__dirname, 'browser-form.function.js'), 'utf8');
@@ -342,7 +342,7 @@ async function main() {
   return require('./diagnostics.js').withDiagnostics(input._diagnostics,()=>executeMain(input));
 }
 async function executeMain(input) {
-  const connection=input.connection || input;
+  const connection=connectionFromInput(input);
   if(!connection.targetId || (!connection.kind && (!connection.cdpHost || !connection.cdpPort))) throw new Error('explicit_browser_host_port_and_target_required');
   if(!['inspect','locate','apply','attempt'].includes(input.operation))throw new Error('unknown_operation');
   if(['apply','attempt'].includes(input.operation) && !input.recordPath)throw new Error('mutation_recordPath_required');
