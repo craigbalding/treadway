@@ -127,7 +127,9 @@ def remote_workers_cleanup(output, *, project_id, exclude, deadline):
                     facts = actor['cleanup'] or {}
                     ownership_fact = {'fresh': 'contextDisposed', 'borrowed': 'attachmentDetached',
                                       'provider-session': 'profileReleased'}[actor['mode']]
-                    complete = complete and facts.get('connectionClosed') is True and facts.get(ownership_fact) is True
+                    fenced = (facts.get('providerSessionClosed') is True and facts.get('remoteTermination') is True
+                              if actor['provider'] == 'browserserve' else facts.get(ownership_fact) is True)
+                    complete = complete and facts.get('connectionClosed') is True and fenced
                 workers.append({'runId': directory.name, 'complete': bool(complete),
                     'unresolvedEffects': sum(len(actor['unresolvedEffects']) for actor in observed['actors'])})
             except (OSError, RuntimeError, ValueError, KeyError):

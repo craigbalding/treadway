@@ -172,3 +172,18 @@ def test_conflicting_or_invalid_offline_evidence_keeps_the_effect_unknown(tmp_pa
     (tmp_path/'offline-reconciliations'/'unexpected.json').write_text('{}')
     assert inspect(tmp_path)['offlineEvidenceComplete'] is False
     assert inspect(tmp_path)['actors'][0]['unresolvedEffects'] == ['client:1']
+
+
+@pytest.mark.parametrize('closed', [True, False, 'true'])
+def test_native_provider_cleanup_retains_and_type_checks_session_closure(tmp_path, closed):
+    journal(tmp_path, [record('acquisition_intent', provider='browserserve'),
+        record('cleanup_result', contextDisposed=True, connectionClosed=True,
+               providerSessionClosed=closed, providerCloseCode=1006), {'kind': 'worker_stopped'}])
+    observed = inspect(tmp_path)
+    assert observed['actors'][0]['provider'] == 'browserserve'
+    if type(closed) is bool:
+        assert observed['journalComplete']
+        assert observed['actors'][0]['cleanup']['providerSessionClosed'] is closed
+        assert observed['actors'][0]['cleanup']['providerCloseCode'] == 1006
+    else:
+        assert not observed['journalComplete']

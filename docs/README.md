@@ -13,7 +13,7 @@ available through `treadway guide TOPIC`.
 | Learn from working scenarios | [Examples](EXAMPLES.md) | `walkthrough` |
 | Reuse a browser operation | [Forms](forms.md), [widgets](REUSABLE-WIDGETS.md) | `recipes` |
 | Use distinct users or persistent profiles | [Sessions](BROWSER-SESSIONS.md) | `sessions` |
-| Use an operator-supplied Browserless service | [Remote browsers](REMOTE-BROWSERS.md) | `remote` |
+| Use remote browsers with live state recovery | [Browserserve (recommended)](BROWSERSERVE.md) · [Providers](REMOTE-BROWSERS.md) | `browserserve` · `remote` |
 | Read credentials from a configured source | [Credentials](CREDENTIALS.md) | `credentials` |
 | Sign in through Entra | [Entra](ENTRA.md) | `entra` |
 | Renew a session during repeat work | [Session recovery](SESSION-RECOVERY.md) | `recovery` |

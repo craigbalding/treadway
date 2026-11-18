@@ -7,8 +7,10 @@ const crypto = require('node:crypto');
 const readline = require('node:readline');
 const {performance} = require('node:perf_hooks');
 const {connectEndpoint, RemoteTransportError} = require('./remote-transport');
-const {makeCdpClient} = require('./cdp');
+const {makeCdpClient, createCommandIdSequence} = require('./cdp');
 const browserlessReconnect = require('./browserless-reconnect');
+const browserserve = require('./browserserve');
+const {closeOwnedBrowser} = require('./owned-browser');
 const providerProfile = require('./provider-profile');
 
 const MAX_LINE = 16 * 1024 * 1024;
@@ -27,6 +29,8 @@ function safeError(error, fallback = 'remote_command_incomplete') {
     ...(error.cleanup && ['fresh', 'borrowed', 'provider-session'].includes(error.cleanup.ownership) &&
       ['complete', 'contextDisposed', 'attachmentDetached', 'uncertainDispatches'].every(key => typeof error.cleanup[key] === 'boolean') ?
       {cleanup: {...Object.fromEntries(['ownership', 'complete', 'contextDisposed', 'attachmentDetached', 'uncertainDispatches'].map(key => [key, error.cleanup[key]])),
+        ...(typeof error.cleanup.providerSessionClosed === 'boolean' ? {providerSessionClosed: error.cleanup.providerSessionClosed} : {}),
+        ...(typeof error.cleanup.closeHandshakeObserved === 'boolean' ? {closeHandshakeObserved: error.cleanup.closeHandshakeObserved} : {}),
         ...(typeof error.cleanup.profileReleased === 'boolean' ? {profileReleased: error.cleanup.profileReleased} : {})}} : {})};
   return {code: fallback};
 }
@@ -88,30 +92,41 @@ class BrowserWorker {
     return actor;
   }
   async acquire({actor: name, endpoint, headers, proxyUrl, ca, budgetMs = this.acquireMs,
-    mode = 'fresh', borrowed, reconnect, profile} = {}) {
+    provider = 'browserless', mode = 'fresh', borrowed, reconnect, profile} = {}) {
     if (!this.started || this.closed || !identifier(name)) throw failure('remote_acquisition_invalid');
     if (!bounded(budgetMs, 1, this.acquireMs)) throw failure('remote_acquisition_deadline_invalid');
     if (this.actors.has(name)) throw failure('remote_actor_already_acquired');
+    if (!['browserless', 'browserserve'].includes(provider)) throw failure('remote_provider_unsupported');
+    if (provider === 'browserserve') {
+      if (mode !== 'fresh' || reconnect !== undefined) throw failure('remote_browserserve_mode_unsupported');
+      browserserve.validateEndpoint(endpoint);
+    }
     if (!['fresh', 'borrowed', 'provider-session'].includes(mode) || mode !== 'borrowed' && borrowed !== undefined ||
       mode !== 'provider-session' && profile !== undefined ||
       mode === 'borrowed' && (!borrowed || borrowed.scope !== 'context' || !['observe', 'drive'].includes(borrowed.permission) ||
         !['contextId', 'targetId'].every(key => typeof borrowed[key] === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(borrowed[key]))))
       throw failure('remote_borrowed_binding_required');
-    const reconnectPolicy = browserlessReconnect.validatePolicy(reconnect);
+    const reconnectPolicy = provider === 'browserserve' ? {} : browserlessReconnect.validatePolicy(reconnect);
     if (mode !== 'fresh' && reconnectPolicy) throw failure('remote_reconnect_mode_unsupported');
     const profileScope = mode === 'provider-session' ? providerProfile.authorize(profile, endpoint, this.projectId) : null;
     const actor = {name, generation: crypto.randomUUID(), targetRef: crypto.randomUUID(), contextRef: crypto.randomUUID(),
-      mode, permission: borrowed?.permission || 'drive', attachments: new Map(), attaching: 0,
+      provider, mode, permission: borrowed?.permission || 'drive', attachments: new Map(), attaching: 0,
       profileScope,
       reconnectPolicy, initialEndpoint: endpoint, transportOptions: {headers, proxyUrl, ca},
-      state: 'acquiring', receipts: new Map(), receiptBytes: 0, pending: new Set(), uncertain: false, abort: new AbortController()};
+      state: 'acquiring', receipts: new Map(), receiptBytes: 0, pending: new Set(), uncertain: false,
+      // Browserserve reserves IDs >= 2,000,000,000 for its pipe cleanup calls.
+      nextCommandId: createCommandIdSequence({maximum: provider === 'browserserve' ? 1999999999 : Number.MAX_SAFE_INTEGER}),
+      abort: new AbortController()};
     this.actors.set(name, actor);
     const deadline = performance.now() + budgetMs;
     const remaining = () => { const value = Math.ceil(deadline - performance.now()); if (value <= 0) throw failure('remote_acquisition_deadline'); return value; };
-    this.record({kind: 'acquisition_intent', actor: name, generation: actor.generation, mode});
+    this.record({kind: 'acquisition_intent', actor: name, generation: actor.generation, mode, provider});
     try {
-      actor.ws = await connectEndpoint(endpoint, {headers, proxyUrl, ca, fresh: mode === 'fresh', signal: actor.abort.signal, timeoutMs: remaining()});
-      actor.cdp = makeCdpClient(actor.ws, {commandTimeoutMs: this.acquireMs});
+      let upgradeHeaders;
+      actor.ws = await connectEndpoint(endpoint, {headers, proxyUrl, ca, fresh: mode === 'fresh', signal: actor.abort.signal,
+        timeoutMs: remaining(), onUpgrade: value => { upgradeHeaders = value; }});
+      if (provider === 'browserserve') { browserserve.tokenFrom(upgradeHeaders); actor.providerSessionOwned = true; }
+      actor.cdp = makeCdpClient(actor.ws, {commandTimeoutMs: this.acquireMs, nextCommandId: actor.nextCommandId});
       const command = (method, params = {}) => {
         if (this.closed || actor.state !== 'acquiring') throw failure('remote_acquisition_cancelled');
         return actor.cdp.send(method, params, {timeoutMs: remaining()});
@@ -138,10 +153,11 @@ class BrowserWorker {
       }
       actor.scopeConfirmed = true;
       actor.state = 'ready'; actor.deadline = performance.now() + this.sessionMs;
+      if (provider === 'browserserve') browserserve.capture(this, actor, upgradeHeaders);
       actor.timer = setTimeout(() => this.release(this.handle(actor)).catch(() => {}), this.sessionMs);
       this.watchTransport(actor, actor.ws);
       this.record({kind: 'acquisition_ready', actor: name, generation: actor.generation, targetId: actor.targetId});
-      return {connection: this.handle(actor), capabilities: {freshContext: mode === 'fresh', ownership: mode,
+      return {connection: this.handle(actor), capabilities: {provider, freshContext: mode === 'fresh', ownership: mode,
         observationOnly: actor.permission === 'observe', reconnect: !!reconnectPolicy, screenshots: true,
         cookieScope: 'context', originClear: false, targetMonitoring: false, fileTransfers: false}};
     } catch (error) {
@@ -161,8 +177,15 @@ class BrowserWorker {
       actor.client?.destroy();
     });
   }
-  prepareReconnect(handle, options) { return browserlessReconnect.prepare(this, this.lookup(handle), options); }
-  reconnect(handle, options) { return browserlessReconnect.reconnect(this, this.lookup(handle), options); }
+  prepareReconnect(handle, options) {
+    const actor = this.lookup(handle);
+    if (actor.provider === 'browserserve') throw failure('remote_browserserve_resume_already_available');
+    return browserlessReconnect.prepare(this, actor, options);
+  }
+  reconnect(handle, options) {
+    const actor = this.lookup(handle);
+    return (actor.provider === 'browserserve' ? browserserve : browserlessReconnect).reconnect(this, actor, options);
+  }
   async engineIdentity(handle) {
     const actor = this.lookup(handle);
     if (actor.state !== 'ready' || actor.client || actor.driveLease || actor.uncertain) throw failure('remote_actor_busy');
@@ -193,6 +216,8 @@ class BrowserWorker {
     if (actor.releasePromise) return actor.releasePromise;
     actor.releasePromise = (async () => {
       const priorState = actor.state; actor.state = 'releasing'; clearTimeout(actor.timer);
+      const cleanupDeadline = performance.now() + this.cleanupMs;
+      const remaining = () => Math.max(0, Math.ceil(cleanupDeadline - performance.now()));
       actor.uncertain = actor.uncertain || actor.pending.size > 0;
       actor.abort.abort();
       this.record({kind: 'cleanup_intent', actor: actor.name, generation: actor.generation});
@@ -205,19 +230,36 @@ class BrowserWorker {
         attachmentDetached = !attaching && actor.attaching === 0 && priorState !== 'transport_lost' && replies.every(value => value === true);
       } else if (actor.mode === 'provider-session') {
         if (actor.cdp && actor.profileScope && priorState !== 'transport_lost') {
-          profileReleased = await providerProfile.close(actor, this.cleanupMs);
+          profileReleased = remaining() > 0 && await providerProfile.close(actor, remaining());
           if (profileReleased) remoteTermination = 'confirmed';
         }
       } else if (actor.cdp && actor.contextId && actor.scopeConfirmed && priorState !== 'transport_lost') {
         try {
-          await actor.cdp.send('Target.disposeBrowserContext', {browserContextId: actor.contextId}, {timeoutMs: this.cleanupMs});
+          if (!remaining()) throw failure('remote_cleanup_deadline');
+          await actor.cdp.send('Target.disposeBrowserContext', {browserContextId: actor.contextId}, {timeoutMs: remaining()});
           contextDisposed = true;
         } catch { /* Keep the cleanup uncertainty separate from application outcome. */ }
       }
+      let providerSessionClosed, closeHandshakeObserved;
+      if (actor.provider === 'browserserve') {
+        if (actor.providerSessionOwned && actor.cdp && priorState !== 'transport_lost') {
+          providerSessionClosed = remaining() > 0 && await closeOwnedBrowser(actor, remaining());
+          if (providerSessionClosed) remoteTermination = 'confirmed';
+        } else {
+          closeHandshakeObserved = remaining() > 0 && await browserserve.disconnect(actor, remaining(), {graceful: true});
+          // A socket Close handshake does not establish dedicated ownership or
+          // an acknowledged browser shutdown when native acquisition failed.
+          providerSessionClosed = false;
+        }
+        if (actor.reconnectCapability) actor.reconnectCapability.usable = false;
+      }
       actor.cdp?.close(); actor.ws?.terminate(); actor.state = 'released';
       const result = {contextDisposed, attachmentDetached, ownership: actor.mode, connectionClosed: true, remoteTermination,
+        ...(actor.provider === 'browserserve' ? {providerSessionClosed, providerCloseCode: actor.providerCloseCode ?? null} : {}),
+        ...(closeHandshakeObserved !== undefined ? {closeHandshakeObserved} : {}),
         ...(actor.mode === 'provider-session' ? {profileReleased, profileRetained: profileReleased} : {}),
-        complete: actor.mode === 'provider-session' ? profileReleased : actor.mode === 'borrowed' ? attachmentDetached : contextDisposed,
+        complete: actor.mode === 'provider-session' ? profileReleased : actor.mode === 'borrowed' ? attachmentDetached :
+          actor.provider === 'browserserve' ? providerSessionClosed : contextDisposed,
         uncertainDispatches: actor.uncertain};
       this.record({kind: 'cleanup_result', actor: actor.name, generation: actor.generation, ...result});
       return result;

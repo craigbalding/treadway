@@ -146,7 +146,7 @@ class Context:
                 self.browser_call(actor, None, self.root, operation='session')
 
     def engine_identity(self):
-        if self.manager.provider != 'browserless':
+        if self.manager.provider == 'local':
             return None
         observations = {actor: self.manager.engine_identity(browser) for actor, browser in self.browsers.items()}
         private_json(self.root/'engine-observations.json', observations)
@@ -303,7 +303,7 @@ def implementation_digest(browser_config=None, engine_identity=None):
                for path in [*package.glob('*.py'), *(package/'browser').glob('*.js'), *(package/'browser').glob('package*.json')]}
     browser = None
     provider = configured_provider(browser_config)
-    if provider == 'browserless':
+    if provider != 'local':
         browser = {'configuration': hashlib.sha256(Path(browser_config).read_bytes()).hexdigest(),
                    'engineIdentity': engine_identity if engine_identity is not None else 'not_measured'}
     elif os.environ.get('CHROME_BIN'):

@@ -5,7 +5,7 @@ const crypto = require('node:crypto');
 const {once} = require('node:events');
 const {WebSocketServer} = require('ws');
 
-async function protocolFixture(t, {capacity = Infinity, contextSupport = true, sharedBrowser = false, reconnectSupport = false, profileSupport = false} = {}) {
+async function protocolFixture(t, {capacity = Infinity, contextSupport = true, sharedBrowser = false, reconnectSupport = false, profileSupport = false, browserserve = false} = {}) {
   const browsers = [], seen = [], writes = [], upgrades = [];
   const controls = {principal: 'member'};
   const profiles = new Map();
@@ -28,8 +28,21 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true, s
     res.writeHead(500); res.end('global discovery forbidden');
   });
   const wss = new WebSocketServer({noServer: true});
+  wss.on('headers', (headers, request) => {
+    if (browserserve && !controls.missingResumeHeader) {
+      request.resumeToken = request.resumeBrowser?.resumeToken || crypto.randomBytes(32).toString('hex');
+      headers.push('Browserserve-Resume-Token: ' + (controls.resumeHeader || request.resumeToken));
+    }
+  });
   server.on('upgrade', (req, socket, head) => {
     upgrades.push({url: req.url, authorization: req.headers.authorization});
+    if (browserserve && new URL(req.url, 'http://fixture.invalid').searchParams.has('resume')) {
+      const token = new URL(req.url, 'http://fixture.invalid').searchParams.get('resume');
+      req.resumeBrowser = browsers.find(browser => browser.resumeToken === token && browser.parked);
+      if (!req.resumeBrowser || controls.refuseResume) {
+        socket.end('HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n'); return;
+      }
+    }
     if (profileSupport && req.url.startsWith('/session/')) {
       const profile = profiles.get(new URL(req.url, 'http://fixture.invalid').pathname.slice('/session/'.length));
       if (!profile || profile.active) { socket.end(`HTTP/1.1 ${profile ? '429 Too Many Requests' : '404 Not Found'}\r\nContent-Length: 0\r\n\r\n`); return; }
@@ -39,15 +52,27 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true, s
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
   });
   wss.on('connection', (ws, request) => {
-    const browser = {open: true, contexts: sharedBrowser ? sharedContexts : new Map(),
-      targets: sharedBrowser ? sharedTargets : new Map(), sessions: new Map(), ws}; browsers.push(browser);
+    if (browserserve && controls.emptyCloseAcknowledgement) {
+      const close = ws.close.bind(ws);
+      ws.close = () => close();
+    }
+    const browser = request.resumeBrowser || {contexts: sharedBrowser ? sharedContexts : new Map(),
+      targets: sharedBrowser ? sharedTargets : new Map(), sessions: new Map()};
+    if (!request.resumeBrowser) browsers.push(browser);
+    Object.assign(browser, {open: true, parked: false, ws, resumeToken: request.resumeToken});
     if (request.profile) {
       browser.profile = request.profile; browser.profile.active = true;
       browser.contexts = new Map(); browser.targets = new Map();
       browser.defaultContextId = 'default-' + crypto.randomUUID();
       browser.contexts.set(browser.defaultContextId, browser.profile.state);
     }
-    ws.on('error', () => {}); ws.on('close', () => { browser.open = false; if (browser.profile) browser.profile.active = false; });
+    ws.on('error', () => {}); ws.on('close', code => {
+      browser.open = false; browser.closeCode = code;
+      browser.parked = browserserve && code !== 1000 && !browser.ended && !!browser.resumeToken && !controls.parkDelayMs;
+      if (browserserve && code !== 1000 && !browser.ended && controls.parkDelayMs)
+        setTimeout(() => { if (!browser.open) browser.parked = true; }, controls.parkDelayMs);
+      if (browser.profile) browser.profile.active = false;
+    });
     ws.on('message', raw => {
       const input = JSON.parse(raw); seen.push(input);
       const {id, method, params = {}, sessionId} = input;
@@ -94,12 +119,12 @@ async function protocolFixture(t, {capacity = Infinity, contextSupport = true, s
           context.value = params.expression.slice(5); writes.push(context.value); result = {result: {value: true}};
         } else if (params.expression === 'lose-reply') { context.value = 'committed'; writes.push('committed'); return; }
         else result = {result: {value: params.expression === 'read' ? context.value : true}};
-      } else if (method === 'Browser.close' && browser.profile) {
+      } else if (method === 'Browser.close' && (browser.profile || browserserve)) {
         if (controls.loseProfileCloseReply) { ws.close(); return; }
       } else if (method === 'Browser.close' || method.startsWith('Target.')) error = {code: -1, message: 'unexpected global operation'};
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({id, ...(sessionId ? {sessionId} : {}), ...(error ? {error} : {result})}),
         () => {
-          if (method === 'Browser.close' && browser.profile && !error) ws.close();
+          if (method === 'Browser.close' && (browser.profile || browserserve) && !error) { browser.ended = true; ws.close(1000); }
           if (method === 'Page.navigate') ws.send(JSON.stringify({method: 'Page.loadEventFired', sessionId, params: {timestamp: 1}}));
         });
     });

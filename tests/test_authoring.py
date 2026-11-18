@@ -64,7 +64,9 @@ def test_skill_can_be_exported_independently(tmp_path):
                                            ('recovery', 'Maintain authentication during repeated mutations'),
                                            ('diagnostics', 'Debug a flow and its machinery'),
                                            ('optimisation', "Optimise a flow for the operator's objective"),
-                                           ('remote', 'Use a Browserless browser')])
+                                           ('remote', 'Choose a remote browser'),
+                                           ('browserserve', 'Use Browserserve'),
+                                           ('browserless', 'Use a Browserless browser')])
 def test_installed_reference_is_accessible(capsys, topic, content):
     main(['guide', topic])
     assert content in capsys.readouterr().out

@@ -15,11 +15,21 @@ const diagnostics = require('./diagnostics.js');
 // CDP client wrapper (command/event multiplexer over raw WebSocket)
 // ---------------------------------------------------------------------------
 
-function makeCdpClient(ws, { commandTimeoutMs = 30000 } = {}) {
+function createCommandIdSequence({maximum = Number.MAX_SAFE_INTEGER} = {}) {
+  if (!Number.isSafeInteger(maximum) || maximum < 1) throw new Error('Positive CDP command ID maximum required');
+  let nextId = 1;
+  return () => {
+    if (!Number.isSafeInteger(nextId) || nextId > maximum) throw new Error('CDP command IDs exhausted; command not sent');
+    return nextId++;
+  };
+}
+
+function makeCdpClient(ws, { commandTimeoutMs = 30000, nextCommandId = createCommandIdSequence() } = {}) {
   if (!Number.isSafeInteger(commandTimeoutMs) || commandTimeoutMs <= 0) {
     throw new Error("commandTimeoutMs must be a positive integer");
   }
-  let nextId = 1;
+  if (typeof nextCommandId !== 'function') throw new Error('CDP command ID allocator required');
+  let lastId = 0;
   let closed = false;
   const pending = new Map();
   const eventListeners = new Map();
@@ -109,7 +119,12 @@ function makeCdpClient(ws, { commandTimeoutMs = 30000 } = {}) {
           reject(new Error("CDP socket is closed; command not sent"));
           return;
         }
-        const id = nextId++;
+        let id;
+        try {
+          id = nextCommandId();
+          if (!Number.isSafeInteger(id) || id <= lastId) throw new Error('CDP command ID must increase; command not sent');
+          lastId = id;
+        } catch (error) { reject(error); return; }
         const timer = setTimeout(() => {
           const error = new Error(`CDP ${method} timed out after ${timeoutMs}ms; command outcome unknown`);
           Object.assign(error, { code: "CDP_COMMAND_TIMEOUT", method, commandId: id, timeoutMs, outcome: "unknown" });
@@ -1105,4 +1120,4 @@ async function waitForNetworkIdle(cdp, timeoutMs = 5000, quietMs = 500) {
 // ---------------------------------------------------------------------------
 // CLI interface
 
-module.exports = { createCdpProxy, connect, initializeSession, listTabs, makeCdpClient, snapshot, screenshot, navigate, click, typeText, fillText, evalJS, findByText, findByRole, findByLabel, waitForNetworkIdle, waitForElement, waitForReady, waitForRoute, getToasts };
+module.exports = { createCdpProxy, connect, initializeSession, listTabs, makeCdpClient, createCommandIdSequence, snapshot, screenshot, navigate, click, typeText, fillText, evalJS, findByText, findByRole, findByLabel, waitForNetworkIdle, waitForElement, waitForReady, waitForRoute, getToasts };

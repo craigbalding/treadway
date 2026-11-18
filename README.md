@@ -71,6 +71,7 @@ Observe Approved Request    ${author}    ${approved}    ${reviewer}
 
 | Task | Guide |
 | --- | --- |
+| Use a remote browser, with live reconnect | [Browserserve (recommended)](docs/BROWSERSERVE.md) · [Other providers](docs/REMOTE-BROWSERS.md) |
 | Isolate users or reuse a browser profile | [Sessions](docs/BROWSER-SESSIONS.md) |
 | Use environment credentials, 1Password or optional vaults | [Credentials](docs/CREDENTIALS.md) |
 | Sign in through Entra, including supported TOTP setup | [Entra](docs/ENTRA.md) |

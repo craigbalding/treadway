@@ -1,17 +1,24 @@
 # Use remote browsers
 
-Use an operator-supplied Browserless endpoint while retaining Treadway's actor
-sessions, shared interactions and evidence. Choose the provider explicitly;
-fresh mode gives each project/run/actor its own browser context and page.
+**Browserserve is the recommended remote provider.** A lost connection can resume
+the same running browser, including its page, JavaScript memory, login and unsaved
+input. Treadway captures the resume capability automatically, isolates projects
+and actors, and preserves unanswered actions for investigation.
 
-Follow [Browserless setup and usage](../src/treadway/authoring/skill/treadway-flows/references/REMOTE-BROWSERS.md)
-for configuration, Python operations, generated examples and failure inspection.
-The same guide is installed as `treadway guide remote`.
+Start with [Browserserve setup and reconnect](../src/treadway/authoring/skill/treadway-flows/references/BROWSERSERVE.md),
+also available as `treadway guide browserserve`. The generated project includes
+`browser.browserserve.json`; the normal flows accept it with `--browser-config`.
+The service needs a route to the application, supplied separately from the
+runner's local observer route.
 
-The [design reference](reference/BROWSERLESS.md) describes the full ownership,
-recovery and optional-persistence contracts. The task guide covers fresh sessions,
-selected saved state, exact borrowed pages, explicit reconnect and Session API
-profiles, including their evidence requirements and current limits.
+[Choose a provider](../src/treadway/authoring/skill/treadway-flows/references/REMOTE-BROWSERS.md)
+compares the options. Existing Browserless deployments remain supported through
+[their setup guide](../src/treadway/authoring/skill/treadway-flows/references/BROWSERLESS.md).
+Choose the provider explicitly; a failed connection never switches services.
+Without remote configuration, the local walkthrough uses local Chrome.
 
-See [acceptance checks](reference/BROWSERLESS-ACCEPTANCE.md) for the tested OSS
-version, reproduction commands and the limits of the results.
+Use [Browserserve acceptance and deployment notes](reference/BROWSERSERVE-ACCEPTANCE.md)
+for the verified version, Docker configuration, checks and limits.
+The [Browserless reference](reference/BROWSERLESS.md) and
+[acceptance record](reference/BROWSERLESS-ACCEPTANCE.md) cover its optional
+reconnect and Session API contracts.

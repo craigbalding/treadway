@@ -188,17 +188,17 @@ def test_invalid_identity_acquisition_is_passive(tmp_path, changes):
     assert not list(tmp_path.iterdir())
 
 
-def failed_run(tmp_path, *, cleanup=True, unknown=False):
+def failed_run(tmp_path, *, cleanup=True, unknown=False, provider="browserless"):
     import json
     state = identity(tmp_path)
     lease = state.acquire('project-one')
     lease.save(snapshot(lease))
     directory = tmp_path/'run-evidence'
     directory.mkdir(mode=0o700)
-    lease.record_run(directory=directory, project_id='project-one', run_id='run-one', actor='member')
+    lease.record_run(directory=directory, project_id='project-one', run_id='run-one', actor='member', provider=provider)
     lease.record_generation('generation-one')
     events = [{'kind': 'worker_started', 'projectId': 'project-one', 'runId': 'run-one'},
-              {'kind': 'acquisition_intent', 'actor': 'member', 'generation': 'generation-one'}]
+              {'kind': 'acquisition_intent', 'actor': 'member', 'generation': 'generation-one', 'provider': provider}]
     if unknown:
         events.append({'kind': 'command_dispatch', 'actor': 'member', 'generation': 'generation-one',
                        'requestRef': 'client:1', 'method': 'Runtime.evaluate'})
@@ -212,8 +212,9 @@ def failed_run(tmp_path, *, cleanup=True, unknown=False):
     return state
 
 
-def test_recovery_is_explicit_bound_to_prior_run_and_preserves_snapshot(tmp_path):
-    state = failed_run(tmp_path)
+@pytest.mark.parametrize("provider", ["browserless", "browserserve"])
+def test_recovery_is_explicit_bound_to_prior_run_and_preserves_snapshot(tmp_path, provider):
+    state = failed_run(tmp_path, provider=provider)
     with pytest.raises(BrowserStateIncomplete, match='recovery_binding_differs'):
         state.recover('project-one', run_id='run-one', actor='member', generation='other-generation')
     assert state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')['recovered'] is True
@@ -235,8 +236,9 @@ def test_recovery_is_explicit_bound_to_prior_run_and_preserves_snapshot(tmp_path
     (None, False, 'remote_fence_required'), (False, False, 'remote_fence_required'),
     (True, True, 'effect_reconciliation_required'),
 ])
-def test_recovery_requires_actual_context_disposal_and_resolved_effects(tmp_path, cleanup, unknown, code):
-    state = failed_run(tmp_path, cleanup=cleanup, unknown=unknown)
+@pytest.mark.parametrize('provider', ['browserless', 'browserserve'])
+def test_recovery_requires_actual_context_disposal_and_resolved_effects(tmp_path, cleanup, unknown, code, provider):
+    state = failed_run(tmp_path, cleanup=cleanup, unknown=unknown, provider=provider)
     with pytest.raises(BrowserStateIncomplete, match=code):
         state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')
     with pytest.raises(BrowserStateIncomplete, match='recovery_required'):
@@ -256,6 +258,21 @@ def test_offline_application_reconciliation_cannot_replace_the_remote_cleanup_fe
         generation='generation-one', request_ref='client:1', journal_sha256=observed['journalSha256'],
         outcome='applied', evidence=source)
     if cleanup:
+        assert state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')['recovered'] is True
+    else:
+        with pytest.raises(BrowserStateIncomplete, match='remote_fence_required'):
+            state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')
+
+
+@pytest.mark.parametrize('provider,expected', [('browserserve', True), ('browserless', False)])
+def test_only_native_owned_browser_shutdown_is_an_alternate_snapshot_fence(tmp_path, provider, expected):
+    import json
+    state = failed_run(tmp_path, cleanup=False, provider=provider)
+    path = tmp_path/'run-evidence/events.jsonl'
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    events[-1].update(providerSessionClosed=True, remoteTermination='confirmed')
+    path.write_text(''.join(json.dumps(event)+'\n' for event in events))
+    if expected:
         assert state.recover('project-one', run_id='run-one', actor='member', generation='generation-one')['recovered'] is True
     else:
         with pytest.raises(BrowserStateIncomplete, match='remote_fence_required'):

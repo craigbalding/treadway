@@ -84,11 +84,12 @@ function verifyHost(host, certificate) {
 }
 
 function connectEndpoint(value, {timeoutMs = 15000, proxyUrl,
-  headers = {}, ca, fresh = true, signal, maxPayload = 16 * 1024 * 1024} = {}) {
+  headers = {}, ca, fresh = true, signal, onUpgrade, maxPayload = 16 * 1024 * 1024} = {}) {
   const {endpoint, parsed} = parseEndpoint(value, {fresh});
   headers = handshakeHeaders(headers);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 3600000 ||
-      !Number.isSafeInteger(maxPayload) || maxPayload < 1024 || maxPayload > 64 * 1024 * 1024) {
+      !Number.isSafeInteger(maxPayload) || maxPayload < 1024 || maxPayload > 64 * 1024 * 1024 ||
+      onUpgrade !== undefined && typeof onUpgrade !== 'function') {
     throw new RemoteTransportError('remote_limits_invalid', 'configuration');
   }
   const host = parsed.hostname.replace(/^\[|\]$/g, '');
@@ -119,6 +120,10 @@ function connectEndpoint(value, {timeoutMs = 15000, proxyUrl,
           options.agent = agent;
         }
         ws = new WebSocket(endpoint, options);
+        ws.once('upgrade', response => {
+          try { onUpgrade?.(response.headers); }
+          catch { fail('remote_upgrade_metadata_invalid'); }
+        });
         ws.on('error', () => fail('remote_handshake_failed'));
         ws.once('unexpected-response', (_request, response) => {
           const status = response.statusCode;

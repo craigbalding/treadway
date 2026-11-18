@@ -18,7 +18,7 @@ Choose the task guide for a working example, or the reference for exact contract
 | API | Use | Details |
 | --- | --- | --- |
 | `treadway.browsers.BrowserManager` | Own a Chrome process/profile and its exact target | [Lifecycle](../src/treadway/authoring/skill/treadway-flows/references/SESSION-REFERENCE.md#browser-lifecycle) |
-| `treadway.browser_runtime.BrowserRuntime`, `connection.js` | Select local Chrome or Browserless and retain each actor across subprocesses | [Remote browser setup and recovery](REMOTE-BROWSERS.md) |
+| `treadway.browser_runtime.BrowserRuntime`, `connection.js` | Select local Chrome, Browserserve (recommended remote) or Browserless and retain each actor across subprocesses | [Remote browser setup and recovery](REMOTE-BROWSERS.md) |
 | `treadway.sessions.HttpSession`, `actors.js` | Isolated cookies and same-session principal checks | [Session APIs](../src/treadway/authoring/skill/treadway-flows/references/SESSION-REFERENCE.md#actor-and-http-apis) |
 | `state.js`, `targets.js` | Origin storage and scoped target observation | [State and targets](../src/treadway/authoring/skill/treadway-flows/references/SESSION-REFERENCE.md#scoped-state-and-target-observation) |
 | `CredentialResolver`, `credentials_robot.CredentialLibrary` | Resolve named references and wrap Robot secrets | [Setup](CREDENTIALS.md) · [Providers](../src/treadway/authoring/skill/treadway-flows/references/CREDENTIAL-PROVIDERS.md) |

@@ -92,3 +92,15 @@ def test_invalid_owned_receipts_cannot_claim_cleanup(tmp_path, runner, change):
     if change == 'symlink':
         (directory.parent / 'linked-run').symlink_to(directory, target_is_directory=True)
     assert inspect(runner, tmp_path)['complete'] is False
+
+
+@pytest.mark.parametrize('closed', [True, False, None])
+def test_native_runner_requires_provider_session_closure_as_well_as_context_disposal(tmp_path, runner, closed):
+    directory = worker(tmp_path, 'actors', 'native-run',
+                       cleanup={'contextDisposed': True, 'connectionClosed': True, 'remoteTermination': 'confirmed',
+                                **({'providerSessionClosed': closed} if closed is not None else {})})
+    journal = directory/'events.jsonl'
+    events = [json.loads(line) for line in journal.read_text().splitlines()]
+    events[1]['provider'] = 'browserserve'
+    journal.write_text(''.join(json.dumps(event)+'\n' for event in events))
+    assert inspect(runner, tmp_path)['complete'] is (closed is True)

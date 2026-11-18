@@ -144,10 +144,20 @@ class BrowserRuntime:
                 raise ValueError("browser_configuration_invalid")
             config = dict(config["browser"])
         provider = config.get("provider", "local")
-        if provider not in {"local", "browserless"}:
+        if provider not in {"local", "browserless", "browserserve"}:
             raise ValueError("browser_provider_unsupported")
         if provider == 'local' and set(config) - {'provider', 'binding', 'acquire_seconds', 'session_seconds', 'cleanup_seconds'}:
             raise ValueError('local_browser_configuration_invalid')
+        if provider == "browserserve":
+            allowed = {'provider', 'binding', 'endpoint_env', 'headers_env', 'mode',
+                       'acquire_seconds', 'session_seconds', 'cleanup_seconds'}
+            if set(config) - allowed or config.get('mode', 'fresh') != 'fresh':
+                raise ValueError('remote_browserserve_mode_unsupported')
+            for key in ('endpoint_env', 'headers_env'):
+                value = config.get(key)
+                if (key == 'endpoint_env' or value is not None) and (not isinstance(value, str)
+                        or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', value)):
+                    raise ValueError('browser_secret_reference_invalid')
         if provider == "browserless":
             allowed = {"provider", "binding", "endpoint_env", "attachment_env", "session_api_env", "session_allowed_origins", "headers_env", "mode", "acquire_seconds", "session_seconds", "cleanup_seconds", "reconnect"}
             mode = config.get('mode', 'fresh')
@@ -163,8 +173,8 @@ class BrowserRuntime:
             if mode == 'provider-session':
                 from .browserless_sessions import configuration as validate_session_configuration
                 validate_session_configuration(config)
-        self.reconnect_policy = _reconnect_policy(config.get('reconnect'))
-        if self.reconnect_policy is not None and (provider != 'browserless' or config.get('mode', 'fresh') != 'fresh'):
+        self.reconnect_policy = {} if provider == 'browserserve' else _reconnect_policy(config.get('reconnect'))
+        if self.reconnect_policy is not None and (provider not in {'browserless', 'browserserve'} or config.get('mode', 'fresh') != 'fresh'):
             raise ValueError('remote_reconnect_mode_unsupported')
         self.configuration = config
         self.provider = provider
@@ -287,16 +297,16 @@ class BrowserRuntime:
                     raise
                 if _identity_lease is not None:
                     _identity_lease.record_run(directory=self.evidence, project_id=self.project_id,
-                                               run_id=self.run_id, actor=actor)
+                                               run_id=self.run_id, actor=actor, provider=self.provider)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise BrowserRuntimeIncomplete("remote_acquisition_deadline", evidence=self.evidence)
-                result = self._rpc(operation="acquire", arguments={"actor": actor, "endpoint": endpoint, "headers": headers,
-                    **({'reconnect': self.reconnect_policy} if self.reconnect_policy is not None else {}),
+                result = self._rpc(operation="acquire", arguments={"actor": actor, "provider": self.provider, "endpoint": endpoint, "headers": headers,
+                    **({'reconnect': self.reconnect_policy} if self.provider == 'browserless' and self.reconnect_policy is not None else {}),
                     "budgetMs": max(1, min(int(self.acquire_seconds * 1000), int(remaining * 1000)))},
                     timeout=remaining + self.cleanup_seconds + 1)
             connection = result["connection"]
-            session = RuntimeSession(actor, "browserless", connection["generation"], connection, capabilities=result["capabilities"])
+            session = RuntimeSession(actor, self.provider, connection["generation"], connection, capabilities=result["capabilities"])
         self.sessions[session.generation] = session
         return session
 
@@ -448,7 +458,7 @@ class BrowserRuntime:
             raise ValueError('path_safe_session_name_required')
         if any(session.name == actor for session in self.sessions.values()):
             raise BrowserRuntimeIncomplete('browser_actor_already_acquired')
-        if self.provider == 'browserless' and local_options:
+        if self.provider != 'local' and local_options:
             raise ValueError('local_launch_options_not_remote_capabilities')
         if type(restore) is not bool or local_options.get('persistent'):
             raise ValueError('browser_identity_fresh_context_required')
@@ -470,7 +480,7 @@ class BrowserRuntime:
             browser_attempted = True
             session = self.acquire(actor, _identity_lease=lease, **local_options)
             session._identity_lease, session._identity_principal = lease, principal
-            if self.provider == 'browserless':
+            if self.provider != 'local':
                 lease.record_generation(session.generation)
             if restore:
                 self._state_operation(session, 'restore', snapshot=snapshot,
@@ -485,7 +495,7 @@ class BrowserRuntime:
                     pass
             else:
                 try:
-                    if self.provider == 'browserless' and lease._record.get('execution') is None:
+                    if self.provider != 'local' and lease._record.get('execution') is None:
                         browser_attempted = False  # The durable intent precedes every allocation RPC.
                     lease.release(context_disposed=not browser_attempted, profile_released=not browser_attempted, uncertain=browser_attempted)
                 except Exception:
@@ -609,6 +619,8 @@ class BrowserRuntime:
                         context_disposed=result.get('contextDisposed', result.get('complete')) is True,
                         attachment_detached=result.get('attachmentDetached') is True,
                         profile_released=result.get('profileReleased') is True,
+                        provider_session_closed=(session.provider == 'browserserve' and result.get('providerSessionClosed') is True
+                                                 and result.get('remoteTermination') == 'confirmed' and result.get('connectionClosed') is True),
                         uncertain=session._identity_failed or result.get('uncertainDispatches', False))
                 except BaseException as error:
                     result[key] = {'released': False, 'recoveryRequired': True}
@@ -621,7 +633,7 @@ class BrowserRuntime:
     def inspect(self, session):
         """Observe worker receipts; this neither sends CDP nor resolves an effect."""
         self._owned(session)
-        if session.provider != 'browserless':
+        if session.provider == 'local':
             raise ValueError('remote_receipt_inspection_required')
         return self._rpc(operation='inspect', connection=session.connection())
 
@@ -632,7 +644,7 @@ class BrowserRuntime:
     def engine_identity(self, session):
         """Observe this existing remote connection's engine; never launch a probe browser."""
         self._owned(session)
-        if session.provider != 'browserless':
+        if session.provider == 'local':
             raise ValueError('remote_engine_observation_required')
         return self._rpc(operation='engine_identity', connection=session.connection())
 
@@ -671,8 +683,10 @@ class BrowserRuntime:
         the capability usable after worker death. The provider must support it.
         """
         self._owned(session)
-        if self.reconnect_policy is None or session.provider != 'browserless':
+        if self.reconnect_policy is None or session.provider == 'local':
             raise ValueError('remote_reconnect_not_enabled')
+        if session.provider == 'browserserve':
+            raise ValueError('remote_browserserve_resume_already_available')
         milliseconds = max(1, int(_seconds(timeout_seconds, 60) * 1000))
         token = None
         reference = self.configuration['reconnect'].get('auth_env')
@@ -691,7 +705,7 @@ class BrowserRuntime:
         quarantined even after the original browser is reached again.
         """
         self._owned(session)
-        if self.reconnect_policy is None or session.provider != 'browserless':
+        if self.reconnect_policy is None or session.provider == 'local':
             raise ValueError('remote_reconnect_not_enabled')
         timeout = _seconds(timeout_seconds, 60)
         principal = json.loads(json.dumps(principal, allow_nan=False))
@@ -718,7 +732,7 @@ class BrowserRuntime:
         the outcome; Treadway binds and retains its private evidence.
         """
         self._owned(session)
-        if session.provider != 'browserless' or outcome not in {'applied', 'not_applied', 'unknown'}:
+        if session.provider == 'local' or outcome not in {'applied', 'not_applied', 'unknown'}:
             raise ValueError('remote_reconciliation_evidence_required')
         from .browser_receipts import retain_reconciliation_evidence
         retained = retain_reconciliation_evidence(self.evidence, evidence)

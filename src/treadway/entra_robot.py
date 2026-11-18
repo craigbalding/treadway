@@ -127,7 +127,7 @@ class EntraLibrary:
                 receipt['runner'] = transport
             receipt['browser'] = {'name': session.name, 'generation': session.generation,
                                   'persistent': False if remote else session.persistent,
-                                  'provider': 'browserless' if remote else 'local'}
+                                  'provider': session.provider if remote else 'local'}
         except Exception as error:
             receipt = {'status': 'entra_setup_incomplete', 'outcome': 'unknown', 'phase': phase,
                        'code': phase + '_incomplete', 'errorType': type(error).__name__,

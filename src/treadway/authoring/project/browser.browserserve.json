@@ -1,0 +1,10 @@
+{
+  "browser": {
+    "provider": "browserserve",
+    "binding": "shared-browser-service",
+    "endpoint_env": "TREADWAY_BROWSERSERVE_URL",
+    "headers_env": "TREADWAY_BROWSERSERVE_HEADERS",
+    "acquire_seconds": 15,
+    "session_seconds": 300
+  }
+}

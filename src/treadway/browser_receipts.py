@@ -79,9 +79,10 @@ def inspect_browser_run(directory, *, project_id, run_id):
             key = (event['actor'], event['generation'])
             if kind == 'acquisition_intent':
                 mode = event.get('mode', 'fresh')
-                if key in actors or stopped or mode not in {'fresh', 'borrowed', 'provider-session'}:
+                provider = event.get('provider', 'browserless')
+                if key in actors or stopped or mode not in {'fresh', 'borrowed', 'provider-session'} or provider not in {'browserless', 'browserserve'}:
                     raise ValueError()
-                actors[key] = {'actor': key[0], 'generation': key[1], 'mode': mode, 'allocation': 'unknown',
+                actors[key] = {'actor': key[0], 'generation': key[1], 'provider': provider, 'mode': mode, 'allocation': 'unknown',
                                'contextAcquired': False, 'commands': {}, 'cleanup': None, 'reconnections': [], 'engineObservations': []}
                 continue
             actor = actors[key]
@@ -94,7 +95,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
                 if 'evidence' in event:
                     evidence = event['evidence']
                     if (not isinstance(evidence, dict) or not isinstance(evidence.get('reference'), str)
-                            or not re.fullmatch(r'reconnect-(?:provider|observation)-[0-9a-f-]{36}\.json', evidence['reference'])
+                            or not re.fullmatch(r'reconnect-(?:provider|observation|native)-[0-9a-f-]{36}\.json', evidence['reference'])
                             or not isinstance(evidence.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', evidence['sha256'])):
                         raise ValueError()
                     try:
@@ -126,9 +127,19 @@ def inspect_browser_run(directory, *, project_id, run_id):
                     raise ValueError()
                 if 'profileReleased' in event and type(event['profileReleased']) is not bool:
                     raise ValueError()
+                if 'providerSessionClosed' in event and type(event['providerSessionClosed']) is not bool:
+                    raise ValueError()
+                if 'closeHandshakeObserved' in event and type(event['closeHandshakeObserved']) is not bool:
+                    raise ValueError()
+                if event.get('providerCloseCode') is not None and (type(event['providerCloseCode']) is not int
+                        or not 1000 <= event['providerCloseCode'] <= 4999):
+                    raise ValueError()
                 actor['cleanup'] = {'contextDisposed': event['contextDisposed'], 'connectionClosed': event['connectionClosed'],
                                     'attachmentDetached': event.get('attachmentDetached') is True,
                                     **({'profileReleased': event['profileReleased']} if 'profileReleased' in event else {}),
+                                    **({'providerSessionClosed': event['providerSessionClosed']} if 'providerSessionClosed' in event else {}),
+                                    **({'closeHandshakeObserved': event['closeHandshakeObserved']} if 'closeHandshakeObserved' in event else {}),
+                                    **({'providerCloseCode': event['providerCloseCode']} if 'providerCloseCode' in event else {}),
                                     'remoteTermination': event.get('remoteTermination') == 'confirmed'}
             elif kind in {'command_dispatch', 'command_replied', 'command_unknown', 'application_reconciled'}:
                 reference = event['requestRef']

@@ -183,7 +183,7 @@ class BrowserIdentity:
     def recover(self, project_id, *, run_id, actor, generation):
         """Re-enable a saved snapshot after evidence-bound, scoped cleanup.
 
-        Reads only the previously recorded Browserless run. It never contacts a
+        Reads only the previously recorded remote browser run. It never contacts a
         provider, kills a process, steals a live lease or resumes an old target.
         Unconfirmed cleanup and unresolved effects still require their owners.
         """
@@ -193,7 +193,7 @@ class BrowserIdentity:
         lease = self._acquire(project_id, recovery=True)
         try:
             execution = lease._record.get('execution')
-            if (not isinstance(execution, dict) or execution.get('provider') != 'browserless'
+            if (not isinstance(execution, dict) or execution.get('provider') not in {'browserless', 'browserserve'}
                     or execution.get('mode') != 'snapshot-fresh' or execution.get('projectId') != project_id
                     or execution.get('runId') != run_id or execution.get('actor') != actor
                     or not isinstance(execution.get('directory'), str) or not Path(execution['directory']).is_absolute()
@@ -205,7 +205,11 @@ class BrowserIdentity:
             if not observed['journalComplete'] or len(matches) != 1:
                 raise BrowserStateIncomplete('browser_identity_run_evidence_incomplete')
             previous, = matches
-            if previous['mode'] != 'fresh' or previous['cleanup'] is None or previous['cleanup']['contextDisposed'] is not True:
+            cleanup = previous['cleanup'] or {}
+            native_fence = (previous['provider'] == 'browserserve' and cleanup.get('providerSessionClosed') is True
+                            and cleanup.get('remoteTermination') is True and cleanup.get('connectionClosed') is True)
+            if (previous['provider'] != execution['provider'] or previous['mode'] != 'fresh'
+                    or not (cleanup.get('contextDisposed') is True or native_fence)):
                 raise BrowserStateIncomplete('browser_identity_remote_fence_required')
             if previous['unresolvedEffects']:
                 raise BrowserStateIncomplete('browser_identity_effect_reconciliation_required')
@@ -216,7 +220,8 @@ class BrowserIdentity:
             _write(path, proof)
             lease._record['lastRecovery'] = {'file': path.name, 'sha256': hashlib.sha256(_read(path)).hexdigest()}
             _write(lease.directory / 'identity.json', lease._record)
-            lease.release(context_disposed=True, uncertain=False)
+            lease.release(context_disposed=cleanup.get('contextDisposed') is True,
+                          provider_session_closed=native_fence, uncertain=False)
             return {'recovered': True, 'previousGeneration': generation, 'previousGenerationResumed': False}
         except BaseException:
             try:
@@ -308,14 +313,15 @@ class IdentityLease:
         self._validate(value)
         return value
 
-    def record_run(self, *, directory, project_id, run_id, actor, mode='snapshot-fresh'):
+    def record_run(self, *, directory, project_id, run_id, actor, mode='snapshot-fresh', provider='browserless'):
         """Durably bind this owner before the worker's allocation request."""
         self._current()
-        if (mode not in {'snapshot-fresh', 'borrowed', 'provider-session'} or project_id != self.binding['projectId'] or any(not isinstance(value, str)
+        if (provider not in {'browserless', 'browserserve'} or provider == 'browserserve' and mode != 'snapshot-fresh'
+                or mode not in {'snapshot-fresh', 'borrowed', 'provider-session'} or project_id != self.binding['projectId'] or any(not isinstance(value, str)
                 or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', value) for value in (run_id, actor))):
             raise ValueError('explicit_browser_run_binding_required')
         self.require_storage_kind('provider-session' if mode == 'provider-session' else 'snapshot')
-        self._record['execution'] = {'provider': 'browserless', 'mode': mode,
+        self._record['execution'] = {'provider': provider, 'mode': mode,
             'directory': str(Path(directory).absolute()), 'projectId': project_id, 'runId': run_id, 'actor': actor}
         _write(self.directory / 'identity.json', self._record)
 
@@ -342,7 +348,8 @@ class IdentityLease:
         _write(self.directory / 'identity.json', self._record)
         return {'saved': True, 'components': self.binding['components'], 'sourceGeneration': snapshot['sourceGeneration']}
 
-    def release(self, *, context_disposed=False, attachment_detached=False, profile_released=False, uncertain=True):
+    def release(self, *, context_disposed=False, attachment_detached=False, profile_released=False,
+                provider_session_closed=False, uncertain=True):
         if self._closed:
             return self.last_release
         self.last_release = {'released': False, 'recoveryRequired': True}
@@ -351,12 +358,16 @@ class IdentityLease:
             execution = self._record.get('execution')
             borrowed = isinstance(execution, dict) and execution.get('mode') == 'borrowed'
             provider_profile = self._record.get('storageKind') == 'provider-session'
-            finished = profile_released is True if provider_profile else attachment_detached is True if borrowed else context_disposed is True
+            native = isinstance(execution, dict) and execution.get('provider') == 'browserserve' and execution.get('mode') == 'snapshot-fresh'
+            finished = profile_released is True if provider_profile else attachment_detached is True if borrowed else (
+                context_disposed is True or native and provider_session_closed is True)
             self._record.update(state='released' if finished and uncertain is False else 'recovery_required',
                                 cleanup={'contextDisposed': context_disposed is True,
                                          'attachmentDetached': attachment_detached is True, 'uncertain': uncertain is not False})
             if provider_profile:
                 self._record['cleanup']['profileReleased'] = profile_released is True
+            if native:
+                self._record['cleanup']['providerSessionClosed'] = provider_session_closed is True
             self._record.pop('owner', None)
             _write(self.directory / 'identity.json', self._record)
             self.last_release = {'released': True, 'recoveryRequired': self._record['state'] != 'released'}

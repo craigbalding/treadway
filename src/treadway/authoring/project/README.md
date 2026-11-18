@@ -51,3 +51,13 @@ Run `check`, then the affected suite after each change.
 
 The original workboard is unauthenticated. Collaboration routes use synthetic
 accounts named in `identities.json`; keep real credentials in private sources.
+
+## Use a remote browser
+
+For new remote deployments, use the supplied `browser.browserserve.json` and
+`python run.py test --browser-config browser.browserserve.json`. Supply the
+service endpoint/headers through the named environment references and add
+`--fixture-host`, `--fixture-port` and `--app-url` for the remote browser's route
+to this disposable app. See `treadway guide browserserve` for setup and explicit
+reconnect, or `treadway guide remote` for provider choices. The local check stays
+offline; a service must be selected explicitly.

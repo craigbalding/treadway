@@ -92,6 +92,43 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  browserserve-service:
+    name: Browserserve native reconnect
+    needs: contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Fetch pinned service and upstream sandbox profile
+        run: |
+          docker pull ghcr.io/browser-gateway/browserserve@sha256:c533e7b400e52802d08e53a6fa61f38b1f839d34cc0df10a3f56d3c48ae7251b
+          python -c 'import os,pathlib,urllib.request; pathlib.Path(os.environ["RUNNER_TEMP"], "browserserve-seccomp.json").write_bytes(urllib.request.urlopen("https://raw.githubusercontent.com/browser-gateway/browserserve/132d98ada8481abd7014b6c8cc9f1779584c5586/docker/seccomp.json",timeout=30).read())'
+      - name: Verify native provider against its shipped Chrome
+        run: |
+          python -m pip install '.[robot]'
+          browser_root=$(python -c 'from pathlib import Path; import treadway; print(Path(treadway.__file__).parent / "browser")')
+          npm ci --ignore-scripts --prefix "$browser_root"
+          python scripts/test_browserserve_docker.py --seccomp "$RUNNER_TEMP/browserserve-seccomp.json" \
+            --browser-root "$browser_root" --python-executable "$(command -v python)"
+      - name: Retain synthetic service evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browserserve-native-evidence
+          path: artifacts/browserserve-docker/*/ci-summary.json
+          if-no-files-found: warn
+          retention-days: 7
+
   distribution:
     name: Distribution and installed walkthroughs
     if: github.event_name != 'pull_request'
@@ -167,7 +204,7 @@ jobs:
   release:
     name: Publish GitHub release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [contracts, browser-fast, distribution]
+    needs: [contracts, browser-fast, browserserve-service, distribution]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
