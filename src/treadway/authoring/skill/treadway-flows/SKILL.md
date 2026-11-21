@@ -54,6 +54,9 @@ Each guide links to its API details. Do not load every reference for an ordinary
   stable operation IDs; neither renewal nor a transport change permits replay.
 - Separate actor profiles/jars. Reuse a valid login without deleting state to
   trigger export; required cookie export applies to fresh and reused sessions.
+- Stop browsers through their owned session handle and expected generation.
+  Broad process-name kills can terminate the invoking shell or another session;
+  use the [session lifecycle](references/SESSIONS.md#start-and-stop-a-browser).
 - Keep Chromium's sandbox enabled, including under gVisor. Inspect Chrome's log
   before changing launch settings. Imports, constructors and dry-runs stay passive.
 - Keep secrets and raw captures private. Shared fixtures use generic names and
