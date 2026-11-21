@@ -64,6 +64,26 @@ default `persistent=False`, startup uses a fresh profile. A restart returns a ne
 generation; old handles cannot be reused. Choose a different name for a different
 participant, including a second anonymous user.
 
+## Make compared fixtures distinguishable
+
+Give compared users, records and before/after states distinct valid synthetic content and
+recognisable markers. This applies to document bodies, text fields, titles, filenames and
+structured records as well as images. A different object ID alone does not make identical
+content distinguishable. Preserve comparability; deliberately identical data is an explicit
+test condition with its purpose and observation limits recorded.
+
+Generate each default image fixture for its associated synthetic user or record. Include a
+large readable alias/fixture label plus a different shape/pattern or colour scheme, such as
+`ACTOR A / PHOTO 01` and `ACTOR B / PHOTO 02`. Keep text/shape recognisable at the actual display
+size or crop; colour, a filename or a digest alone is insufficient for visual evidence. Bind
+the label to the actual principal and saved object IDs in retained setup/evidence. Markers
+must not contain credentials or real personal data.
+
+Verify each owner's successful baseline and the marker in the persisted representation before
+using it for cross-identity or state comparisons. Account for legitimate rendering/transforms.
+An existing identical fixture is a limitation, not permission to reupload, overwrite a saved
+record or replay an uncertain action merely to improve its evidence.
+
 ## A profile label is not a principal
 
 Before acting, check the application's current user through the session that
