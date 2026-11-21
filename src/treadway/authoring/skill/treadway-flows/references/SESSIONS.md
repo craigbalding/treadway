@@ -40,6 +40,25 @@ can run concurrently. `stop` closes the owned browser and retains its profile
 and logs. See [lifecycle options](SESSION-REFERENCE.md#browser-lifecycle) for
 startup budgets, reattachment, exact targets and Chrome switches.
 
+For browser cleanup, use the owning manager's `stop(session)` operation. Do not
+replace it with `pkill -f` or a broad Chromium/name-pattern kill: the pattern can
+match the invoking shell or workflow wrapper, and another session may share it.
+If the handle is no longer in memory, read the recorded handle and compare its
+generation with the one retained for the session you intend to stop:
+
+```python
+session = manager.recorded("reviewer")
+if session.generation != expected_generation:  # from the retained browser receipt
+    raise RuntimeError("browser_generation_differs")
+manager.stop(session)
+```
+
+`recorded` also supports shutdown after the page closes. `stop` verifies process
+identity before signalling, so a reused PID is not treated as the old browser.
+If ownership cannot be established, retain the failure and resolve it rather than
+substituting a broader kill. A process exit or freed session lock does not settle
+an application effect; reconcile any uncertain submission before another attempt.
+
 With `persistent=True`, restarting `reviewer` reuses that named profile. With the
 default `persistent=False`, startup uses a fresh profile. A restart returns a new
 generation; old handles cannot be reused. Choose a different name for a different
