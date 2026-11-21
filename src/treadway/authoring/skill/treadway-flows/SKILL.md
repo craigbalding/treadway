@@ -50,6 +50,9 @@ Each guide links to its API details. Do not load every reference for an ordinary
   Poll observations, never mutations. Do not repair deliberate negative inputs.
 - Keep intended values, readback, dispatch, response and saved-state evidence
   separate. A click, HTTP 200 or Robot PASS cannot prove an omitted effect.
+- Use distinguishable synthetic content and visible identity markers for users,
+  records and states a flow must compare; generate separately labelled image
+  fixtures. See [fixture identity](references/SESSIONS.md#make-compared-fixtures-distinguishable).
 - Preserve uncertain writes until the application observer reconciles them. Keep
   stable operation IDs; neither renewal nor a transport change permits replay.
 - Separate actor profiles/jars. Reuse a valid login without deleting state to
