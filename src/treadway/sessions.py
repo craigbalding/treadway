@@ -22,6 +22,7 @@ import uuid
 from . import diagnostics as diag
 
 _read_only = ContextVar('treadway_http_observation_only', default=False)
+_HTTP_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"})
 
 
 class HttpFailure(RuntimeError):
@@ -224,7 +225,7 @@ class HttpSession:
 
     def _request_observed(self, path, method, body, timeout_seconds, *, headers=None, phase="request"):
         url = self._url(path)
-        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"} or not 0 < timeout_seconds <= 60:
+        if method not in _HTTP_METHODS or not 0 < timeout_seconds <= 60:
             raise ValueError("bounded_explicit_request_required")
         try:
             data = encode_body(body)
@@ -263,7 +264,9 @@ class HttpSession:
                         complete = False
                         break
                 declared = response.headers.get("Content-Length")
-                if declared is not None and (not declared.isdecimal() or len(content) != int(declared)):
+                # HEAD has no response body; its Content-Length describes the
+                # corresponding GET representation, not bytes we must receive.
+                if method != "HEAD" and declared is not None and (not declared.isdecimal() or len(content) != int(declared)):
                     complete = False
                 return HttpObservation(self.actor, self.session_id, response.code,
                                        complete and len(content) <= self.max_body_bytes, bytes(content[:self.max_body_bytes]),
@@ -344,7 +347,7 @@ class HttpSession:
         """
         validate_expected(expected)
         self._url(path)
-        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"} or not 0 < timeout_seconds <= 60:
+        if method not in _HTTP_METHODS or not 0 < timeout_seconds <= 60:
             raise ValueError("bounded_explicit_request_required")
         try:
             encode_body(body)
