@@ -13,7 +13,7 @@ const browserserve = require('./browserserve');
 const {closeOwnedBrowser} = require('./owned-browser');
 const providerProfile = require('./provider-profile');
 
-const MAX_LINE = 16 * 1024 * 1024;
+const {MAX_BROWSER_MESSAGE_BYTES: MAX_LINE} = require('./limits.js');
 const READ_ONLY = new Set(['Page.enable', 'Page.getFrameTree', 'Page.getLayoutMetrics', 'Page.captureScreenshot',
   'DOM.getDocument', 'DOM.describeNode', 'DOM.getOuterHTML', 'DOM.querySelector', 'DOM.querySelectorAll',
   'Accessibility.getFullAXTree', 'Network.getCookies', 'Storage.getCookies']);
@@ -435,7 +435,7 @@ class BrowserWorker {
       this.record({kind: 'command_unknown', actor: actor.name, generation: actor.generation, requestRef: key});
     } finally { actor.pending.delete(key); receipt.pending = false; }
     const bytes = Buffer.byteLength(JSON.stringify(reply));
-    if (actor.receiptBytes + bytes <= 32 * 1024 * 1024) { receipt.reply = reply; actor.receiptBytes += bytes; }
+    if (actor.receiptBytes + bytes <= MAX_LINE) { receipt.reply = reply; actor.receiptBytes += bytes; }
     write(reply);
   }
   async shutdown() {

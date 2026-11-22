@@ -46,6 +46,18 @@ def test_complete_scoped_state_survives_release_and_new_generation(tmp_path):
     assert all(path.stat().st_mode & 0o077 == 0 for path in state.root.rglob('*'))
 
 
+def test_combined_storage_snapshot_survives_disk_roundtrip_above_old_limit(tmp_path):
+    lease = identity(tmp_path).acquire('project-one')
+    saved = snapshot(lease, storage={'https://app.example.invalid': {
+        'localStorage': [['fixture', 'x' * (4500 * 1024)]],
+        'sessionStorage': [['fixture', 'y' * (4500 * 1024)]]}})
+    try:
+        assert lease.save(saved)['saved'] is True
+        assert lease.read() == saved
+    finally:
+        lease.release(context_disposed=True, uncertain=False)
+
+
 @pytest.mark.parametrize('changes', [
     {'projectId': 'project-two'}, {'application': 'another-application'}, {'identityRef': 'reviewer'},
     {'providerBinding': 'another-provider'}, {'origins': ['https://other.example.invalid']}, {'components': ['localStorage']},

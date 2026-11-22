@@ -19,6 +19,16 @@ async function owner(t, projectId = 'project-a', runId = 'run-one', options = {}
   return worker;
 }
 
+test('default remote and IPC budgets carry a large command and reply without replay',async t=>{
+  const service=await protocolFixture(t),worker=await owner(t);
+  const {connection}=await worker.acquire({actor:'member',endpoint:service.endpoint});
+  const browser=await connectSession(connection);t.after(()=>browser.close());
+  const value='x'.repeat(20*1024*1024);
+  assert.equal(await browser.eval('save:'+value),true);
+  assert.equal(await browser.eval('read'),value);
+  assert.equal(service.writes.length,1);
+});
+
 test('engine observation uses the actor connection and retains private provenance without another allocation', async t => {
   const service = await protocolFixture(t);
   const worker = await owner(t);

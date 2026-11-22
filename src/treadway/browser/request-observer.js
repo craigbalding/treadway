@@ -1,10 +1,11 @@
 'use strict';
+const {DEFAULT_RESPONSE_BODY_BYTES} = require('./limits.js');
 const {waitForObservation,requireRecord}=require('./interactions.js');
 const reason=error=>error?.code==='CDP_COMMAND_TIMEOUT'?'command_timeout_outcome_unknown':String(error?.message||error).split('\n')[0].slice(0,200);
 const publicURL=value=>{try{const url=new URL(value);return url.origin+url.pathname;}catch{return null;}};
 class RequestObserver{
-  constructor(cdp,{match,record,maxRequests=100,maxBodyBytes=4*1024*1024}={}){
-    if(typeof match!=='function'||!Number.isInteger(maxRequests)||maxRequests<1||maxRequests>1000||!Number.isInteger(maxBodyBytes)||maxBodyBytes<1||maxBodyBytes>16*1024*1024)throw new Error('bounded_request_observer_configuration_required');
+  constructor(cdp,{match,record,maxRequests=1000,maxBodyBytes=DEFAULT_RESPONSE_BODY_BYTES}={}){
+    if(typeof match!=='function'||!Number.isInteger(maxRequests)||maxRequests<1||maxRequests>10000||!Number.isInteger(maxBodyBytes)||maxBodyBytes<1||maxBodyBytes>256*1024*1024)throw new Error('bounded_request_observer_configuration_required');
     this.cdp=cdp;this.match=match;this.record=record;this.maxRequests=maxRequests;this.maxBodyBytes=maxBodyBytes;
     this.requests=new Map();this.urls=new Map();this.listeners=[];this.started=false;this.active=false;this.captureError=null;this.overflow=false;
   }

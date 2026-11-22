@@ -26,6 +26,25 @@ Run `python run.py check` first (15-second budget, no app/browser), then
 `CHROME_BIN=/path/to/chromium python run.py test --suite YOUR.robot` (60-second
 budget). Keep the first failure and add a focused regression before fixing it.
 
+Those short budgets exercise the scaffold's local smoke tests. Set a real
+journey's overall deadline for the work it must complete, including authentication
+and human checkpoints; do not copy a smoke-test deadline into a longer workflow.
+
+## Use practical defaults
+
+Use the SDK's generous response, capture and transfer defaults for ordinary pages,
+bundles and files. Do not invent small byte caps, request-count caps or short
+timeouts for artificial precision or general caution. A smaller override needs a
+concrete test condition or an actual resource constraint; document that reason.
+Deliberate limit tests can use small fixtures and explicit limits without making
+those limits examples for general workflows. See the current defaults in the
+[session reference](references/SESSION-REFERENCE.md#payload-and-observation-budgets).
+
+If an observation exceeds a tool budget, retain the partial evidence and report
+the exact limit and operation as a tooling limitation. Do not call it application
+rejection or a failed security control. Reconcile dispatched or uncertain actions
+before any retry; raising a budget does not authorise replaying a mutation.
+
 ## Read only the guide needed for the task
 
 | Task | Guide |

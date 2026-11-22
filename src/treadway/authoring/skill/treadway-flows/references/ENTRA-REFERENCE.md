@@ -166,7 +166,7 @@ probe result does not establish expiry. Safe status, completeness, truncation
 and timing metadata remain available when verification fails.
 
 Set additional exact HTTPS `application.idp_origins` when the tenant needs them.
-`application.principal_timeout_ms` defaults to 5,000 and can be set up to 60,000.
+`application.principal_timeout_ms` defaults to 30,000 and can be set up to 60,000.
 The JavaScript equivalent is `principal.timeoutMs`.
 
 Owned endpoint verification defaults to two seconds. Set

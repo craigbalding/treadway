@@ -45,6 +45,23 @@ test('truncated body preserves status and cannot establish complete observation'
   const result=await f.observer.run(async()=>{f.request();f.response();f.finish();},{windowMs:100,readBody:true});
   assert.equal(result.complete,false);assert.equal(result.requests[0].status,201);assert.equal(result.requests[0].bodyTruncated,true);
 });
+test('default observer retains a large bundle and a normal busy-page request set',async()=>{
+  const f=fixture(),body='x'.repeat(6*1024*1024);
+  f.cdp.send=async()=>({body,base64Encoded:false});
+  const result=await f.observer.run(async()=>{
+    for(let i=0;i<150;i++) {
+      const requestId='request-'+i;
+      f.cdp.emit('Network.requestWillBeSent',{requestId,request:{method:'POST',url:'http://synthetic.invalid/items'}});
+      f.cdp.emit('Network.responseReceived',{requestId,response:{status:200,url:'http://synthetic.invalid/items'}});
+      f.cdp.emit('Network.loadingFinished',{requestId});
+    }
+  },{count:150,windowMs:1000});
+  assert.equal(result.complete,true);assert.equal(result.requests.length,150);
+  // Read a single large body so this test does not retain 150 copies in memory.
+  const one=fixture();one.cdp.send=f.cdp.send;
+  const observed=await one.observer.run(async()=>{one.request();one.response();one.finish();},{windowMs:1000,readBody:true});
+  assert.equal(observed.complete,true);assert.equal(observed.requests[0].body,body);
+});
 test('matching failure is retained and never escapes an event callback or leaks listeners',async()=>{
   const f=fixture({match:()=>{throw new Error('invalid matcher input');}});
   const result=await f.observer.run(async()=>f.request(),{windowMs:100});

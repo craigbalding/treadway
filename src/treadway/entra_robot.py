@@ -106,7 +106,7 @@ class EntraLibrary:
                                    'idpOrigins': options.get('idp_origins', ['https://login.microsoftonline.com', 'https://mysignins.microsoft.com']),
                                    'principal': {'actor': identity, 'generation': session.generation,
                                                  'probe': options['principal_probe'], 'expected': dict(actor.expected),
-                                                 'timeoutMs': options.get('principal_timeout_ms', 5000)},
+                                                 'timeoutMs': options.get('principal_timeout_ms', 30000)},
                                    'evidenceRoot': str(attempt),
                                    'exportCookies': config.get('export_cookies', True),
                                    'screenshotMask': config.get('screenshot_mask', 'none')}}

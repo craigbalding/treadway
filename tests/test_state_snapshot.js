@@ -39,6 +39,15 @@ test('capture includes required cookie and per-page Web Storage with actual prin
   assert.equal(calls.filter(call => call.method === 'Storage.getCookies').length, 1);
 });
 
+test('ordinary combined local and session storage is not limited to eight megabytes',async()=>{
+  const entries=[['fixture','x'.repeat(4500*1024)]];
+  const {session}=fixture({storageEntries:entries});
+  const result=await captureState(session,input);
+  assert.equal(result.complete,true);
+  assert.equal(result.storage[origin].localStorage[0][1],entries[0][1]);
+  assert.equal(result.storage[origin].sessionStorage[0][1],entries[0][1]);
+});
+
 test('provider verification checks the actual user without importing or exporting state', async () => {
   const {session, calls} = fixture();
   const result = await verifyState(session, input);

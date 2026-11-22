@@ -20,6 +20,7 @@ from urllib.request import HTTPHandler, HTTPSHandler, HTTPRedirectHandler, HTTPC
 import uuid
 
 from . import diagnostics as diag
+from .limits import DEFAULT_RESPONSE_BODY_BYTES, MAX_REQUEST_TIMEOUT_SECONDS
 
 _read_only = ContextVar('treadway_http_observation_only', default=False)
 _HTTP_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"})
@@ -142,6 +143,8 @@ class HttpObservation:
     complete: bool
     body: bytes = field(repr=False)
     headers: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+    body_truncated: bool = False
+    body_limit_bytes: int | None = None
 
     def header(self, name, default=None):
         """Return the first value, ignoring case; ``headers`` retains duplicates.
@@ -153,6 +156,8 @@ class HttpObservation:
 
     def json(self):
         if not self.complete:
+            if self.body_truncated:
+                raise ValueError(f"response_body_incomplete; body_limit_bytes={self.body_limit_bytes}")
             raise ValueError("response_body_incomplete")
         return json.loads(self.body)
 
@@ -167,7 +172,7 @@ class HttpSession:
         finally:
             _read_only.reset(token)
 
-    def __init__(self, *, actor, origin, credential_headers=None, max_body_bytes=65536):
+    def __init__(self, *, actor, origin, credential_headers=None, max_body_bytes=DEFAULT_RESPONSE_BODY_BYTES):
         parsed = urlsplit(origin)
         if (parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password
                 or parsed.path or parsed.query or parsed.fragment or not actor or type(max_body_bytes) is not int or max_body_bytes <= 0):
@@ -225,7 +230,7 @@ class HttpSession:
 
     def _request_observed(self, path, method, body, timeout_seconds, *, headers=None, phase="request"):
         url = self._url(path)
-        if method not in _HTTP_METHODS or not 0 < timeout_seconds <= 60:
+        if method not in _HTTP_METHODS or not 0 < timeout_seconds <= MAX_REQUEST_TIMEOUT_SECONDS:
             raise ValueError("bounded_explicit_request_required")
         try:
             data = encode_body(body)
@@ -270,12 +275,13 @@ class HttpSession:
                     complete = False
                 return HttpObservation(self.actor, self.session_id, response.code,
                                        complete and len(content) <= self.max_body_bytes, bytes(content[:self.max_body_bytes]),
-                                       tuple(response.headers.items()))
+                                       tuple(response.headers.items()), len(content) > self.max_body_bytes,
+                                       self.max_body_bytes if len(content) > self.max_body_bytes else None)
         except Exception as error:
             raise HttpFailure("actor_http_observation_incomplete", phase=phase,
                               dispatch="possibly_started", error_type=type(error).__name__) from None
 
-    def request(self, path, *, method="GET", body=None, timeout_seconds=5, headers=None, phase='request'):
+    def request(self, path, *, method="GET", body=None, timeout_seconds=30, headers=None, phase='request'):
         self._url(path)
         with self._lease():
             return self._request(path, method, body, timeout_seconds, headers=self._headers(headers), phase=phase)
@@ -335,7 +341,7 @@ class HttpSession:
                     'limits': ['SameSite navigation policy is not reproduced',
                                'Import does not verify the application principal']}
 
-    def attempt(self, path, *, probe, expected, method="GET", body=None, timeout_seconds=5,
+    def attempt(self, path, *, probe, expected, method="GET", body=None, timeout_seconds=30,
                 headers=None, before_dispatch=None, after_probe_headers=None, volatile_headers=()):
         """Verify this actual session, then dispatch once, preserving failures.
 
@@ -347,7 +353,7 @@ class HttpSession:
         """
         validate_expected(expected)
         self._url(path)
-        if method not in _HTTP_METHODS or not 0 < timeout_seconds <= 60:
+        if method not in _HTTP_METHODS or not 0 < timeout_seconds <= MAX_REQUEST_TIMEOUT_SECONDS:
             raise ValueError("bounded_explicit_request_required")
         try:
             encode_body(body)

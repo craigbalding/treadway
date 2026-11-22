@@ -43,6 +43,14 @@ def app():
 
         def do_GET(self):
             calls.append((self.path, self.headers.get("Cookie")))
+            if self.path.startswith("/page/"):
+                body = b"<html>" + b"x" * int(self.path.rsplit("/", 1)[1]) + b"</html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path == "/slow-headers":
                 try:
                     self.wfile.write(b"HTTP/1.1 200 OK\r\n")
@@ -77,6 +85,15 @@ def app():
     thread.join()
 
 
+@pytest.mark.parametrize("size", [256 * 1024, 2 * 1024 * 1024, 16 * 1024 * 1024])
+def test_default_budget_retains_complete_pages_and_bundles_without_repeating(app, size):
+    origin, calls = app
+    response = HttpSession(actor="visitor", origin=origin).request(f"/page/{size}")
+    assert response.complete
+    assert response.body == b"<html>" + b"x" * size + b"</html>"
+    assert len(calls) == 1
+
+
 def test_cookie_jars_are_separate_and_wrong_actor_never_dispatches(app):
     origin, calls = app
     a, b = [HttpSession(actor=name, origin=origin) for name in ("a", "b")]
@@ -88,11 +105,21 @@ def test_cookie_jars_are_separate_and_wrong_actor_never_dispatches(app):
     assert b.request("/session").json() == {"principal": None}
 
 
+def test_explicit_long_request_budget_is_allowed_and_success_does_not_wait(app):
+    origin, calls = app
+    session = HttpSession(actor="visitor", origin=origin)
+    started = time.monotonic()
+    assert session.request("/session", timeout_seconds=120).complete
+    assert time.monotonic() - started < 5
+    assert len(calls) == 1
+
+
 def test_no_redirect_no_cross_origin_and_incomplete_is_not_empty(app):
     origin, calls = app
     session = HttpSession(actor="visitor", origin=origin, max_body_bytes=1)
     result = session.request("/redirect")
     assert result.status == 302 and not result.complete
+    assert result.body_truncated and result.body_limit_bytes == 1
     assert result.header("location") == "/must-not-follow"
     with pytest.raises(ValueError, match="incomplete"):
         result.json()
@@ -243,7 +270,7 @@ def test_additional_methods_keep_origin_deadline_and_body_limits(app):
     origin, calls = app
     session = HttpSession(actor="visitor", origin=origin, max_body_bytes=10)
     for method, path, timeout in [("CONNECT", "/method", 5), ("OPTIONS", "/method", 0),
-                                  ("TRACE", "/method", 61), ("HEAD", "//other.invalid/", 5)]:
+                                  ("TRACE", "/method", 3601), ("HEAD", "//other.invalid/", 5)]:
         with pytest.raises(ValueError):
             session.request(path, method=method, timeout_seconds=timeout)
     assert not calls

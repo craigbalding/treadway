@@ -3,7 +3,7 @@
 const crypto = require('node:crypto');
 const {ActorBrowser} = require('./actors');
 const {appliesToHost, validateCookies} = require('./cookies');
-const MAX_BYTES = 8 * 1024 * 1024;
+const {MAX_BROWSER_STATE_BYTES: MAX_BYTES} = require('./limits.js');
 const COMPONENTS = new Set(['cookies', 'localStorage', 'sessionStorage']);
 const LIMITS = ['Selected application cookies and Web Storage only; not a browser profile',
   'Session storage belongs to this page, not all tabs', 'Cookies have domain/path scope, not port isolation',

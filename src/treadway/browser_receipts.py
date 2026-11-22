@@ -13,6 +13,7 @@ import re
 import uuid
 
 from .browser_state import _directory, _read, _write
+from .limits import MAX_BROWSER_MESSAGE_BYTES
 
 
 class BrowserEvidenceIncomplete(RuntimeError):
@@ -99,7 +100,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
                             or not isinstance(evidence.get('sha256'), str) or not re.fullmatch(r'[0-9a-f]{64}', evidence['sha256'])):
                         raise ValueError()
                     try:
-                        valid = hashlib.sha256(_read(directory / evidence['reference'], 1024 * 1024)).hexdigest() == evidence['sha256']
+                        valid = hashlib.sha256(_read(directory / evidence['reference'], MAX_BROWSER_MESSAGE_BYTES)).hexdigest() == evidence['sha256']
                     except (OSError, ValueError, RuntimeError):
                         valid = False
                     fact.update(evidence=evidence, evidenceValid=valid)
@@ -168,7 +169,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
                             source = directory / 'reconciliations' / evidence['reference']
                             if source.parent.is_symlink():
                                 raise ValueError()
-                            valid = hashlib.sha256(_read(source, 16 * 1024 * 1024)).hexdigest() == evidence['sha256']
+                            valid = hashlib.sha256(_read(source, MAX_BROWSER_MESSAGE_BYTES)).hexdigest() == evidence['sha256']
                         except (OSError, ValueError, RuntimeError):
                             valid = False
                         command['reconciliation'] = {'outcome': event['outcome'], 'evidenceValid': valid,
@@ -194,7 +195,7 @@ def inspect_browser_run(directory, *, project_id, run_id):
 def retain_reconciliation_evidence(directory, evidence):
     """Copy bounded private application evidence for live or offline receipts."""
     try:
-        data = _read(Path(evidence), 16 * 1024 * 1024)
+        data = _read(Path(evidence), MAX_BROWSER_MESSAGE_BYTES)
     except (OSError, RuntimeError):
         raise BrowserEvidenceIncomplete('private_bounded_reconciliation_evidence_required') from None
     reference = str(uuid.uuid4())
@@ -274,7 +275,7 @@ def _offline_observations(directory, project_id, run_id, journal_digest, actors)
             evidence_directory = directory / 'reconciliations'
             if evidence_directory.is_symlink():
                 raise ValueError()
-            valid = hashlib.sha256(_read(evidence_directory / evidence['reference'], 16 * 1024 * 1024)).hexdigest() == evidence['sha256']
+            valid = hashlib.sha256(_read(evidence_directory / evidence['reference'], MAX_BROWSER_MESSAGE_BYTES)).hexdigest() == evidence['sha256']
             observations.setdefault((*key, item['requestRef']), []).append({
                 'outcome': item['outcome'], 'evidenceValid': valid, 'evidence': evidence, 'reference': file.name})
         return observations, True

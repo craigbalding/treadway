@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 
 // Uses the existing CDP transport. Pixels remain in memory until the selected
 // document/stage is re-observed; a navigation during capture discards the image.
-async function captureEvidence(session, {file, observe, documentId, stage, sensitive = [], mask = 'none', timeoutMs = 2000} = {}) {
+async function captureEvidence(session, {file, observe, documentId, stage, sensitive = [], mask = 'none', timeoutMs = 10000} = {}) {
   if (!['none', 'credentials'].includes(mask)) throw new Error('explicit_screenshot_mask_policy_required');
   const key = '__treadwayMask_' + crypto.randomUUID().replaceAll('-', '');
   const evaluate = async expression => {

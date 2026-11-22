@@ -78,7 +78,7 @@ const HELP = {
   blocked: 'The identity provider reported a lock, rejection or password-change requirement. Resolve that explicit condition before continuing.',
 };
 
-function createPrincipalVerifier(session, {origin, actor, generation, probe, expected, timeoutMs = 5000} = {}) {
+function createPrincipalVerifier(session, {origin, actor, generation, probe, expected, timeoutMs = 30000} = {}) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 60000)
     throw new Error('bounded_principal_probe_timeout_required');
   const browser = new ActorBrowser(session, {name: actor, generation, origin, probe, expected});
@@ -155,7 +155,7 @@ class EntraLogin {
     this.options = {appOrigin, signinUrl: signinUrl || appOrigin, idpOrigins: [...idpOrigins], account, credentials, verifyPrincipal,
       beforeSubmit, totpStore, codeProvider, prepMs, transitionMs, postSubmitMs, evidenceRoot, screenshotMask,
       exportCookies, cookieBinding: principal && {actor: principal.actor, generation: principal.generation},
-      principalTimeoutMs: principal?.timeoutMs === undefined ? 10000 : principal.timeoutMs + 1000, onDiagnostic};
+      principalTimeoutMs: principal?.timeoutMs === undefined ? 31000 : principal.timeoutMs + 1000, onDiagnostic};
     this.running = false;
   }
 

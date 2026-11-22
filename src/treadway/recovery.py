@@ -133,7 +133,7 @@ class RecoveryPolicy:
     allow_interactive: bool = False
     max_renewals: int = 1
     max_dispatches: int = 2
-    timeout_seconds: float = 5
+    timeout_seconds: float = 30
     owner_timeout_seconds: float = 30
 
     def __post_init__(self):
@@ -141,7 +141,7 @@ class RecoveryPolicy:
                 ('maintain_authentication', 'verify_principal', 'allow_interactive'))
                 or type(self.max_renewals) is not int or not 0 <= self.max_renewals <= 10
                 or type(self.max_dispatches) is not int or not 1 <= self.max_dispatches <= 20
-                or not 0 < self.timeout_seconds <= 60 or not 0 < self.owner_timeout_seconds <= 300):
+                or not 0 < self.timeout_seconds <= 3600 or not 0 < self.owner_timeout_seconds <= 300):
             raise ValueError("bounded_explicit_recovery_policy_required")
 
 
