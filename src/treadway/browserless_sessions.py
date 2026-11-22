@@ -21,6 +21,7 @@ import uuid
 from .browser_state import BrowserIdentity, BrowserStateIncomplete, _read, _write
 from .credentials import CredentialRef, EnvironmentProvider
 from .sessions import deadline_client
+from .limits import DEFAULT_RESPONSE_BODY_BYTES, MAX_BROWSER_MESSAGE_BYTES
 
 
 class ProviderSessionIncomplete(RuntimeError):
@@ -90,7 +91,7 @@ def _http(url, method, *, body=None, headers=None, deadline, directory):
     path = directory / reference
     record = {'version': 'treadway.browserless-http/1', 'method': method, 'url': url,
               'requestHeaders': headers or {}, 'requestBody': body, 'outcome': 'unknown'}
-    _write(path, record)  # Record intent before urllib may dispatch anything.
+    _write(path, record, limit=MAX_BROWSER_MESSAGE_BYTES)  # Record intent before urllib may dispatch anything.
     status, response, data = None, None, bytearray()
     try:
         remaining = deadline - time.monotonic()
@@ -104,28 +105,28 @@ def _http(url, method, *, body=None, headers=None, deadline, directory):
             response = error
         status = response.status
         record.update(status=status, responseHeaders=list(response.headers.items()))
-        _write(path, record)
-        while len(data) <= 65536:
-            chunk = getattr(response, 'read1', response.read)(min(32768, 65537 - len(data)))
+        _write(path, record, limit=MAX_BROWSER_MESSAGE_BYTES)
+        while len(data) <= DEFAULT_RESPONSE_BODY_BYTES:
+            chunk = getattr(response, 'read1', response.read)(min(32768, DEFAULT_RESPONSE_BODY_BYTES + 1 - len(data)))
             if not chunk:
                 break
             data.extend(chunk)
-        body_complete = len(data) <= 65536 and getattr(response, 'length', 0) in {None, 0}
-        record.update(responseBodyBase64=base64.b64encode(data[:65536]).decode(), complete=body_complete)
-        if len(data) > 65536:
+        body_complete = len(data) <= DEFAULT_RESPONSE_BODY_BYTES and getattr(response, 'length', 0) in {None, 0}
+        record.update(responseBodyBase64=base64.b64encode(data[:DEFAULT_RESPONSE_BODY_BYTES]).decode(), complete=body_complete)
+        if len(data) > DEFAULT_RESPONSE_BODY_BYTES:
             raise ProviderSessionIncomplete('browserless_session_response_limit', evidence=reference, status=status)
         if not body_complete:
             raise ProviderSessionIncomplete('browserless_session_response_body_incomplete', evidence=reference, status=status)
         record['outcome'] = 'replied'
-        _write(path, record)
-        return status, bytes(data), {'file': reference, 'sha256': hashlib.sha256(_read(path)).hexdigest()}
+        _write(path, record, limit=MAX_BROWSER_MESSAGE_BYTES)
+        return status, bytes(data), {'file': reference, 'sha256': hashlib.sha256(_read(path, MAX_BROWSER_MESSAGE_BYTES)).hexdigest()}
     except ProviderSessionIncomplete as error:
         record['outcome'] = error.outcome
-        _write(path, record)
+        _write(path, record, limit=MAX_BROWSER_MESSAGE_BYTES)
         raise
     except Exception:
-        record.update(responseBodyBase64=base64.b64encode(data[:65536]).decode(), complete=False)
-        _write(path, record)
+        record.update(responseBodyBase64=base64.b64encode(data[:DEFAULT_RESPONSE_BODY_BYTES]).decode(), complete=False)
+        _write(path, record, limit=MAX_BROWSER_MESSAGE_BYTES)
         raise ProviderSessionIncomplete('browserless_session_http_incomplete', evidence=reference, status=status) from None
     finally:
         if response is not None:
@@ -144,7 +145,7 @@ def read_capability(lease):
         raise BrowserStateIncomplete('browserless_session_missing')
     path = lease.directory / item['file']
     try:
-        raw = _read(path, 262144)
+        raw = _read(path, MAX_BROWSER_MESSAGE_BYTES)
     except OSError:
         raise BrowserStateIncomplete('browserless_session_capability_incomplete') from None
     if hashlib.sha256(raw).hexdigest() != item.get('sha256'):
@@ -160,7 +161,7 @@ def read_capability(lease):
         creation = value['creation']
         if (not isinstance(creation, dict) or not isinstance(creation.get('file'), str)
                 or not re.fullmatch(r'provider-http-[0-9a-f-]{36}\.json', creation['file'])
-                or hashlib.sha256(_read(lease.directory / creation['file'])).hexdigest() != creation.get('sha256')):
+                or hashlib.sha256(_read(lease.directory / creation['file'], MAX_BROWSER_MESSAGE_BYTES)).hexdigest() != creation.get('sha256')):
             raise ValueError()
         return value, path, item['sha256']
     except (KeyError, TypeError, ValueError, OSError):
@@ -205,8 +206,8 @@ def create(runtime, identity, *, ttl_seconds, headless=True):
         capability = {'version': 'treadway.browserless-session/1', 'binding': lease.binding, 'scope': 'isolated-provider-profile',
             'state': 'created', 'session': response, 'creation': evidence, 'apiOrigin': origin(url)}
         path = lease.directory / ('provider-session-' + str(uuid.uuid4()) + '.json')
-        _write(path, capability)
-        lease._record['providerSession'] = {'file': path.name, 'sha256': hashlib.sha256(_read(path)).hexdigest()}
+        _write(path, capability, limit=MAX_BROWSER_MESSAGE_BYTES)
+        lease._record['providerSession'] = {'file': path.name, 'sha256': hashlib.sha256(_read(path, MAX_BROWSER_MESSAGE_BYTES)).hexdigest()}
         lease._record['providerInitialized'] = False
         lease._record.pop('providerPrincipalBinding', None)
         lease._record.pop('lastProviderVerification', None)

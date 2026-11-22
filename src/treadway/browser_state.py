@@ -17,9 +17,10 @@ from urllib.parse import urlsplit
 import uuid
 
 from .browsers import private_json
+from .limits import MAX_BROWSER_STATE_BYTES
 
 
-MAX_STATE_BYTES = 8 * 1024 * 1024
+MAX_STATE_BYTES = MAX_BROWSER_STATE_BYTES
 COMPONENTS = frozenset({'cookies', 'localStorage', 'sessionStorage'})
 
 
@@ -76,10 +77,10 @@ def _read(path, limit=MAX_STATE_BYTES):
         os.close(descriptor)
 
 
-def _write(path, value):
+def _write(path, value, *, limit=MAX_STATE_BYTES):
     # Reject non-finite values and oversized state before replacing any file.
     raw = json.dumps(value, allow_nan=False, ensure_ascii=True).encode()
-    if len(raw) > MAX_STATE_BYTES:
+    if len(raw) > limit:
         raise BrowserStateIncomplete('bounded_browser_state_required')
     private_json(path, value)
     descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)

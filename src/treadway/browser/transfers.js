@@ -2,6 +2,7 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
+const {DEFAULT_TRANSFER_BYTES}=require('./limits.js');
 const {requireRecord}=require('./interactions.js');
 const digest=data=>crypto.createHash('sha256').update(data).digest('hex');
 function scopedPath(rootDirectory,target,{directory=false}={}){
@@ -28,7 +29,7 @@ function readFile(file,maxBytes){
 }
 function bounds(maxBytes){if(!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>1024*1024*1024)throw new Error('bounded_transfer_size_required');}
 function sourceRequired(source){if(typeof source!=='string'||!source)throw new Error('explicit_transfer_source_required');}
-async function uploadFile(ui,{rootDirectory,filePath,sha256,selector,source,maxBytes=16*1024*1024,validateTarget}={}){
+async function uploadFile(ui,{rootDirectory,filePath,sha256,selector,source,maxBytes=DEFAULT_TRANSFER_BYTES,validateTarget}={}){
   if(ui.session?.capabilities?.remote && ui.session.capabilities.fileTransfers !== true)
     throw new Error('remote_file_transfer_unsupported');
   bounds(maxBytes);sourceRequired(source);
@@ -57,7 +58,7 @@ async function uploadFile(ui,{rootDirectory,filePath,sha256,selector,source,maxB
     try{await ui.session.cdp.send('Runtime.releaseObject',{objectId});}catch{/* Session loss already makes later observations necessary. */}
   }
 }
-async function downloadFile(ui,{rootDirectory,directory,name,source,dispatch,windowMs=20000,maxBytes=16*1024*1024}={}){
+async function downloadFile(ui,{rootDirectory,directory,name,source,dispatch,windowMs=60000,maxBytes=DEFAULT_TRANSFER_BYTES}={}){
   if(ui.session?.capabilities?.remote && ui.session.capabilities.fileTransfers !== true)
     throw new Error('remote_file_transfer_unsupported');
   bounds(maxBytes);sourceRequired(source);

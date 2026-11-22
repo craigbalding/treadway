@@ -6,6 +6,32 @@ const {BrowserInteractions}=require(path.join(browserRoot,'interactions.js'));
 const {OriginState}=require(path.join(browserRoot,'state.js'));
 const {connectBrowser,TargetMonitor}=require(path.join(browserRoot,'targets.js'));
 const {createCdpProxy}=require(path.join(browserRoot,'cdp.js'));
+const {ActorBrowser}=require(path.join(browserRoot,'actors.js'));
+test('default actor budgets retain a large page and stop after session expiry in Chromium',
+  {skip:!process.env.CHROME_BIN,timeout:45000},async t=>{
+    const body='<html>'+'x'.repeat(2*1024*1024)+'</html>',calls=[];
+    let expired=false;
+    const fixture=await widgetFixture('react',{handleRequest:(request,response,url)=>{
+      if(!['/principal','/large-page'].includes(url.pathname))return false;
+      calls.push(url.pathname);
+      response.writeHead(url.pathname==='/principal'&&expired?401:200,
+        {'Content-Type':url.pathname==='/principal'?'application/json':'text/html'});
+      response.end(url.pathname==='/principal'?JSON.stringify({principal:expired?null:'member'}):body);
+      return true;
+    }});
+    let complete=false;
+    t.after(async()=>{await fixture.close({preserveEvidence:!complete});});
+    await fixture.session.navigate(fixture.origin);
+    const actor=new ActorBrowser(fixture.session,{name:'member',origin:fixture.origin,
+      generation:fixture.browserSession.generation,probe:'/principal',expected:{principal:'member'}});
+    const result=await actor.request('/large-page');
+    assert.equal(result.complete,true);assert.equal(result.bodyTruncated,false);
+    assert.equal(result.text,body);
+    expired=true;
+    await assert.rejects(actor.request('/large-page'),error=>error.observation.dispatched===false);
+    assert.deepEqual(calls,['/principal','/large-page','/principal']);
+    complete=true;
+  });
 test('real origin state and worker capture use an owned sandboxed browser',{skip:!process.env.CHROME_BIN,timeout:20000},async t=>{
   const fixture=await widgetFixture('react');
   const ui=new BrowserInteractions(fixture.session,{origin:fixture.origin,record:()=>{}});

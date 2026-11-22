@@ -28,6 +28,13 @@ test('one verified upload input receives one explicit file, and its handle is re
   assert.equal(f.events.at(-1),'Runtime.releaseObject');
   assert.ok(f.events.indexOf('upload_intent')<f.events.indexOf('DOM.setFileInputFiles'));
 });
+test('ordinary large attachments use the default transfer budget',async t=>{
+  const f=fixture(t);fs.writeFileSync(f.file,Buffer.alloc(20*1024*1024,120));
+  const sha256=crypto.createHash('sha256').update(fs.readFileSync(f.file)).digest('hex');
+  const result=await uploadFile(f.ui,{rootDirectory:f.root,filePath:f.file,sha256,selector:'#upload',source:'synthetic large document'});
+  assert.equal(result.bytes,20*1024*1024);assert.equal(result.uploadDispatched,true);
+  assert.equal(f.events.filter(e=>e==='DOM.setFileInputFiles').length,1);
+});
 test('changed upload bytes stop before browser inspection',async t=>{
   const f=fixture(t);fs.appendFileSync(f.file,' changed');
   await assert.rejects(uploadFile(f.ui,{rootDirectory:f.root,filePath:f.file,sha256:f.sha256,selector:'#upload',source:'synthetic'}),/upload_fixture_hash_differs/);

@@ -143,6 +143,24 @@ def test_create_retains_exact_returned_urls_and_forget_is_a_separate_explicit_op
         assert all(item.stat().st_mode & 0o077 == 0 for item in state.root.rglob('*'))
 
 
+def test_provider_creation_retains_complete_large_response_without_recreating(tmp_path, service):
+    seen, controls = service
+    controls['response'] = {'diagnostics': 'x' * (2 * 1024 * 1024)}
+    state = identity(tmp_path)
+    with runtime(tmp_path) as browsers:
+        result = browsers.create_provider_identity(state, ttl_seconds=180)
+        assert result['created']
+        assert len(seen) == 1
+        lease = state.acquire(browsers.project_id)
+        try:
+            capability, _, _ = read_capability(lease)
+            evidence = json.loads((lease.directory/capability['creation']['file']).read_text())
+            body = json.loads(base64.b64decode(evidence['responseBodyBase64']))
+            assert body['diagnostics'] == controls['response']['diagnostics']
+        finally:
+            lease.release(profile_released=True, uncertain=False)
+
+
 def test_actual_profile_lease_refuses_alias_and_project_writers_and_destructive_forget(tmp_path, service):
     seen, _ = service
     state = identity(tmp_path)

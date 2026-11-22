@@ -41,6 +41,14 @@ test('truncated responses remain incomplete rather than proving denial',async()=
   assert.equal(result.complete,false);assert.equal(result.bodyTruncated,true);
 });
 
+test('default actor budget preserves a multi-megabyte page in one request',async()=>{
+  const text='<html>'+'x'.repeat(2*1024*1024)+'</html>';
+  const {browser,requests}=fixture('user-a',()=>new Response(text,{headers:{'Content-Type':'text/html'}}));
+  const result=await browser.request('/page',{verify:false});
+  assert.equal(result.complete,true);assert.equal(result.bodyTruncated,false);
+  assert.equal(result.text,text);assert.equal(requests.length,1);
+});
+
 test('failed principal probe retains phase, response and identity distinction',async()=>{
   for(const [principal,state] of [['user-b','wrong'],[null,'unknown']]) {
     const {browser}=fixture(principal);

@@ -1,11 +1,12 @@
 'use strict';
+const {DEFAULT_RESPONSE_BODY_BYTES} = require('./limits.js');
 // Application mappings supply the principal endpoint and expectations. This
 // library never logs in, renews, changes actor or retries an application action.
 const crypto = require('node:crypto');
 const secretFieldSource = require('node:fs').readFileSync(require('node:path').join(__dirname,'browser-fill.function.js'),'utf8');
 
 class ActorBrowser {
-  constructor(session, {name, origin, probe, expected, generation, maxBodyBytes=65536}={}) {
+  constructor(session, {name, origin, probe, expected, generation, maxBodyBytes=DEFAULT_RESPONSE_BODY_BYTES}={}) {
     const url=new URL(origin);
     if(url.origin!==origin || !['http:','https:'].includes(url.protocol) || !name || !generation ||
       !expected || typeof expected!=='object' || Array.isArray(expected) || !Object.keys(expected).length ||
@@ -27,7 +28,7 @@ class ActorBrowser {
       throw new Error('same_origin_path_required');
     return url.pathname+url.search;
   }
-  async request(path,{method='GET',body,verify=true,timeoutMs=5000}={}) {
+  async request(path,{method='GET',body,verify=true,timeoutMs=30000}={}) {
     path=this.path(path);
     if(!['GET','POST','PUT','PATCH','DELETE'].includes(method) || !Number.isSafeInteger(timeoutMs) || timeoutMs<=0)
       throw new Error('bounded_explicit_request_required');

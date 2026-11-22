@@ -1,4 +1,5 @@
 'use strict';
+const {MAX_BROWSER_MESSAGE_BYTES} = require('./limits.js');
 const fs = require('node:fs');
 const net = require('node:net');
 const crypto = require('node:crypto');
@@ -41,7 +42,7 @@ function connectWorker(connection, {timeoutMs = 5000, reconciliation = false} = 
     });
     socket.on('data', chunk => {
       buffer += chunk;
-      if (Buffer.byteLength(buffer) > 16 * 1024 * 1024) { fail('ipc_message_limit'); return; }
+      if (Buffer.byteLength(buffer) > MAX_BROWSER_MESSAGE_BYTES) { fail('ipc_message_limit'); return; }
       let index;
       while ((index = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);

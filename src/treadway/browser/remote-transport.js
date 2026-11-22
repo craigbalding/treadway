@@ -7,6 +7,7 @@ const net = require('node:net');
 const {X509Certificate} = require('node:crypto');
 const {performance} = require('node:perf_hooks');
 const WebSocket = require('ws');
+const {MAX_BROWSER_MESSAGE_BYTES} = require('./limits.js');
 const {getProxyForUrl} = require('proxy-from-env');
 const LOCAL = new Set(['localhost', '127.0.0.1', '::1']);
 
@@ -84,11 +85,11 @@ function verifyHost(host, certificate) {
 }
 
 function connectEndpoint(value, {timeoutMs = 15000, proxyUrl,
-  headers = {}, ca, fresh = true, signal, onUpgrade, maxPayload = 16 * 1024 * 1024} = {}) {
+  headers = {}, ca, fresh = true, signal, onUpgrade, maxPayload = MAX_BROWSER_MESSAGE_BYTES} = {}) {
   const {endpoint, parsed} = parseEndpoint(value, {fresh});
   headers = handshakeHeaders(headers);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 3600000 ||
-      !Number.isSafeInteger(maxPayload) || maxPayload < 1024 || maxPayload > 64 * 1024 * 1024 ||
+      !Number.isSafeInteger(maxPayload) || maxPayload < 1024 || maxPayload > 1024 * 1024 * 1024 ||
       onUpgrade !== undefined && typeof onUpgrade !== 'function') {
     throw new RemoteTransportError('remote_limits_invalid', 'configuration');
   }

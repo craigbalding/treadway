@@ -130,6 +130,42 @@ connection establishment retain the standard library's timeout limitations;
 use `run_json_process` around a helper when a strict overall process deadline is
 required.
 
+## Payload and observation budgets
+
+Ordinary response bodies use a 64 MiB default in Python `HttpSession`, JavaScript
+`ActorBrowser`, provider lifecycle HTTP and correlated response-body observation. Browser
+state snapshots also allow 64 MiB. Browser IPC and remote CDP messages allow
+256 MiB to leave room for JSON/base64 and paired parsed/text representations;
+their reply/evidence readers use the corresponding larger envelope.
+
+File upload/download defaults allow 256 MiB, independently of HTTP body capture.
+Explicit file limits can be set up to 1 GiB. `HttpSession.request`/`attempt` and
+`ActorBrowser.request` default to 30 seconds; download observation defaults to
+60 seconds. Recovery HTTP operations and Entra principal probes also default to
+30 seconds; standalone screenshot capture allows 10 seconds. These are deadlines,
+not sleeps: successful observations return as
+soon as they complete. Request observation defaults to 1,000 matching requests,
+with an explicit maximum of 10,000.
+
+Python HTTP/recovery request deadlines can be explicitly set up to one hour for
+known long-running operations. Set the enclosing process/flow deadline to cover
+all phases; a larger request budget cannot extend an already expired caller.
+
+Use these defaults for ordinary workflows rather than copying a small bound from
+a negative test. HTTP and actor body budgets can be explicitly configured for
+larger expected responses. Request observation accepts explicit body budgets up
+to 256 MiB, and remote transport accepts explicit messages up to 1 GiB. Preserve
+incomplete/truncated observations and uncertain effects if a budget is exhausted;
+they are not evidence that an application's security control held or failed.
+
+An incomplete Python HTTP observation exposes `body_truncated` and
+`body_limit_bytes`, so a body-budget failure can be distinguished from another
+incomplete response without interpreting a short body as application rejection.
+
+Identifier, token-format, fixed protocol and diagnostic-record bounds serve
+different purposes from application payload budgets. Do not change them merely
+because a page is large or mistake a streaming chunk size for a whole-body limit.
+
 ## Authorization and collaborative handoffs
 
 Share resource IDs, run scope and expected revisions between actors. Each actor

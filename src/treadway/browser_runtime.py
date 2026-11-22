@@ -27,6 +27,7 @@ from .browsers import BrowserManager, BrowserSession, private_json
 from .credentials import CredentialRef, EnvironmentProvider
 from .browser_state import BrowserIdentity, IdentityLease
 from .process import run_json_process
+from .limits import MAX_BROWSER_MESSAGE_BYTES
 
 
 class BrowserRuntimeIncomplete(RuntimeError):
@@ -245,7 +246,7 @@ class BrowserRuntime:
                     if remaining <= 0 or not self.selector.select(remaining):
                         raise BrowserRuntimeIncomplete("remote_control_deadline", evidence=self.evidence)
                     chunk = os.read(self.process.stdout.fileno(), 65536)
-                    if not chunk or len(self._buffer) + len(chunk) > 16 * 1024 * 1024:
+                    if not chunk or len(self._buffer) + len(chunk) > MAX_BROWSER_MESSAGE_BYTES:
                         raise BrowserRuntimeIncomplete("remote_control_incomplete", evidence=self.evidence)
                     self._buffer += chunk
             except BrowserRuntimeIncomplete:
