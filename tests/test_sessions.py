@@ -16,6 +16,31 @@ def app():
         def log_message(self, *_):
             pass
 
+        def method_response(self):
+            calls.append((self.path, self.headers.get("Cookie")))
+            self.send_response(200)
+            self.send_header("X-Observed-Method", self.command)
+            if self.command == "HEAD":
+                # HEAD describes the corresponding GET representation but
+                # must not send those bytes as its own response body.
+                self.send_header("Content-Length", "4096")
+                self.end_headers()
+                return
+            if self.command == "OPTIONS":
+                self.send_header("Allow", "GET, HEAD, OPTIONS, TRACE")
+                body = b""
+            else:
+                self.send_header("Content-Type", "message/http")
+                body = (self.requestline + "\r\nX-Method-Fixture: " +
+                        self.headers.get("X-Method-Fixture", "absent") + "\r\n").encode()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_HEAD = method_response
+        do_OPTIONS = method_response
+        do_TRACE = method_response
+
         def do_GET(self):
             calls.append((self.path, self.headers.get("Cookie")))
             if self.path == "/slow-headers":
@@ -171,3 +196,56 @@ def test_wrong_identity_dominates_missing_fields_in_any_order():
                    {'user.id': 'expected', 'tenant.id': 'tenant'}):
         observation = SimpleNamespace(complete=True, status=200, json=lambda: {'user': {'id': 'other'}})
         assert principal_state(observation, values) == 'wrong'
+
+
+@pytest.mark.parametrize("method", ["HEAD", "OPTIONS", "TRACE"])
+@pytest.mark.parametrize("authenticated", [False, True])
+def test_standard_methods_dispatch_once_and_preserve_their_response(app, method, authenticated):
+    origin, calls = app
+    session = HttpSession(actor="a", origin=origin)
+    headers = {"X-Method-Fixture": "synthetic-marker"}
+    if authenticated:
+        session.request("/login")
+        response = session.attempt("/method", probe="/session", expected={"principal": "a"},
+                                   method=method, headers=headers)
+    else:
+        response = session.request("/method", method=method, headers=headers)
+    assert response.status == 200 and response.complete
+    assert response.header("X-Observed-Method") == method
+    assert [path for path, _ in calls].count("/method") == 1
+    if method == "HEAD":
+        assert response.body == b""
+        assert response.header("Content-Length") == "4096"
+    elif method == "OPTIONS":
+        assert response.body == b""
+        assert response.header("Allow") == "GET, HEAD, OPTIONS, TRACE"
+    else:
+        assert response.body.startswith(b"TRACE /method HTTP/")
+        assert b"X-Method-Fixture: synthetic-marker" in response.body
+
+
+@pytest.mark.parametrize("method", ["HEAD", "OPTIONS", "TRACE"])
+def test_standard_methods_do_not_bypass_identity_or_reconciliation_guards(app, method):
+    from treadway.sessions import HttpFailure
+    origin, calls = app
+    session = HttpSession(actor="a", origin=origin)
+    session.request("/login")
+    with pytest.raises(HttpFailure, match="actual_principal_differs"):
+        session.attempt("/method", probe="/session", expected={"principal": "other"}, method=method)
+    assert all(path != "/method" for path, _ in calls)
+    count = len(calls)
+    with session.observation_only(), pytest.raises(HttpFailure, match="read_only_observation_required"):
+        session.request("/method", method=method)
+    assert len(calls) == count
+
+
+def test_additional_methods_keep_origin_deadline_and_body_limits(app):
+    origin, calls = app
+    session = HttpSession(actor="visitor", origin=origin, max_body_bytes=10)
+    for method, path, timeout in [("CONNECT", "/method", 5), ("OPTIONS", "/method", 0),
+                                  ("TRACE", "/method", 61), ("HEAD", "//other.invalid/", 5)]:
+        with pytest.raises(ValueError):
+            session.request(path, method=method, timeout_seconds=timeout)
+    assert not calls
+    response = session.request("/method", method="TRACE")
+    assert not response.complete and len(response.body) == 10
