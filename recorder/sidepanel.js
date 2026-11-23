@@ -11,6 +11,33 @@
   let status = { journey: null, finished: null };
   let saveQueue = Promise.resolve();
   let saving = false;
+  let renewing = false;
+
+  function renderContextClock() {
+    const journey = status.journey;
+    const clock = $('context-clock');
+    clock.hidden = !journey;
+    if (!journey) return;
+    const expires = Date.parse(journey.expiresAt);
+    const remaining = Number.isFinite(expires) ? Math.max(0, Math.ceil((expires - Date.now()) / 1000)) : null;
+    $('context-countdown').textContent = remaining === null ? '—' : Math.floor(remaining / 60) + ':' + String(remaining % 60).padStart(2, '0');
+    let state = 'active';
+    let notice = 'Renew extends this journey’s time limit.';
+    if (journey.contextStatus !== 'active' || remaining === null) {
+      state = 'unknown'; notice = 'Context declaration is not confirmed. Check Messages before continuing.';
+    } else if (renewing) {
+      state = 'renewing'; notice = 'Renewing this journey’s context…';
+    } else if (journey.contextRenewalError) {
+      state = 'error'; notice = 'Context renewal ' + (journey.contextRenewalStatus === 'unconfirmed' ? 'is unconfirmed' : 'failed') + ': ' + journey.contextRenewalError;
+    } else if (remaining === 0) {
+      state = 'expired'; notice = 'Context timer expired. Requests may be blocked. Renew context before continuing.';
+    } else if (remaining <= 120) {
+      state = 'warning'; notice = 'Context expires soon. Renew context to keep this journey ready.';
+    }
+    clock.dataset.state = state;
+    if ($('context-notice').textContent !== notice) $('context-notice').textContent = notice;
+    $('renew-context').disabled = renewing || journey.contextStatus !== 'active';
+  }
 
   // ---- messages -----------------------------------------------------------
   function say(text, level) {
@@ -220,6 +247,18 @@
     $('journey-name').disabled = running;
     $('pending').hidden = !status.finished;
     $('finish-incomplete').hidden = !status.pendingRequests;
+    renderContextClock();
+  }
+
+  async function renewContext() {
+    renewing = true;
+    renderContextClock();
+    try {
+      await ask({ kind: 'renew-context' });
+      say('Context renewed for this journey. Continue when ready.');
+    } finally {
+      renewing = false;
+    }
   }
 
   async function start() {
@@ -287,6 +326,7 @@
   $('save-settings').addEventListener('click', guarded(saveSettings));
   $('start').addEventListener('click', guarded(start));
   $('stop').addEventListener('click', guarded(stop));
+  $('renew-context').addEventListener('click', guarded(renewContext));
   $('fill').addEventListener('click', guarded(fill));
   $('authenticated').addEventListener('click', guarded(() => marker('authenticated')));
   $('step').addEventListener('click', guarded(() => marker('step')));
@@ -313,5 +353,6 @@
     }
     await refresh();
     setInterval(() => refresh().then(saveUpdatedSnapshot).catch(() => undefined), 5000);
+    setInterval(renderContextClock, 1000);
   })().catch((error) => say(error.message, 'error'));
 })();

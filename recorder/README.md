@@ -55,8 +55,17 @@ Use Downloads mode where the native Linux folder picker is unavailable or crashe
 in its GTK/image-loader stack. It avoids that dialog without changing browser or
 image-loader sandbox settings. Both modes export the same event format.
 
-The context timer defaults to 20 minutes; SafeYolo may cap it. Optional Jev
-classification uses a TypeSafe AI key and needs policy access to `api.typesafe.ai`.
+The context timer defaults to 20 minutes; SafeYolo may cap it. While recording,
+the panel shows a countdown based on the granted expiry, an amber warning in
+the final two minutes, and a red expired state. **Renew context** extends the
+same journey in place; it does not restart the recording or replay a request.
+Renew before continuing if the timer has expired. Renewal errors and uncertain
+outcomes stay visible and recorded. Another journey's declaration is not
+overwritten. The countdown itself makes no network requests; the panel is not
+a background keepalive service.
+
+Optional Jev classification uses a TypeSafe AI key and needs policy access to
+`api.typesafe.ai`.
 
 **Record test passwords and one-time codes** is enabled by default. Turn it off
 to record secret references instead of typed values. This setting is fixed when

@@ -62,6 +62,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(h(App));
 // reserved host, test-context enforcement (declared context or 428) on the app.
 function fakeSafeyolo() {
   const state = { declared: null, calls: [], appRequests: [], flowCounter: 0, flows: new Map() };
+  const apiContext = () => state.declared ? Object.fromEntries(state.declared.split(';').map(part => part.split('='))) : null;
   const assets = {
     '/react.js': path.join(repositoryRoot, 'node_modules/react/umd/react.development.js'),
     '/react-dom.js': path.join(repositoryRoot, 'node_modules/react-dom/umd/react-dom.development.js'),
@@ -80,14 +81,14 @@ function fakeSafeyolo() {
       if (url.hostname === '_safeyolo.proxy.internal') {
         state.calls.push({ method: request.method, authorization: request.headers.authorization, body: body ? JSON.parse(body) : null });
         if (request.headers.authorization !== 'Bearer agent-key') return json(401, { error: 'Unauthorized' });
-        if (request.method === 'GET') return json(200, { agent: AGENT, context: state.declared });
+        if (request.method === 'GET') return json(200, { agent: AGENT, context: apiContext() });
         if (request.method === 'DELETE') {
           state.declared = null;
           return json(200, { status: 'cleared' });
         }
         const granted = Math.min(JSON.parse(body).ttl, 900);
         state.declared = JSON.parse(body).context;
-        return json(200, { agent: AGENT, context: state.declared, expires_in: granted });
+        return json(200, { agent: AGENT, context: apiContext(), expires_in: granted });
       }
       if (url.hostname === 'identity.example.test') {
         state.appRequests.push({ host: url.hostname, method: request.method, path: url.pathname, context: state.declared });
@@ -224,6 +225,34 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   assert.equal(proxy.state.declared, started.context);
   assert.deepEqual(proxy.state.calls.map((call) => call.method), ['GET', 'POST']);
   assert.equal(proxy.state.calls[1].body.ttl, 1200);
+
+  await waitFor(async () => (await panel.locator('#context-clock').getAttribute('data-state')) === 'active', 'context clock starts active');
+  const displayExpiry = async (milliseconds) => {
+    await worker.evaluate(async (milliseconds) => {
+      const { journey } = await chrome.storage.session.get('journey');
+      journey.expiresAt = new Date(Date.now() + milliseconds).toISOString();
+      await chrome.storage.session.set({ journey });
+      await chrome.runtime.sendMessage({ kind: 'panel-notice' }).catch(() => undefined);
+    }, milliseconds);
+  };
+  await displayExpiry(65000);
+  await waitFor(async () => (await panel.locator('#context-clock').getAttribute('data-state')) === 'warning', 'context expiry warning visible');
+  const apiCallsBeforeTick = proxy.state.calls.length;
+  const firstTick = await panel.locator('#context-countdown').textContent();
+  await waitFor(async () => (await panel.locator('#context-countdown').textContent()) !== firstTick, 'countdown ticks without API calls');
+  assert.equal(proxy.state.calls.length, apiCallsBeforeTick);
+  await displayExpiry(-1000);
+  proxy.state.declared = null;
+  await waitFor(async () => (await panel.locator('#context-clock').getAttribute('data-state')) === 'expired', 'expired context is red and explicit');
+  assert.match(await panel.locator('#context-notice').textContent(), /expired/);
+  assert.equal(await panel.locator('#context-countdown').textContent(), '0:00');
+  await panel.getByRole('button', { name: 'Renew context', exact: true }).click();
+  await waitFor(async () => (await panel.locator('#context-clock').getAttribute('data-state')) === 'active', 'manual renewal resets the timer');
+  const renewed = (await ask({ kind: 'status' })).journey;
+  assert.equal(renewed.context, started.context);
+  assert.equal(renewed.startedAt, started.startedAt);
+  assert.equal(renewed.events.at(-1).source, 'operator');
+  assert.equal(proxy.state.appRequests.length, 0, 'renewal never dispatches an application request');
 
   const app = await context.newPage();
   await app.goto('http://app.example.test/sign-in' + (mode === 'remount' ? '?remount=1' : ''));
@@ -379,7 +408,8 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   assert.ok(finished.events.some((event) => event.type === 'navigation' && event.how === 'history_state_updated' && event.url.includes('/claims/review')));
   const click = finished.events.find((event) => event.type === 'click' && event.selectors.role?.name === 'Submit claim');
   assert.deepEqual(click.selectors.role, { role: 'button', name: 'Submit claim' });
-  assert.equal(finished.events.find((event) => event.type === 'context_renewed').after.status, 428);
+  assert.equal(finished.events.find((event) => event.type === 'context_renewed' && event.source === 'proxy_block').after.status, 428);
+  assert.equal(await panel.locator('#context-clock').isHidden(), true, 'no active timer remains after Stop');
   const responses = finished.events.filter((event) => event.type === 'network_response');
   assert.ok(responses.some(e => e.url.includes('identity.example.test/register') && e.status === 200 && e.safeyoloRequestId));
   assert.ok(finished.events.some(e => e.type === 'network_redirect' && e.redirectUrl.includes('identity.example.test/register')));

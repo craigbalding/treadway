@@ -83,7 +83,34 @@
     return callSafeyolo(fetchFunction, apiKey, 'DELETE');
   }
 
-  const api = { SAFEYOLO_CONTEXT_URL, slug, buildContext, readContext, declareContext, clearContext };
+  // The Agent API returns a context object, while declarations use a header.
+  // Compare every field, including safe extension metadata, independent of order.
+  function contextKey(value) {
+    let entries;
+    if (typeof value === 'string') {
+      entries = [];
+      for (const part of value.split(';').map(part => part.trim()).filter(Boolean)) {
+        const equal = part.indexOf('=');
+        if (equal < 1) return null;
+        entries.push([part.slice(0, equal).trim(), part.slice(equal + 1).trim()]);
+      }
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) entries = Object.entries(value);
+    else return null;
+    const fields = new Map();
+    for (const [key, entry] of entries) {
+      if (!SAFE_TOKEN.test(key) || typeof entry !== 'string' || !SAFE_TOKEN.test(entry) || fields.has(key)) return null;
+      fields.set(key, entry);
+    }
+    if (!fields.has('run') || !fields.has('agent') || fields.size > 20) return null;
+    return JSON.stringify([...fields].sort(([a], [b]) => a.localeCompare(b)));
+  }
+
+  function sameContext(left, right) {
+    const key = contextKey(left);
+    return key !== null && key === contextKey(right);
+  }
+
+  const api = { SAFEYOLO_CONTEXT_URL, slug, buildContext, readContext, declareContext, clearContext, sameContext };
   root.TreadwayTestContext = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

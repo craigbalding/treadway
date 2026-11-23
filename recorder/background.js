@@ -128,7 +128,7 @@ function stopJourney() {
     try {
       const current = await Context.readContext(fetch, settings.safeyoloKey);
       const own = (await chrome.storage.session.get('journey')).journey;
-      if (current.context === own.context) await Context.clearContext(fetch, settings.safeyoloKey);
+      if (Context.sameContext(current.context, own.context)) await Context.clearContext(fetch, settings.safeyoloKey);
       else if (current.context) clearSkipped = 'different_declared_context';
     } catch (error) { clearError = error.message; }
     return updateJourneys((state) => {
@@ -146,29 +146,56 @@ function stopJourney() {
   });
 }
 
-let renewing = null;
-function renewAfter428(details, run) {
-  if (renewing) return renewing;
-  renewing = transition(async () => {
+function renewJourneyContext({ expectedRun, after, source = 'operator' } = {}) {
+  return transition(async () => {
     const stored = await chrome.storage.session.get('journey');
     const journey = stored.journey;
-    if (!journey || journey.contextStatus !== 'active' || journey.contextFields.run !== run) return;
+    if (!journey || journey.contextStatus !== 'active') {
+      if (expectedRun) return null;
+      throw new Error('Start an active journey before renewing its context');
+    }
+    const run = journey.contextFields.run;
+    if (expectedRun && run !== expectedRun) return null;
     const settings = await readSettings();
-    // The proxy's explicit test-context block identifies the renewal need.
-    // A demonstrated journey can discover new origins (including sign-in).
+    let declarationAttempted = false;
     try {
+      const current = await Context.readContext(fetch, settings.safeyoloKey);
+      if (current.agent !== journey.contextFields.agent) throw new Error('The API key belongs to a different agent');
+      if (current.context && !Context.sameContext(current.context, journey.context)) throw new Error('A different journey owns the declared context; coordinate before renewing');
+      declarationAttempted = true;
       const declared = await Context.declareContext(fetch, settings.safeyoloKey, journey.context, Math.round(settings.ttlMinutes * 60));
       await updateJourneys((state) => {
         if (!state.journey || state.journey.contextFields.run !== run) return;
         state.journey.expiresAt = new Date(Date.now() + declared.expires_in * 1000).toISOString();
-        appendEvent(state.journey, { type: 'context_renewed',
-          after: Object.assign({ status: 428 }, Network.metadata(details), Network.flowReference(details.responseHeaders)),
+        state.journey.contextRenewalError = null;
+        state.journey.contextRenewalStatus = 'confirmed';
+        appendEvent(state.journey, { type: 'context_renewed', source,
+          ...(after ? { after } : {}),
           expires_in: declared.expires_in });
       });
-      notifyPanel({ level: 'warning', text: 'SafeYOLO blocked this request before dispatch; its test context is renewed. Resubmit the blocked action when ready (' + details.method + ' ' + details.url + ').' });
+      return (await chrome.storage.session.get('journey')).journey;
     } catch (error) {
-      notifyPanel({ level: 'error', text: 'Could not renew the test context: ' + error.message });
+      await updateJourneys((state) => {
+        if (!state.journey || state.journey.contextFields.run !== run) return;
+        state.journey.contextRenewalError = error.message;
+        state.journey.contextRenewalStatus = declarationAttempted ? 'unconfirmed' : 'failed';
+        appendEvent(state.journey, { type: 'context_renew_failed', source, declarationAttempted,
+          error: error.message, ...(after ? { after } : {}) });
+      });
+      throw error;
     }
+  });
+}
+
+let renewing = null;
+function renewAfter428(details, run) {
+  if (renewing) return renewing;
+  renewing = renewJourneyContext({ expectedRun: run, source: 'proxy_block',
+    after: Object.assign({ status: 428 }, Network.metadata(details), Network.flowReference(details.responseHeaders)),
+  }).then((journey) => {
+    if (journey) notifyPanel({ level: 'warning', text: 'SafeYOLO blocked this request before dispatch; its test context is renewed. Resubmit the blocked action when ready (' + details.method + ' ' + details.url + ').' });
+  }).catch((error) => {
+      notifyPanel({ level: 'error', text: 'Could not renew the test context: ' + error.message });
   }).finally(() => { renewing = null; });
   return renewing;
 }
@@ -330,6 +357,7 @@ const handlers = {
       pendingRequests: journey ? pendingRequests(state, journey.contextFields.run).length : 0 };
   },
   start: (message) => startJourney(message),
+  'renew-context': () => renewJourneyContext(),
   stop: () => stopJourney(),
   marker: async (message) => {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });

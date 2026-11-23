@@ -125,3 +125,15 @@ test('SafeYOLO calls send the bearer key and report API errors', async () => {
   await assert.rejects(Context.declareContext(reply(400, { error: 'Invalid test context', detail: 'bad' }), 'key', 'x', 1), /HTTP 400 \(Invalid test context: bad\)/);
   await assert.rejects(Context.clearContext(async () => { throw new Error('offline'); }, 'key'), /Cannot reach the SafeYOLO Agent API/);
 });
+
+test('context ownership matches the actual API object and preserves every field', () => {
+  const header = 'run=trial;agent=fixture;role=applicant;persona=person-one';
+  const object = { persona: 'person-one', role: 'applicant', agent: 'fixture', run: 'trial' };
+  assert.equal(Context.sameContext(header, object), true);
+  assert.equal(Context.sameContext(header, ' persona=person-one;role=applicant;agent=fixture;run=trial; '), true);
+  assert.equal(Context.sameContext(header, { ...object, step: 'other' }), false);
+  assert.equal(Context.sameContext(header, { ...object, persona: 'person-two' }), false);
+  assert.equal(Context.sameContext(header, header + ';agent=fixture'), false);
+  assert.equal(Context.sameContext(header, null), false);
+  assert.equal(Context.sameContext(header, []), false);
+});

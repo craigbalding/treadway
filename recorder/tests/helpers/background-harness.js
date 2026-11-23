@@ -13,6 +13,8 @@ function createHarness(options = {}) {
   const notices = [];
   const calls = [];
   const external = { context: null };
+  const apiContext = () => typeof external.context === 'string' ? Object.fromEntries(
+    external.context.split(';').map(part => part.split('='))) : external.context;
   const webRequest = Object.fromEntries(['onBeforeRequest', 'onHeadersReceived', 'onBeforeRedirect', 'onCompleted', 'onErrorOccurred'].map((key) => [key, event()]));
   const webNavigation = Object.fromEntries(['onHistoryStateUpdated', 'onReferenceFragmentUpdated', 'onCommitted'].map((key) => [key, event()]));
   webNavigation.getAllFrames = async () => [{ frameId: 0, documentId: 'doc-a' }, { frameId: 2, documentId: 'doc-child' }];
@@ -23,9 +25,9 @@ function createHarness(options = {}) {
       calls.push({ method: request.method, ...(request.body ? { body: JSON.parse(request.body) } : {}) });
       if (options.fetchHook) await options.fetchHook(url, request);
       let value;
-      if (request.method === 'GET') value = { agent: 'fixture-agent', context: external.context };
+      if (request.method === 'GET') value = { agent: 'fixture-agent', context: apiContext() };
       else if (request.method === 'DELETE') { external.context = null; value = { status: 'cleared' }; }
-      else { external.context = JSON.parse(request.body).context; value = { context: external.context, expires_in: 1200 }; }
+      else { external.context = JSON.parse(request.body).context; value = { context: apiContext(), expires_in: 1200 }; }
       return { status: 200, text: async () => JSON.stringify(value) };
     },
     chrome: {
