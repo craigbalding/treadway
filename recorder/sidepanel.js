@@ -7,6 +7,7 @@
   const $ = (id) => document.getElementById(id);
   let personas = [];
   let folder = null;
+  let storageMode = 'downloads';
   let status = { journey: null, finished: null };
   let saveQueue = Promise.resolve();
   let saving = false;
@@ -79,6 +80,17 @@
   }
 
   async function loadPersonas() {
+    if (storageMode === 'downloads') {
+      const { personaText = '' } = await chrome.storage.local.get('personaText');
+      if (!personaText.trim()) {
+        personas = [];
+        renderPersonas();
+        return;
+      }
+      personas = Personas.parsePersonas(personaText);
+      renderPersonas();
+      return;
+    }
     const directory = await folderWithPermission();
     let file;
     try {
@@ -123,27 +135,43 @@
       // overwrite its newer file with an old snapshot retained by a caller.
       if (!latest.finished || latest.finished.contextFields.run !== record.contextFields.run) return;
       record = latest.finished;
-      const directory = await folderWithPermission();
-      const journeys = await directory.getDirectoryHandle('journeys', { create: true });
       const name = record.contextFields.run + '.json';
-      const handle = await journeys.getFileHandle(name, { create: true });
-      const writable = await handle.createWritable();
-      await writable.write(JSON.stringify(Object.assign({ format: 'treadway-journey-events/2' }, record), null, 2) + '\n');
-      await writable.close();
+      const text = JSON.stringify(Object.assign({ format: 'treadway-journey-events/2' }, record), null, 2) + '\n';
+      let destination;
+      if (storageMode === 'downloads') {
+        const download = await TreadwayDownloadExport.save(text, record.contextFields.run);
+        destination = download.filename;
+        $('storage-status').textContent = 'Last saved: ' + destination;
+      } else {
+        const directory = await folderWithPermission();
+        const journeys = await directory.getDirectoryHandle('journeys', { create: true });
+        const handle = await journeys.getFileHandle(name, { create: true });
+        const writable = await handle.createWritable();
+        await writable.write(text);
+        await writable.close();
+        destination = directory.name + '/journeys/' + name;
+      }
       const result = await ask({ kind: 'saved', run: record.contextFields.run, revision: record.revision });
-      say('Saved ' + record.events.length + ' events to ' + directory.name + '/journeys/' + name);
+      say('Saved ' + record.events.length + ' events to ' + destination);
       if (result.pendingRequests) say(result.pendingRequests + ' request(s) still pending; this snapshot will update while the panel is open.');
     } finally { saving = false; }
   }
   async function saveUpdatedSnapshot() {
     const record = status.finished;
-    if (!record || saving || record.lastSavedRevision === undefined || record.lastSavedRevision === record.revision || !folder) return;
-    if ((await folder.queryPermission({ mode: 'readwrite' })) === 'granted') await saveJourneyFile(record);
+    if (!record || saving || record.lastSavedRevision === undefined || record.lastSavedRevision === record.revision) return;
+    if (storageMode === 'downloads' || (folder && (await folder.queryPermission({ mode: 'readwrite' })) === 'granted')) {
+      await saveJourneyFile(record);
+    }
   }
 
   // ---- settings -------------------------------------------------------------
   async function loadSettings() {
-    const { settings = {} } = await chrome.storage.local.get('settings');
+    const { settings = {}, captureStorage, personaText = '' } = await chrome.storage.local.get(['settings', 'captureStorage', 'personaText']);
+    // Preserve an existing folder setup. Fresh profiles use the dialog-free mode.
+    storageMode = captureStorage === 'folder' || captureStorage === 'downloads' ? captureStorage : folder ? 'folder' : 'downloads';
+    $('storage-mode').value = storageMode;
+    $('personas-json').value = personaText;
+    renderStorageChoice();
     $('safeyolo-key').value = settings.safeyoloKey || '';
     $('jev-key').value = settings.jevKey || '';
     $('target-hosts').value = (settings.targetHosts || []).join('\n');
@@ -155,6 +183,9 @@
   async function saveSettings() {
     const ttlMinutes = Number($('ttl-minutes').value);
     if (!(ttlMinutes >= 1)) throw new Error('Test context timer must be at least 1 minute');
+    const captureStorage = $('storage-mode').value;
+    const personaText = $('personas-json').value;
+    const parsed = captureStorage === 'downloads' ? Personas.parsePersonas(personaText) : null;
     const settings = {
       safeyoloKey: $('safeyolo-key').value.trim(),
       jevKey: $('jev-key').value.trim(),
@@ -162,7 +193,10 @@
       ttlMinutes,
       recordSecrets: $('record-secrets').checked,
     };
-    await chrome.storage.local.set({ settings });
+    await chrome.storage.local.set({ settings, captureStorage, personaText });
+    storageMode = captureStorage;
+    if (parsed) { personas = parsed; renderPersonas(); }
+    else await loadPersonas();
     say('Settings saved');
   }
 
@@ -180,7 +214,7 @@
       line.textContent = status.finished ? 'Journey stopped; ' + status.pendingRequests + ' pending request(s); save the latest snapshot or finish incomplete.' : 'No journey running';
       line.className = 'status idle';
     }
-    $('start').disabled = running || Boolean(status.finished);
+    $('start').disabled = running || Boolean(status.finished) || !personas.length;
     $('stop').disabled = !running;
     const active = running && status.journey.contextStatus === 'active';
     for (const id of ['fill', 'authenticated', 'step', 'step-name', 'step-expected', 'observed-account']) $(id).disabled = !active;
@@ -194,7 +228,7 @@
     const persona = selectedPersona();
     const journeyName = $('journey-name').value.trim();
     if (!journeyName) throw new Error('Type a journey name');
-    await folderWithPermission();
+    if (storageMode === 'folder') await folderWithPermission();
     const journey = await ask({ kind: 'start', persona, journeyName });
     say('Started. SafeYOLO test context: ' + journey.context);
   }
@@ -230,8 +264,24 @@
   }
 
   // ---- wiring ------------------------------------------------------------------
+  function renderStorageChoice() {
+    const folderSelected = $('storage-mode').value === 'folder';
+    $('folder-settings').hidden = !folderSelected;
+    $('downloads-settings').hidden = folderSelected;
+    $('storage-status').textContent = folderSelected ? 'Folder mode uses the native directory picker.' :
+      'Files: Treadway/journeys in Chrome\'s Downloads directory.';
+  }
+  $('storage-mode').addEventListener('change', renderStorageChoice);
+  $('example-personas').addEventListener('click', guarded(async () => {
+    const response = await fetch('examples/personas.json');
+    if (!response.ok) throw new Error('Could not load example personas');
+    $('personas-json').value = await response.text();
+    say('Example personas loaded into the editor. Edit them and Save settings to use them.');
+  }));
   $('choose-folder').addEventListener('click', guarded(async () => {
     folder = await storedHandle(await window.showDirectoryPicker({ id: 'treadway-recorder', mode: 'readwrite' }));
+    storageMode = 'folder';
+    await chrome.storage.local.set({ captureStorage: storageMode });
     $('folder-name').textContent = folder.name;
     await loadPersonas();
   }));
@@ -254,9 +304,10 @@
   }));
 
   (async () => {
-    await loadSettings();
     folder = await storedHandle();
-    if (folder) {
+    await loadSettings();
+    if (storageMode === 'downloads') await loadPersonas();
+    else if (folder) {
       $('folder-name').textContent = folder.name;
       // Reading needs permission; without a click only an already granted handle works.
       if ((await folder.queryPermission({ mode: 'readwrite' })) === 'granted') await loadPersonas().catch((error) => say(error.message, 'error'));

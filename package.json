@@ -16,7 +16,7 @@
     "test:browserserve": "node --test tests/test_browserserve.js tests/test_browserless_reconnect.js tests/test_remote_transport.js",
     "test:browserserve:service": "node --test tests/test_browserserve_service.js",
     "test:recorder": "npm run test:recorder:logic && npm run test:recorder:browser",
-    "test:recorder:logic": "node --test recorder/tests/test_recorder_logic.js recorder/tests/test_recorder_contracts.js",
+    "test:recorder:logic": "node --test recorder/tests/test_recorder_logic.js recorder/tests/test_recorder_contracts.js recorder/tests/test_recorder_exports.js",
     "test:recorder:browser": "node --test --test-concurrency=1 recorder/tests/test_recorder_browser.js"
   },
   "dependencies": {

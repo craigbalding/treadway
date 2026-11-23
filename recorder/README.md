@@ -28,9 +28,22 @@ addons:
     declared_ttl_max: 1200
 ```
 
-In Settings, choose a folder containing [personas.json](examples/personas.json),
-enter the SafeYolo **agent** API key and matching target hosts, and save. The
-context timer defaults to 20 minutes; SafeYolo may cap it. Wildcard host patterns
+Fresh profiles default to **Downloads (no folder picker)**. In Settings, paste
+your personas JSON, or click **Use example personas** and edit the example.
+Enter the SafeYolo **agent** API key and matching target hosts, then **Save settings**.
+The JSON uses the same [personas format](examples/personas.json) as folder mode.
+Downloads mode stores its persona configuration in this extension profile and
+writes `Treadway/journeys/<run>.json` beneath Chrome's Downloads directory. The
+panel shows the actual saved path. An agent can configure the profile's Downloads
+directory to a shared workspace before the trial; no folder chooser is needed.
+
+**Chosen folder** is also available: choose a directory containing `personas.json`
+and save settings. Existing configured folders keep that mode on upgrade.
+Use Downloads mode where the native Linux folder picker is unavailable or crashes
+in its GTK/image-loader stack. It avoids that dialog without changing browser or
+image-loader sandbox settings. Both modes export the same event format.
+
+The context timer defaults to 20 minutes; SafeYolo may cap it. Wildcard host patterns
 match subdomains, not the parent host. Optional Jev classification uses a TypeSafe
 AI key and needs policy access to `api.typesafe.ai`.
 
@@ -64,7 +77,11 @@ Use the intended test profile. Fill all acts only in the active tab's top frame.
    this journey. Another owner's declaration is left intact. A declaration or
    clear with an uncertain outcome stays explicitly recorded.
 
-The file is `journeys/<run>.json` in your chosen folder. If requests were already
+The file is `Treadway/journeys/<run>.json` under Downloads, or `journeys/<run>.json`
+in a chosen folder. A Downloads save is acknowledged only when Chrome reports
+the file complete; interruption or an uncertain outcome retains the recording
+for **Save again**. Later revisions overwrite the same run's export.
+If requests were already
 in flight, it is a pending snapshot. Their responses and completion/error events
 remain associated with the original run and step after Stop. While the panel is
 open it updates an already saved snapshot. If closed, reopen it and **Save again**
@@ -108,7 +125,8 @@ a later remount can remove a highlight, so also inspect the panel's report.
 
 ## Personas
 
-The selected folder contains a `personas` array. `id` and `role` must use letters,
+Paste a JSON document containing a `personas` array in Downloads mode, or put it
+in the chosen folder's `personas.json`. `id` and `role` must use letters,
 digits and `_ . : -`. `label` defaults to `id`. `facts` supply fixed values;
 `generate` supports `ppsn` and `test_card` with `seed` defaulting to `id`. Facts
 win over generated values. Dates use `YYYY-MM-DD`; text inputs showing a date

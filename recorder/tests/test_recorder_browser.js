@@ -123,12 +123,20 @@ for (const mode of ['stable', 'remount']) {
 test('records ' + mode + ' React controls, exact flows, frames and secret policy', { skip: missing, timeout: 60000 }, async (t) => {
   const proxy = await fakeSafeyolo();
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-recorder-'));
+  const downloadRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-recorder-downloads-'));
+  if (mode === 'remount') {
+    fs.mkdirSync(path.join(profile, 'Default'));
+    fs.writeFileSync(path.join(profile, 'Default', 'Preferences'), JSON.stringify({
+      download: { default_directory: downloadRoot, prompt_for_download: false, directory_upgrade: true },
+    }));
+  }
   let context;
   t.after(async () => {
     if (context) await context.close();
     proxy.server.closeAllConnections();
     proxy.server.close();
     fs.rmSync(profile, { recursive: true, force: true });
+    fs.rmSync(downloadRoot, { recursive: true, force: true });
   });
   context = await playwright.chromium.launchPersistentContext(profile, {
     headless: true,
@@ -141,6 +149,13 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;
   await worker.evaluate((recordSecrets) => chrome.storage.local.set({ settings: { safeyoloKey: 'agent-key', jevKey: '', targetHosts: ['app.example.test'], ttlMinutes: 20, recordSecrets } }), mode === 'remount');
+  if (mode === 'remount') {
+    // Exercise Chrome's real profile destination, rather than Playwright's
+    // download interception (which substitutes a GUID in its artifact folder).
+    const control = await context.browser().newBrowserCDPSession();
+    await control.send('Browser.setDownloadBehavior', { behavior: 'default' });
+    await control.detach();
+  }
 
   const panel = await context.newPage();
   const panelErrors = [];
@@ -148,7 +163,7 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   await panel.goto('chrome-extension://' + extensionId + '/sidepanel.html');
   // Exercise the real panel writer with an origin-private directory handle.
   // This avoids an OS folder chooser while keeping File System Access + IDB real.
-  await panel.evaluate(async (text) => {
+  if (mode === 'stable') await panel.evaluate(async (text) => {
     const folder = await navigator.storage.getDirectory();
     const writable = await (await folder.getFileHandle('personas.json', { create: true })).createWritable();
     await writable.write(text); await writable.close();
@@ -164,8 +179,26 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
     });
     db.close();
   }, fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8'));
+  else await panel.evaluate(async (text) => {
+    await chrome.storage.local.set({ captureStorage: 'downloads', personaText: text });
+  }, fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8'));
   await panel.reload();
   await panel.locator('#persona option').first().waitFor({ state: 'attached' });
+  if (mode === 'remount') {
+    await panel.evaluate(() => {
+      window.pickerCalls = 0;
+      window.showDirectoryPicker = () => { window.pickerCalls += 1; throw new Error('Native picker must not be used'); };
+    });
+    assert.equal(await panel.locator('#folder-settings').isHidden(), true);
+    await panel.locator('#settings-section summary').click();
+    const pasted = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8'));
+    pasted.personas[0].label = 'Pasted fixture persona';
+    await panel.locator('#personas-json').fill(JSON.stringify(pasted));
+    await panel.locator('#save-settings').click();
+    await panel.locator('#messages').getByText('Settings saved', { exact: false }).first().waitFor();
+    assert.match(await panel.locator('#persona option').first().textContent(), /Pasted fixture persona/);
+    assert.equal(await panel.evaluate(async () => JSON.parse((await chrome.storage.local.get('personaText')).personaText).personas[0].label), 'Pasted fixture persona');
+  }
   const ask = (message) => panel.evaluate((value) => chrome.runtime.sendMessage(value), message);
 
   const persona = (await panel.evaluate((text) => TreadwayPersonas.parsePersonas(text), fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8')))[0];
@@ -272,7 +305,10 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   const readFile = async () => {
     let value;
     await waitFor(async () => {
-      value = await panel.evaluate(async (run) => {
+      if (mode === 'remount') {
+        try { value = JSON.parse(fs.readFileSync(path.join(downloadRoot, 'Treadway', 'journeys', started.contextFields.run + '.json'), 'utf8')); }
+        catch (_) { value = false; }
+      } else value = await panel.evaluate(async (run) => {
         try {
           const folder = await navigator.storage.getDirectory();
           const journeys = await folder.getDirectoryHandle('journeys');
@@ -329,6 +365,11 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   assert.deepEqual(panelErrors, []);
   await waitFor(async () => !(await ask({ kind: 'status' })).finished, 'latest save acknowledged');
   assert.equal((await ask({ kind: 'status' })).finished, null);
+  if (mode === 'remount') {
+    assert.equal(await panel.evaluate(() => window.pickerCalls), 0);
+    assert.equal(fs.readdirSync(path.join(downloadRoot, 'Treadway', 'journeys')).length, 1,
+      'late outcomes replace the same saved recording');
+  }
 
   if (mode === 'stable') {
     const fixture = await context.newPage();
