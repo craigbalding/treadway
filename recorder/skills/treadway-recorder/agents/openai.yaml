@@ -1,0 +1,4 @@
+interface:
+  display_name: "Treadway Recorder"
+  short_description: "Prepare and assist human-driven recorded journeys"
+  default_prompt: "Use $treadway-recorder to prepare a usable persona and recorder, then assist me while I demonstrate the journey."
