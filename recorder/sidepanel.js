@@ -280,7 +280,26 @@
   async function fill() {
     const persona = personas.find((candidate) => candidate.id === status.journey.persona.id);
     if (!persona) throw new Error('Persona ' + status.journey.persona.id + ' is no longer in personas.json');
-    const report = await ask({ kind: 'fill', values: Personas.personaValues(persona) });
+    const report = await ask({ kind: 'fill', persona });
+    if (report.preparedPersona) {
+      Object.assign(persona, report.preparedPersona);
+      // The private profile cache is durable before fill. Downloads personas
+      // also receive the generated credential so it is visible/reusable here.
+      if (storageMode === 'downloads') {
+        const stored = await chrome.storage.local.get('personaText');
+        const document = JSON.parse(stored.personaText);
+        const entry = document.personas.find(entry => entry.id === persona.id);
+        if (!entry || entry.role !== persona.role || (entry.facts?.email || '') !== (persona.facts.email || '') ||
+            (entry.facts?.username || '') !== (persona.facts.username || '')) {
+          throw new Error('Persona configuration changed during fill. The credential remains saved in the private profile.');
+        }
+        entry.credentials = persona.credentials; entry.secrets = persona.secrets;
+        const text = JSON.stringify(document, null, 2);
+        await chrome.storage.local.set({ personaText: text });
+        $('personas-json').value = text;
+      }
+      if (report.generatedPassword) say('Generated and saved a test password for this persona.');
+    }
     say('Filled ' + report.filled.length + ' field(s); ' + report.manual.length + ' highlighted for you to fill.');
     for (const entry of report.manual) {
       const where = entry.selectors.role ? entry.selectors.role.name : entry.selectors.css;

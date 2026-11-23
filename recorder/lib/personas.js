@@ -113,6 +113,7 @@
         label: typeof entry.label === 'string' ? entry.label : entry.id,
         seed: typeof entry.seed === 'string' && entry.seed ? entry.seed : entry.id,
         facts: readStringMap(entry.facts, where + '.facts'),
+        credentials: readStringMap(entry.credentials, where + '.credentials'),
         generate: generate.slice(),
         secrets: readStringMap(entry.secrets, where + '.secrets'),
       };
@@ -145,6 +146,13 @@
       }
     }
     for (const [type, value] of Object.entries(facts)) values[type] = { value, source: 'persona' };
+    if (!values.display_name && values.full_name) values.display_name = { ...values.full_name, source: 'derived' };
+    if (!values.username && values.email) values.username = { ...values.email, source: 'derived' };
+    for (const type of ['password', 'new_password', 'one_time_code']) {
+      const value = persona.credentials?.[type] || facts[type];
+      if (value) values[type] = { value, source: 'credential', credential: true,
+        secretReference: persona.secrets[type] || persona.secrets.password || persona.id + ':' + type };
+    }
     if (!values.card_name && values.card_number && values.full_name) {
       values.card_name = { value: values.full_name.value, source: values.full_name.source };
     }

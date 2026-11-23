@@ -1,5 +1,5 @@
 // Owns the recording journal and passive request/flow-store references.
-importScripts('lib/fields.js', 'lib/jev.js', 'lib/test-context.js', 'lib/network.js');
+importScripts('lib/fields.js', 'lib/jev.js', 'lib/test-context.js', 'lib/network.js', 'lib/personas.js', 'lib/credentials.js');
 const Context = globalThis.TreadwayTestContext;
 const Jev = globalThis.TreadwayJev;
 const Fields = globalThis.TreadwayFields;
@@ -313,20 +313,59 @@ async function classifyFields(fields) {
   for (const type of stored.personaFieldTypes || []) if (!choices[type]) choices[type] = type.replace(/_/g, ' ');
   return Jev.classifyWithJev({ apiKey: settings.jevKey, fields, choices, fetch });
 }
-async function fillActiveTab({ values }) {
+async function fillActiveTab({ values, persona }) {
   const journey = (await chrome.storage.session.get('journey')).journey;
   if (!journey || journey.contextStatus !== 'active') throw new Error('Start a journey before filling');
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) throw new Error('No active tab');
+  let prepared = null;
+  if (persona) {
+    persona = TreadwayPersonas.parsePersonas(JSON.stringify({ personas: [persona] }))[0];
+    if (persona.id !== journey.persona.id || persona.role !== journey.persona.role) throw new Error('Fill persona does not match this journey');
+    const needs = await chrome.tabs.sendMessage(tab.id, { kind: 'inspect-fill' }, { frameId: 0 });
+    if (!needs) throw new Error('The page did not answer the fill inspection');
+    prepared = await TreadwayCredentials.prepare({ persona, ...needs, crypto,
+      read: async () => (await chrome.storage.local.get('personaCredentials')).personaCredentials,
+      write: async all => chrome.storage.local.set({ personaCredentials: all }),
+    });
+    values = TreadwayPersonas.personaValues(prepared.persona);
+    await updateJourneys(state => {
+      const current = state.journey;
+      if (!current || current.contextFields.run !== journey.contextFields.run) return;
+      const changed = Object.entries(prepared.persona.secrets).some(([key, value]) => current.persona.secrets[key] !== value);
+      if (prepared.generated || changed) {
+        current.persona.secrets = Object.assign({}, current.persona.secrets, prepared.persona.secrets);
+        appendEvent(current, { type: 'credential_prepared', source: 'extension', generated: prepared.generated,
+          secretReferences: prepared.persona.secrets, storage: 'private_persona_profile' });
+      }
+    });
+    const current = (await chrome.storage.session.get('journey')).journey;
+    if (!current || current.contextFields.run !== journey.contextFields.run || current.contextStatus !== 'active') {
+      throw new Error('Recording stopped before filling');
+    }
+  }
   await chrome.storage.session.set({ personaFieldTypes: Object.keys(values) });
   const answer = await chrome.tabs.sendMessage(tab.id, { kind: 'fill', values }, { frameId: 0 });
   if (!answer) throw new Error('The page did not answer; reload it so the recorder can attach');
   if (answer.error) throw new Error(answer.error);
   // The content script journals the result with Chrome's actual sender frame
   // and document identity BEFORE it answers, including partial/error reports.
-  return answer.report;
+  return Object.assign({}, answer.report, prepared ? { preparedPersona: prepared.persona, generatedPassword: prepared.generated } : {});
 }
 function withSecretReference(journey, event) {
+  if (event.type === 'fill') {
+    const clean = entries => (entries || []).map(entry => {
+      if (!entry.secret && !Fields.SECRET_TYPES.has(entry.type)) return entry;
+      const result = Object.assign({}, entry, { secret: true,
+        secretReference: entry.secretReference || journey.persona.secrets[entry.type] || journey.persona.id + ':' + entry.type });
+      if (!journey.recordSecrets) {
+        for (const key of ['value', 'expectedValue', 'observedValue']) delete result[key];
+        result.redacted = true;
+      }
+      return result;
+    });
+    return Object.assign({}, event, { filled: clean(event.filled), manual: clean(event.manual) });
+  }
   if (event.type !== 'field') return event;
   if (event.secret || event.redacted) {
     const reference = journey.persona.secrets[event.fieldType];

@@ -7,6 +7,8 @@ const Personas = require('../lib/personas.js');
 const Fields = require('../lib/fields.js');
 const Jev = require('../lib/jev.js');
 const Context = require('../lib/test-context.js');
+const Credentials = require('../lib/credentials.js');
+const { webcrypto } = require('node:crypto');
 
 const example = fs.readFileSync(path.join(__dirname, '..', 'examples', 'personas.json'), 'utf8');
 
@@ -30,6 +32,7 @@ test('generated values are valid and deterministic per persona seed', () => {
   assert.equal(first.card_expiry.value, '12/29');
   assert.equal(first.card_name.value, 'Casey Example');
   assert.deepEqual(first.full_name, { value: 'Casey Example', source: 'persona' });
+  assert.equal(first.display_name.value, 'Casey Example');
   assert.deepEqual(first.email, { value: 'casey.submitter@example.test', source: 'persona' });
   assert.notEqual(Personas.personaValues(sam, now).ppsn.value, first.ppsn.value);
   assert.equal(first.password, undefined, 'secrets are references, never fill values');
@@ -60,6 +63,7 @@ test('rules use autocomplete, input type, then names and labels', () => {
   assert.deepEqual(Fields.ruleType(field({ id: 'cardNumber' })), { type: 'card_number', by: 'id' });
   assert.deepEqual(Fields.ruleType(field({ placeholder: 'Eircode' })), { type: 'postcode', by: 'placeholder' });
   assert.equal(Fields.ruleType(field({ label: 'Reason for claim' })), null);
+  assert.equal(Fields.ruleType(field({ label: 'Display name' })).type, 'display_name');
 });
 
 test('date of birth follows the field layout hint', () => {
@@ -136,4 +140,39 @@ test('context ownership matches the actual API object and preserves every field'
   assert.equal(Context.sameContext(header, header + ';agent=fixture'), false);
   assert.equal(Context.sameContext(header, null), false);
   assert.equal(Context.sameContext(header, []), false);
+});
+
+test('Jev confidence floor is 0.51 and rejects invented candidate names', () => {
+  const answer = (choice, confidence) => ({ answers: { field: { type: 'choice', choice, confidence } } });
+  assert.equal(Jev.MIN_CONFIDENCE, 0.51);
+  assert.deepEqual(Jev.readJevAnswers(answer('display_name', 0.5), ['field']), {});
+  assert.equal(Jev.readJevAnswers(answer('display_name', 0.51), ['field']).field.type, 'display_name');
+  assert.deepEqual(Jev.readJevAnswers(answer('invented', 0.99), ['field'], undefined, { display_name: 'Display name' }), {});
+});
+
+test('password generation persists once per persona before use and preserves supplied credentials', async () => {
+  let stored = {}; let writes = 0;
+  const options = { persona: Personas.parsePersonas(example)[0], needsNewPassword: true, crypto: webcrypto,
+    read: async () => structuredClone(stored), write: async all => { writes += 1; stored = structuredClone(all); } };
+  const [first, second] = await Promise.all([Credentials.prepare(options), Credentials.prepare(options)]);
+  const password = first.persona.credentials.new_password;
+  assert.equal(first.generated, true); assert.equal(second.generated, false);
+  assert.equal(password, second.persona.credentials.new_password);
+  assert.equal(password.length, 20);
+  for (const pattern of [/[A-Z]/, /[a-z]/, /[0-9]/, /[^A-Za-z0-9]/]) assert.match(password, pattern);
+  assert.equal(writes, 2);
+  assert.equal(Personas.personaValues(first.persona).new_password.credential, true);
+  const supplied = { ...options, persona: { ...options.persona, credentials: { new_password: 'SuppliedTestPassword!7' } } };
+  assert.equal((await Credentials.prepare(supplied)).persona.credentials.new_password, 'SuppliedTestPassword!7');
+  const rotation = await Credentials.prepare({ ...options, persona: { ...options.persona,
+    credentials: { password: 'OldTestPassword!1', new_password: 'NewTestPassword!2' } } });
+  assert.notEqual(rotation.persona.secrets.password, rotation.persona.secrets.new_password);
+  await assert.rejects(Credentials.prepare({ ...options, write: async () => { throw new Error('disk full'); } }), /disk full/);
+});
+
+test('an unknown existing-account password is not invented without a registration field', async () => {
+  const prepared = await Credentials.prepare({ persona: Personas.parsePersonas(example)[0], needsNewPassword: false,
+    read: async () => ({}), write: async () => { throw new Error('must stay passive'); }, crypto: webcrypto });
+  assert.equal(prepared.generated, false);
+  assert.equal(prepared.persona.credentials.password, undefined);
 });

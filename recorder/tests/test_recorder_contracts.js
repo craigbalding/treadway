@@ -215,3 +215,14 @@ test('a lost renewal response stays unconfirmed and is never automatically retri
   assert.equal(h.session.journey.events.at(-1).type, 'context_renew_failed');
   assert.equal(h.session.journey.events.at(-1).declarationAttempted, true);
 });
+
+test('reference-mode journals redact automatic credential fill results including failed readbacks', async () => {
+  const h = createHarness({ settings: { recordSecrets: false } }); await h.start();
+  const secret = { type: 'new_password', secret: true, value: 'SyntheticPassword!7',
+    expectedValue: 'SyntheticPassword!7', observedValue: 'SyntheticPassword!7', secretReference: 'FIXTURE_NEW_PASSWORD' };
+  await h.command({ kind: 'page-event', event: { type: 'fill', filled: [secret], manual: [{ ...secret, reason: 'did not stick' }] } });
+  const event = h.session.journey.events.at(-1);
+  assert.equal(JSON.stringify(event).includes('SyntheticPassword!7'), false);
+  assert.equal(event.filled[0].secretReference, 'FIXTURE_NEW_PASSWORD');
+  assert.equal(event.manual[0].redacted, true);
+});
