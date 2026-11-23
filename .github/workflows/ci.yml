@@ -92,6 +92,42 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  recorder:
+    name: Recorder contracts, extension and HTTP conversion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.11'
+      - run: npm ci --ignore-scripts
+      - run: npm run test:recorder:logic
+      - run: npx playwright install --with-deps chromium
+      - name: Install matching Chromium sandbox helper
+        # Downloaded Chromium is outside Ubuntu's AppArmor userns allowlist.
+        # Install its matching helper in a root-owned location, keeping the
+        # browser sandbox and system-wide namespace restrictions enabled.
+        run: |
+          sandbox_source=$(node -e 'const path = require("node:path"); console.log(path.join(path.dirname(require("playwright").chromium.executablePath()), "chrome_sandbox"))')
+          test -x "$sandbox_source"
+          sudo install -o root -g root -m 4755 "$sandbox_source" /usr/local/sbin/treadway-recorder-sandbox
+          test -u /usr/local/sbin/treadway-recorder-sandbox
+          test "$(stat -c '%u' /usr/local/sbin/treadway-recorder-sandbox)" = 0
+      - name: Exercise the unpacked extension with the Chromium sandbox enabled
+        env:
+          RECORDER_REQUIRE_BROWSER: '1'
+          CHROME_DEVEL_SANDBOX: /usr/local/sbin/treadway-recorder-sandbox
+        run: npm run test:recorder:browser
+      - run: python -m pip install -e '.[robot]'
+      - run: python recorder/examples/http-first/walkthrough.py
+
   browserserve-service:
     name: Browserserve native reconnect
     needs: contracts
@@ -132,7 +168,7 @@ jobs:
   distribution:
     name: Distribution and installed walkthroughs
     if: github.event_name != 'pull_request'
-    needs: [contracts, browser-fast]
+    needs: [contracts, browser-fast, recorder]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:

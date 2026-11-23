@@ -1,0 +1,18 @@
+{
+  "synthetic": true,
+  "note": "Handwritten minimal event example and selected flow projections for teaching; not a native SafeYolo export or live acceptance evidence.",
+  "recording": {
+    "format": "treadway-journey-events/2",
+    "contextFields": { "run": "synthetic-demonstration", "persona": "casey-demonstration", "role": "submitter" },
+    "events": [
+      { "eventId": "synthetic:e1", "stepId": "step-1", "type": "marker", "marker": "step", "name": "Create claim", "source": "operator_annotation", "expectedOutcome": "Fresh read shows amount and owner" },
+      { "eventId": "synthetic:e2", "stepId": "step-1", "type": "click", "selectors": { "role": { "role": "button", "name": "Save claim" } }, "tabId": 7, "frameId": 0, "documentId": "doc-synthetic" },
+      { "eventId": "synthetic:e3", "stepId": "step-1", "type": "network_response", "chromeRequestId": "chrome-synthetic-1", "safeyoloRequestId": "req-synthetic-save", "flowCorrelation": "response_header", "method": "POST", "url": "https://app.example.test/api/claims", "status": 201, "precedingUiEventId": "synthetic:e2", "uiAssociation": "preceding_event_only_not_causality", "tabId": 7, "frameId": 0, "documentId": "doc-synthetic" },
+      { "eventId": "synthetic:e4", "stepId": "step-1", "type": "network_response", "chromeRequestId": "chrome-synthetic-2", "safeyoloRequestId": "req-synthetic-read", "flowCorrelation": "response_header", "method": "GET", "url": "https://app.example.test/api/claims/claim-captured", "status": 200, "tabId": 7, "frameId": 0, "documentId": "doc-synthetic" }
+    ]
+  },
+  "flowProjections": [
+    { "id": "req-synthetic-save", "method": "POST", "url": "https://app.example.test/api/claims", "requestJson": { "amount": 12, "currency": "EUR" }, "status": 201, "responseJson": { "id": "claim-captured" } },
+    { "id": "req-synthetic-read", "method": "GET", "url": "https://app.example.test/api/claims/claim-captured", "status": 200, "responseJson": { "id": "claim-captured", "owner": "casey-demonstration", "amount": 12, "currency": "EUR" } }
+  ]
+}
