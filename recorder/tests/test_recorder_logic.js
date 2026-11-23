@@ -125,10 +125,3 @@ test('SafeYOLO calls send the bearer key and report API errors', async () => {
   await assert.rejects(Context.declareContext(reply(400, { error: 'Invalid test context', detail: 'bad' }), 'key', 'x', 1), /HTTP 400 \(Invalid test context: bad\)/);
   await assert.rejects(Context.clearContext(async () => { throw new Error('offline'); }, 'key'), /Cannot reach the SafeYOLO Agent API/);
 });
-
-test('target host patterns match like SafeYOLO wildcards', () => {
-  assert.equal(Context.hostMatches('app.example.test', ['app.example.test']), true);
-  assert.equal(Context.hostMatches('api.example.test', ['*.example.test']), true);
-  assert.equal(Context.hostMatches('example.test', ['*.example.test']), false);
-  assert.equal(Context.hostMatches('other.test', ['*.example.test', 'app.example.test']), false);
-});

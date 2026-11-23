@@ -83,17 +83,7 @@
     return callSafeyolo(fetchFunction, apiKey, 'DELETE');
   }
 
-  function hostMatches(host, patterns) {
-    const name = String(host).toLowerCase();
-    return patterns.some((pattern) => {
-      const value = String(pattern).trim().toLowerCase();
-      if (!value) return false;
-      if (value.startsWith('*.')) return name.endsWith(value.slice(1)) && name.length > value.length - 1;
-      return name === value;
-    });
-  }
-
-  const api = { SAFEYOLO_CONTEXT_URL, slug, buildContext, readContext, declareContext, clearContext, hostMatches };
+  const api = { SAFEYOLO_CONTEXT_URL, slug, buildContext, readContext, declareContext, clearContext };
   root.TreadwayTestContext = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

@@ -89,6 +89,17 @@ function fakeSafeyolo() {
         state.declared = JSON.parse(body).context;
         return json(200, { agent: AGENT, context: state.declared, expires_in: granted });
       }
+      if (url.hostname === 'identity.example.test') {
+        state.appRequests.push({ host: url.hostname, method: request.method, path: url.pathname, context: state.declared });
+        if (!state.declared) {
+          response.setHeader('X-Blocked-By', 'test-context');
+          return json(428, { error: 'Test context required' });
+        }
+        if (url.pathname === '/context-check') return json(200, { ready: true });
+        response.writeHead(200, { 'Content-Type': 'text/html' });
+        return response.end('<label>Verification address<input name="verificationEmail" type="email"></label>' +
+          '<button onclick="location.href=\'http://app.example.test/claims/new' + url.search + '\'">Continue</button>');
+      }
       if (url.hostname === 'app.example.test') {
         state.appRequests.push({ method: request.method, path: url.pathname, context: state.declared });
         if (!state.declared) {
@@ -98,6 +109,10 @@ function fakeSafeyolo() {
         if (assets[url.pathname]) {
           response.writeHead(200, { 'Content-Type': 'text/javascript' });
           return response.end(fs.readFileSync(assets[url.pathname]));
+        }
+        if (url.pathname === '/sign-in') {
+          response.writeHead(302, { Location: 'http://identity.example.test/register' + url.search });
+          return response.end();
         }
         if (url.pathname === '/api/claims') return json(201, { id: 'claim-1' });
         if (url.pathname === '/api/delayed') { state.releaseResponse = () => json(200, { done: true }); return; }
@@ -148,7 +163,7 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   });
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;
-  await worker.evaluate((recordSecrets) => chrome.storage.local.set({ settings: { safeyoloKey: 'agent-key', jevKey: '', targetHosts: ['app.example.test'], ttlMinutes: 20, recordSecrets } }), mode === 'remount');
+  await worker.evaluate((recordSecrets) => chrome.storage.local.set({ settings: { safeyoloKey: 'agent-key', jevKey: '', ttlMinutes: 20, recordSecrets } }), mode === 'remount');
   if (mode === 'remount') {
     // Exercise Chrome's real profile destination, rather than Playwright's
     // download interception (which substitutes a GUID in its artifact folder).
@@ -211,7 +226,18 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   assert.equal(proxy.state.calls[1].body.ttl, 1200);
 
   const app = await context.newPage();
-  await app.goto('http://app.example.test/claims/new' + (mode === 'remount' ? '?remount=1' : ''));
+  await app.goto('http://app.example.test/sign-in' + (mode === 'remount' ? '?remount=1' : ''));
+  await app.getByLabel('Verification address').waitFor();
+  await waitFor(async () => (await ask({ kind: 'status' })).journey.events.some(e =>
+    e.type === 'page' && e.url.includes('identity.example.test/register')), 'discovered sign-in page recorded');
+  await app.getByLabel('Verification address').fill('casey@example.test');
+  // No host list was configured. A newly discovered origin can renew context,
+  // while the blocked request itself is observed once and never auto-replayed.
+  proxy.state.declared = null;
+  assert.equal(await app.evaluate(async () => (await fetch('/context-check')).status), 428);
+  await waitFor(() => proxy.state.declared === started.context, 'context renewed on discovered sign-in origin');
+  assert.equal(proxy.state.appRequests.filter(r => r.host === 'identity.example.test' && r.path === '/context-check').length, 1);
+  await app.getByRole('button', { name: 'Continue', exact: true }).click();
   await app.getByLabel('First name').waitFor();
   await app.bringToFront();
 
@@ -355,6 +381,9 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   assert.deepEqual(click.selectors.role, { role: 'button', name: 'Submit claim' });
   assert.equal(finished.events.find((event) => event.type === 'context_renewed').after.status, 428);
   const responses = finished.events.filter((event) => event.type === 'network_response');
+  assert.ok(responses.some(e => e.url.includes('identity.example.test/register') && e.status === 200 && e.safeyoloRequestId));
+  assert.ok(finished.events.some(e => e.type === 'network_redirect' && e.redirectUrl.includes('identity.example.test/register')));
+  assert.ok(human.some(e => e.value === 'casey@example.test' && e.field?.name === 'verificationEmail'));
   assert.ok(responses.length > 0);
   assert.ok(responses.every((event) => event.safeyoloRequestId && event.chromeRequestId));
   assert.ok(responses.every((event) => Number.isInteger(event.tabId) && Number.isInteger(event.frameId)));
