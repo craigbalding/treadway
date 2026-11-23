@@ -54,11 +54,28 @@
 
   <details id="settings-section">
     <summary>Settings</summary>
-    <p class="hint">Folder: <span id="folder-name">not chosen</span></p>
-    <div class="row">
-      <button id="choose-folder">Choose folder</button>
-      <button id="reload-personas">Reload personas</button>
+    <label>Journey storage
+      <select id="storage-mode">
+        <option value="downloads">Downloads (no folder picker)</option>
+        <option value="folder">Chosen folder</option>
+      </select>
+    </label>
+    <p class="hint" id="storage-status"></p>
+    <div id="folder-settings" hidden>
+      <p class="hint">Folder: <span id="folder-name">not chosen</span></p>
+      <div class="row">
+        <button id="choose-folder">Choose folder</button>
+        <button id="reload-personas">Reload personas</button>
+      </div>
     </div>
+    <div id="downloads-settings">
+      <p class="hint">Journeys save under Treadway/journeys in Chrome's Downloads directory. No native file dialog is used.</p>
+      <label>Personas JSON
+        <textarea id="personas-json" rows="8" spellcheck="false" placeholder='{"personas": [...]}'></textarea>
+      </label>
+      <button id="example-personas">Use example personas</button>
+    </div>
+    <p class="hint">Save settings to apply storage and personas.</p>
     <label>SafeYOLO agent API key
       <input id="safeyolo-key" type="password" autocomplete="off">
     </label>
@@ -77,6 +94,7 @@
 
   <script src="lib/personas.js"></script>
   <script src="lib/test-context.js"></script>
+  <script src="lib/download-export.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
