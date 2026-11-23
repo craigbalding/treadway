@@ -5,6 +5,7 @@
 
   const Personas = globalThis.TreadwayPersonas;
   const $ = (id) => document.getElementById(id);
+  $('extension-version').textContent = 'Version ' + chrome.runtime.getManifest().version;
   let personas = [];
   let folder = null;
   let storageMode = 'downloads';
