@@ -242,7 +242,7 @@
     $('start').disabled = running || Boolean(status.finished) || !personas.length;
     $('stop').disabled = !running;
     const active = running && status.journey.contextStatus === 'active';
-    for (const id of ['fill', 'authenticated', 'step', 'step-name', 'step-expected', 'observed-account']) $(id).disabled = !active;
+    for (const id of ['fill', 'phone-friend', 'authenticated', 'step', 'step-name', 'step-expected', 'observed-account']) $(id).disabled = !active;
     $('persona').disabled = running;
     $('journey-name').disabled = running;
     $('pending').hidden = !status.finished;
@@ -277,10 +277,10 @@
     await saveJourneyFile(finished);
   }
 
-  async function fill() {
+  async function fill(assistanceId) {
     const persona = personas.find((candidate) => candidate.id === status.journey.persona.id);
     if (!persona) throw new Error('Persona ' + status.journey.persona.id + ' is no longer in personas.json');
-    const report = await ask({ kind: 'fill', persona });
+    const report = await ask({ kind: 'fill', persona, assistanceId });
     if (report.preparedPersona) {
       Object.assign(persona, report.preparedPersona);
       // The private profile cache is durable before fill. Downloads personas
@@ -306,7 +306,51 @@
       say('Fill "' + where + '" by hand: ' + entry.reason + (entry.type ? ' (' + entry.type + ')' : ''), 'warning');
     }
     if (report.classifyError) say('Jev could not classify fields: ' + report.classifyError, 'warning');
+    return report;
   }
+  async function phoneFriend() {
+    const persona = personas.find(candidate => candidate.id === status.journey.persona.id);
+    const request = await ask({ kind: 'assistance-request', persona });
+    await globalThis.TreadwayDownloadExport.save(JSON.stringify(request, null, 2), request.requestId, { area: 'assistance' });
+    say('Help requested. Your agent will update this persona and run Fill all here.');
+  }
+  // Called in this extension page by the paired agent over its owned CDP
+  // connection. It deliberately uses the operator's ordinary fill() path.
+  globalThis.treadwayCompleteAssistance = async ({ requestId, facts }) => {
+    await refresh();
+    const request = await ask({ kind: 'assistance-check', requestId });
+    const persona = personas.find(candidate => candidate.id === request.persona.id);
+    if (!persona) throw new Error('Requested persona is no longer loaded');
+    const updated = globalThis.TreadwayAssistance.mergeFacts(persona, facts);
+    // Persist the persona before attempting any form changes. Credential
+    // values and identity bindings remain exactly as already configured.
+    if (storageMode === 'downloads') {
+      const { personaText } = await chrome.storage.local.get('personaText');
+      const data = JSON.parse(personaText);
+      const entry = data.personas.find(candidate => candidate.id === persona.id && candidate.role === persona.role);
+      if (!entry || entry.facts.email !== persona.facts.email) throw new Error('Persona identity changed');
+      entry.facts = updated.facts;
+      const encoded = JSON.stringify(data, null, 2);
+      await chrome.storage.local.set({ personaText: encoded });
+      $('personas-json').value = encoded;
+    } else {
+      const directory = await folderWithPermission();
+      const handle = await directory.getFileHandle('personas.json');
+      const data = JSON.parse(await (await handle.getFile()).text());
+      const entry = data.personas.find(candidate => candidate.id === persona.id && candidate.role === persona.role);
+      if (!entry || entry.facts.email !== persona.facts.email) throw new Error('Persona identity changed');
+      entry.facts = updated.facts;
+      const writable = await handle.createWritable();
+      await writable.write(JSON.stringify(data, null, 2)); await writable.close();
+    }
+    Object.assign(persona, updated);
+    const report = await fill(requestId);
+    const result = { requestId, filled: report.filled.length, manual: report.manual.length,
+      remaining: report.manual.map(entry => ({ field: entry.field, type: entry.type, reason: entry.reason })) };
+    await ask({ kind: 'assistance-finished', ...result });
+    say('Agent assistance complete: filled ' + result.filled + '; ' + result.manual + ' still need attention.');
+    return result;
+  };
 
   async function marker(kind) {
     const name = kind === 'step' ? $('step-name').value.trim() : undefined;
@@ -346,7 +390,8 @@
   $('start').addEventListener('click', guarded(start));
   $('stop').addEventListener('click', guarded(stop));
   $('renew-context').addEventListener('click', guarded(renewContext));
-  $('fill').addEventListener('click', guarded(fill));
+  $('fill').addEventListener('click', guarded(() => fill()));
+  $('phone-friend').addEventListener('click', guarded(phoneFriend));
   $('authenticated').addEventListener('click', guarded(() => marker('authenticated')));
   $('step').addEventListener('click', guarded(() => marker('step')));
   $('save-again').addEventListener('click', guarded(() => saveJourneyFile(status.finished)));

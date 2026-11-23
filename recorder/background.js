@@ -1,5 +1,5 @@
 // Owns the recording journal and passive request/flow-store references.
-importScripts('lib/fields.js', 'lib/jev.js', 'lib/test-context.js', 'lib/network.js', 'lib/personas.js', 'lib/credentials.js');
+importScripts('lib/fields.js', 'lib/jev.js', 'lib/test-context.js', 'lib/network.js', 'lib/personas.js', 'lib/credentials.js', 'lib/assistance.js');
 const Context = globalThis.TreadwayTestContext;
 const Jev = globalThis.TreadwayJev;
 const Fields = globalThis.TreadwayFields;
@@ -47,6 +47,18 @@ function networkChanged(state, journey) {
 function pendingRequests(state, run) {
   return Object.values(state.requests).filter((request) => request.run === run);
 }
+async function pageRead(tabId, kind, frameId = 0, extra = {}) {
+  const message = { kind, ...extra };
+  try { return await chrome.tabs.sendMessage(tabId, message, { frameId }); }
+  catch (error) {
+    // A known missing receiver means the read never ran. Reattach after an
+    // extension update without navigating away from the human's current form.
+    if (!/Receiving end does not exist|Could not establish connection/i.test(error.message)) throw error;
+    await chrome.scripting.executeScript({ target: { tabId, frameIds: [frameId] },
+      files: ['lib/fields.js', 'lib/form-runtime.js', 'lib/choice-binding.js', 'lib/page-fill.js', 'content.js'] });
+    return chrome.tabs.sendMessage(tabId, message, { frameId });
+  }
+}
 function forExport(state, journey) {
   if (!journey) return null;
   const pending = Object.entries(state.requests).filter(([, request]) => request.run === journey.contextFields.run)
@@ -68,7 +80,7 @@ async function broadcastRecording(active, recordSecrets) {
     try { frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }); } catch (_) { frames = []; }
     return Promise.all((frames || []).map(async (frame) => {
       try {
-        return await chrome.tabs.sendMessage(tab.id, { kind: 'recording', active, recordSecrets }, { frameId: frame.frameId });
+        return await pageRead(tab.id, 'recording', frame.frameId, { active, recordSecrets });
       } catch (_) { return { unavailable: true, tabId: tab.id, frameId: frame.frameId }; }
     }));
   }));
@@ -310,10 +322,13 @@ async function classifyFields(fields) {
   if (!settings.jevKey) return {};
   const stored = await chrome.storage.session.get('personaFieldTypes');
   const choices = Object.assign({}, Fields.FIELD_TYPES);
-  for (const type of stored.personaFieldTypes || []) if (!choices[type]) choices[type] = type.replace(/_/g, ' ');
+  for (const type of stored.personaFieldTypes || []) {
+    choices[type] = Fields.FIELD_TYPES[type] || type.replace(/_/g, ' ');
+  }
   return Jev.classifyWithJev({ apiKey: settings.jevKey, fields, choices, fetch });
 }
-async function fillActiveTab({ values, persona }) {
+async function fillActiveTab({ values, persona, assistanceId }) {
+  if (assistanceId) await checkAssistance(assistanceId);
   const journey = (await chrome.storage.session.get('journey')).journey;
   if (!journey || journey.contextStatus !== 'active') throw new Error('Start a journey before filling');
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -322,7 +337,7 @@ async function fillActiveTab({ values, persona }) {
   if (persona) {
     persona = TreadwayPersonas.parsePersonas(JSON.stringify({ personas: [persona] }))[0];
     if (persona.id !== journey.persona.id || persona.role !== journey.persona.role) throw new Error('Fill persona does not match this journey');
-    const needs = await chrome.tabs.sendMessage(tab.id, { kind: 'inspect-fill' }, { frameId: 0 });
+    const needs = await pageRead(tab.id, 'inspect-fill');
     if (!needs) throw new Error('The page did not answer the fill inspection');
     prepared = await TreadwayCredentials.prepare({ persona, ...needs, crypto,
       read: async () => (await chrome.storage.local.get('personaCredentials')).personaCredentials,
@@ -345,12 +360,30 @@ async function fillActiveTab({ values, persona }) {
     }
   }
   await chrome.storage.session.set({ personaFieldTypes: Object.keys(values) });
+  if (assistanceId) await checkAssistance(assistanceId);
   const answer = await chrome.tabs.sendMessage(tab.id, { kind: 'fill', values }, { frameId: 0 });
   if (!answer) throw new Error('The page did not answer; reload it so the recorder can attach');
   if (answer.error) throw new Error(answer.error);
   // The content script journals the result with Chrome's actual sender frame
   // and document identity BEFORE it answers, including partial/error reports.
   return Object.assign({}, answer.report, prepared ? { preparedPersona: prepared.persona, generatedPassword: prepared.generated } : {});
+}
+async function checkAssistance(id) {
+  const { pendingAssistance: pending, journey } = await chrome.storage.session.get(['pendingAssistance', 'journey']);
+  if (!pending || pending.requestId !== id || pending.completed || !journey ||
+    journey.contextStatus !== 'active' || journey.contextFields.run !== pending.run) throw new Error('Assistance request is no longer active');
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || tab.id !== pending.target.tabId) throw new Error('Return to the requested application tab before applying assistance');
+  const current = await pageRead(tab.id, 'inspect-assistance');
+  const bindings = fields => JSON.stringify(fields.map(item => {
+    const { tag, inputType, name, id, label, autocomplete } = item.field;
+    return { tag, inputType, name, id, label, autocomplete };
+  }));
+  if (current?.url !== pending.target.url || current.documentInstanceId !== pending.target.documentInstanceId ||
+    bindings(current.fields) !== bindings(pending.form)) {
+    throw new Error('The requested form changed; request assistance again');
+  }
+  return pending;
 }
 function withSecretReference(journey, event) {
   if (event.type === 'fill') {
@@ -414,6 +447,35 @@ const handlers = {
     });
   },
   fill: (message) => fillActiveTab(message),
+  'assistance-request': async ({ persona }) => {
+    const { journey, pendingAssistance } = await chrome.storage.session.get(['journey', 'pendingAssistance']);
+    if (!journey || journey.contextStatus !== 'active') throw new Error('Start a journey before asking for help');
+    if (persona.id !== journey.persona.id || persona.role !== journey.persona.role) throw new Error('Assistance persona does not match this journey');
+    if (pendingAssistance && !pendingAssistance.completed && pendingAssistance.run === journey.contextFields.run) {
+      try { await checkAssistance(pendingAssistance.requestId); return pendingAssistance; }
+      catch (_) { /* A fresh click may replace an obsolete document request. */ }
+    }
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) throw new Error('No active application tab');
+    const snapshot = await pageRead(tab.id, 'inspect-assistance');
+    if (!snapshot?.documentInstanceId) throw new Error('The page did not answer the assistance inspection');
+    const request = TreadwayAssistance.request({ id: 'assist-' + crypto.randomUUID(), journey, persona, target: tab,
+      snapshot, extensionId: chrome.runtime.id, version: chrome.runtime.getManifest().version });
+    await chrome.storage.session.set({ pendingAssistance: request });
+    await updateJourneys(state => appendEvent(state.journey, { type: 'assistance_requested', requestId: request.requestId,
+      tabId: tab.id, url: snapshot.url, documentInstanceId: snapshot.documentInstanceId }));
+    return request;
+  },
+  'assistance-check': ({ requestId }) => checkAssistance(requestId),
+  'assistance-finished': async ({ requestId, filled, manual }) => {
+    const { pendingAssistance } = await chrome.storage.session.get('pendingAssistance');
+    if (!pendingAssistance || pendingAssistance.requestId !== requestId) throw new Error('Unknown assistance request');
+    await chrome.storage.session.set({ pendingAssistance: { ...pendingAssistance, completed: true } });
+    await updateJourneys(state => {
+      if (state.journey?.contextFields.run === pendingAssistance.run) appendEvent(state.journey,
+        { type: 'assistance_completed', requestId, filled, manual });
+    });
+  },
   classify: async (message) => ({ types: await classifyFields(message.fields) }),
   saved: (message) => updateJourneys((state) => {
     const finished = state.finished;

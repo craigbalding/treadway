@@ -8,6 +8,7 @@
   const SKIPPED_INPUT_TYPES = new Set(['hidden', 'submit', 'button', 'reset', 'image', 'file', 'checkbox', 'radio', 'range', 'color']);
   const MANUAL_ATTRIBUTE = 'data-treadway-manual';
   const classifiedFields = new WeakMap();
+  const CONTROL_SELECTOR = 'input, textarea, select, [role="combobox"]';
 
   function text(value, limit) {
     return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit || 120);
@@ -17,7 +18,7 @@
     if (element.labels && element.labels.length) return text(element.labels[0].innerText || element.labels[0].textContent);
     const labelled = element.getAttribute('aria-labelledby');
     if (labelled) {
-      const parts = labelled.split(/\s+/).map((id) => element.ownerDocument.getElementById(id)).filter(Boolean);
+      const parts = labelled.split(/\s+/).map((id) => element.ownerDocument.getElementById(id)).filter(part => part && part !== element);
       if (parts.length) return text(parts.map((part) => part.textContent).join(' '));
     }
     return text(element.getAttribute('aria-label'));
@@ -109,7 +110,8 @@
   function describeField(element) {
     return {
       tag: element.localName,
-      inputType: element.localName === 'input' ? (element.getAttribute('type') || 'text').toLowerCase() : element.localName,
+      inputType: element.localName === 'input' ? (element.getAttribute('type') || 'text').toLowerCase() :
+        element.getAttribute('role') === 'combobox' ? 'combobox' : element.localName,
       name: element.getAttribute('name') || '',
       id: element.id || '',
       label: labelFor(element),
@@ -122,7 +124,8 @@
   }
 
   function visible(element) {
-    if (!element.isConnected || element.disabled || element.readOnly) return false;
+    if (!element.isConnected || element.disabled || element.readOnly || element.getAttribute('aria-hidden') === 'true' ||
+      element.getAttribute('aria-disabled') === 'true') return false;
     const style = element.ownerDocument.defaultView.getComputedStyle(element);
     if (style.visibility === 'hidden' || style.display === 'none') return false;
     const box = element.getBoundingClientRect();
@@ -131,11 +134,19 @@
 
   function isEmpty(element) {
     if (element.localName === 'select') return element.selectedIndex < 0 || !element.options[element.selectedIndex].value;
+    if (element.getAttribute('role') === 'combobox' && element.localName !== 'input') {
+      const backing = element.parentElement?.querySelector('input[aria-hidden="true"]');
+      if (backing) return !backing.value;
+      return !fieldValue(element) || /^(--\s*)?(please\s+)?(select|choose)(\s+.*|\s*--)?$/i.test(fieldValue(element));
+    }
     return element.value === '';
+  }
+  function fieldValue(element) {
+    return 'value' in element ? element.value : text(element.textContent).replace(/[\u200b\ufeff]/g, '').trim();
   }
 
   function fillableFields(document) {
-    return Array.from(document.querySelectorAll('input, textarea, select')).filter((element) => {
+    return Array.from(document.querySelectorAll(CONTROL_SELECTOR)).filter((element) => {
       if (element.localName === 'input' && SKIPPED_INPUT_TYPES.has((element.getAttribute('type') || 'text').toLowerCase())) return false;
       return visible(element) && isEmpty(element);
     });
@@ -210,7 +221,7 @@
   }
 
   function stuck(element, expected) {
-    return element.isConnected && element.value === expected && element.getAttribute('aria-invalid') !== 'true';
+    return element.isConnected && fieldValue(element) === expected && element.getAttribute('aria-invalid') !== 'true';
   }
 
   function bindingFor(element) {
@@ -221,7 +232,7 @@
   }
   function bindingKey(binding) { return JSON.stringify(binding); }
   function resolveField(document, binding) {
-    const candidates = Array.from(document.querySelectorAll('input, textarea, select'))
+    const candidates = Array.from(document.querySelectorAll(CONTROL_SELECTOR))
       .filter((element) => element.isConnected && bindingKey(bindingFor(element)) === bindingKey(binding));
     return candidates.length === 1 ? candidates[0] : null;
   }
@@ -247,6 +258,59 @@
   function currentPassword(field) {
     return field.autocomplete.split(/\s+/).includes('current-password') ||
       /\b(current|old|existing)\b/.test(Fields.normalise([field.label, field.name, field.id].join(' ')));
+  }
+  function controlledContext(element) {
+    const runtime = root.TreadwayFormRuntime;
+    const snapshot = runtime('inspect');
+    const fieldRef = runtime('locate', { selector: selectorsFor(element).css }).ref;
+    if (!snapshot.listboxes.some(list => list.controllers.some(controller => controller.fieldRef === fieldRef))) return null;
+    return { snapshot, fieldRef, ...root.TreadwayChoiceBinding.controlledBinding(snapshot, fieldRef) };
+  }
+  async function setControlValue(document, binding, value, signal) {
+    let element = resolveField(document, binding);
+    if (!element || !visible(element)) throw new Error('field changed');
+    if (element.getAttribute('role') !== 'combobox' || element.localName === 'select') return setFieldValue(element, value);
+    const view = document.defaultView;
+    element.focus();
+    if (element.localName === 'input') {
+      nativeSetter(element).call(element, String(value));
+      element.dispatchEvent(new view.Event('input', { bubbles: true }));
+    } else {
+      element.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, button: 0 }));
+      await abortable(waitForSettle(document), signal);
+      element = resolveField(document, binding);
+      if (signal?.aborted) throw new Error('recording stopped');
+      if (!element) throw new Error('field changed');
+      if (!controlledContext(element) && element.getAttribute('aria-expanded') !== 'true') element.click();
+    }
+    const deadline = Date.now() + 2500;
+    let matches = [];
+    let list;
+    while (Date.now() < deadline && !signal?.aborted) {
+      await abortable(waitForSettle(document), signal);
+      element = resolveField(document, binding);
+      if (!element || !visible(element)) throw new Error('field changed');
+      list = controlledContext(element);
+      if (list) {
+        matches = list.list.options.filter(option => option.visible && !option.disabled &&
+          option.label.toLowerCase() === String(value).trim().toLowerCase());
+        if (matches.length) break;
+      }
+    }
+    if (signal?.aborted) throw new Error('recording stopped');
+    if (matches.length > 1) throw new Error('ambiguous option');
+    if (!matches.length) throw new Error(list ? 'no matching option' : 'no controlled list');
+    const option = matches[0];
+    const expected = option.label;
+    // Reuse the same library relationship, usability and hit-target checks
+    // as ControlledChoice/FormAssessor. Only event dispatch is extension-local.
+    const choice = root.TreadwayChoiceBinding.choiceContext(list.snapshot, list.fieldRef, option.ref);
+    const hit = root.TreadwayFormRuntime('prepare', { ref: option.ref, choice: choice.binding });
+    const target = document.elementFromPoint(hit.x, hit.y)?.closest('[role="option"]');
+    if (!target) throw new Error('field changed');
+    target.click();
+    await abortable(waitForSettle(document), signal);
+    return expected;
   }
   async function abortable(promise, signal) {
     if (!signal) return promise;
@@ -285,7 +349,10 @@
         if (plans.some(other => other.type === 'new_password' &&
           resolveField(document, other.binding)?.form === element?.form)) plan.type = 'new_password';
       }
-      const unknown = plans.filter((plan) => !plan.type);
+      // A rule's generic type can differ from the persona's more specific key
+      // (phone vs mobile_phone, region vs county). Let Jev resolve these too;
+      // a recognized label alone must not prevent using the available data.
+      const unknown = plans.filter((plan) => !plan.type || (!values[plan.type] && !plan.type.startsWith('previous_')));
       if (unknown.length && classify) {
         let answers = {};
         try {
@@ -322,7 +389,7 @@
         if (!reason) {
           const value = Fields.formatValue(plan.type, values[plan.type].value, plan.field);
           let expected;
-          try { expected = setFieldValue(element, value); } catch (error) { reason = error.message; }
+          try { expected = await setControlValue(document, plan.binding, value, signal); } catch (error) { reason = error.message; }
           await abortable(waitForSettle(document), signal);
           const live = resolveField(document, plan.binding);
           if (signal?.aborted) { report.interrupted = true; reason = 'recording stopped'; }
@@ -331,7 +398,7 @@
           if (!reason) {
             rememberType(live, plan.type);
             const filled = Object.assign(entry, { selectors: selectorsFor(live), value,
-              expectedValue: expected, observedValue: live.value, source: values[plan.type].source });
+              expectedValue: expected, observedValue: fieldValue(live), source: values[plan.type].source });
             if (Fields.SECRET_TYPES.has(plan.type)) Object.assign(filled, {
               secret: true, secretReference: values[plan.type].secretReference });
             report.filled.push(filled);
@@ -350,7 +417,7 @@
       if (!live || !stuck(live, item.expected)) {
         report.filled = report.filled.filter((entry) => entry !== item.entry);
         if (live) markManual(live, 'did not stick');
-        report.manual.push(Object.assign({}, item.entry, { reason: 'did not stick', observedValue: live ? live.value : null }));
+        report.manual.push(Object.assign({}, item.entry, { reason: 'did not stick', observedValue: live ? fieldValue(live) : null }));
       }
     }
     // Later React remounts can remove a previous manual highlight.

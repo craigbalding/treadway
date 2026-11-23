@@ -10,7 +10,8 @@
     const BlobClass = options.BlobClass || root.Blob;
     const url = urls.createObjectURL(new BlobClass([text], { type: 'application/json' }));
     try {
-      const id = await downloads.download({ url, filename: 'Treadway/journeys/' + run + '.json',
+      const area = options.area === 'assistance' ? 'assistance' : 'journeys';
+      const id = await downloads.download({ url, filename: 'Treadway/' + area + '/' + run + '.json',
         saveAs: false, conflictAction: 'overwrite' });
       return await new Promise((resolve, reject) => {
         let settled = false;
