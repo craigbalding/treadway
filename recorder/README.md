@@ -26,7 +26,8 @@ enable Developer mode and **Load unpacked** this `recorder` directory. Open the
 side panel using its toolbar icon. Reload the extension after updates; reload
 application tabs so the new content scripts attach.
 
-SafeYolo policy must list the target hosts and enable declared contexts:
+SafeYolo's existing policy must permit the journey's destinations and enable
+declared contexts where required. For example, an application may require:
 
 ```yaml
 addons:
@@ -36,9 +37,12 @@ addons:
     declared_ttl_max: 1200
 ```
 
+This policy is managed outside the extension. Its context-required hosts are
+not a complete list of sign-in or supporting sites and do not filter the journal.
+
 Fresh profiles default to **Downloads (no folder picker)**. In Settings, paste
 your personas JSON, or click **Use example personas** and edit the example.
-Enter the SafeYolo **agent** API key and matching target hosts, then **Save settings**.
+Enter the SafeYolo **agent** API key, then **Save settings**.
 The JSON uses the same [personas format](examples/personas.json) as folder mode.
 Downloads mode stores its persona configuration in this extension profile and
 writes `Treadway/journeys/<run>.json` beneath Chrome's Downloads directory. The
@@ -51,9 +55,8 @@ Use Downloads mode where the native Linux folder picker is unavailable or crashe
 in its GTK/image-loader stack. It avoids that dialog without changing browser or
 image-loader sandbox settings. Both modes export the same event format.
 
-The context timer defaults to 20 minutes; SafeYolo may cap it. Wildcard host patterns
-match subdomains, not the parent host. Optional Jev classification uses a TypeSafe
-AI key and needs policy access to `api.typesafe.ai`.
+The context timer defaults to 20 minutes; SafeYolo may cap it. Optional Jev
+classification uses a TypeSafe AI key and needs policy access to `api.typesafe.ai`.
 
 **Record test passwords and one-time codes** is enabled by default. Turn it off
 to record secret references instead of typed values. This setting is fixed when
@@ -62,7 +65,12 @@ Secrets are always entered by the operator, never by Fill all. The API keys live
 in this profile's extension settings; they are not included in the journey file.
 
 The journal observes all accessible tabs and frames while recording, including
-non-target pages. `targetHosts` controls context renewal, not recording scope.
+newly encountered sign-in, verification and supporting sites. No host list is
+required in the extension. SafeYolo policy still controls permitted destinations,
+where declared contexts are required, and which request/response bodies are
+retained. Browser observations and a response ID do not guarantee FlowStore body
+retention for a supporting site. Start before opening the application or entering
+its sign-in flow; activity from before Start is not reconstructed.
 Use the intended test profile. Fill all acts only in the active tab's top frame.
 
 ## Demonstrate a journey
@@ -77,8 +85,9 @@ Use the intended test profile. Fill all acts only in the active tab's top frame.
    For a save, inspect persisted state with a fresh load/read as well as the
    acknowledgement. Those observations make the later conversion much easier.
 4. If SafeYolo returns a test-context block (428 with `X-Blocked-By: test-context`),
-   the recorder renews its context and tells you. Explicitly repeat the blocked
-   action when ready. It never retries application requests. An application's
+   the recorder renews its context on that encountered site and tells you.
+   Explicitly repeat the blocked action when ready. It never retries application
+   requests. An application's
    own 428 does not trigger renewal.
 5. **Stop and save** stops new capture, interrupts any fill, drains available
    content-script messages, and clears the declaration only if it still matches

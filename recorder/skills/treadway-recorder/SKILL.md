@@ -51,9 +51,12 @@ where the application requires a fresh value. Format/checksum validity does not
 prove that an external registry will accept an identifier. Resolve a real missing
 prerequisite rather than making the human debug rejected placeholder data.
 
-Configure the selected profile's recorder with the approved target hosts, agent
-API key and available Jev key. Read credentials from existing private provisioning
-without exposing them in messages or captures. Jev classifies controls; it does
+Configure the selected profile's recorder with the agent API key and available
+Jev key. No extension host list is needed: the journey can discover supporting
+sites and identity providers. Check existing SafeYolo policy and capture retention
+without treating the application's host as the whole journey. Read credentials
+from existing private provisioning without exposing them in messages or captures.
+Jev classifies controls; it does
 not provide email inboxes, allocate addresses or verify identity. Preserve the
 operator's chosen test-secret logging policy. Recorder API keys belong in local
 extension settings, not persona facts or the exported event journal.
@@ -71,6 +74,13 @@ only for information or choices that cannot be recovered or prepared. Once ready
 the operator should be able to start and demonstrate the flow.
 
 ## Assist while the human drives
+
+For live assistance, establish a passive view of the current recorder journal,
+panel errors and relevant browser diagnostics. A final export appears on save;
+watching its directory alone does not watch an in-progress journey. Confirm the
+observer is receiving current events before saying that you are monitoring. If
+live observation is unavailable, disclose that and arrange an accessible stream
+without restarting or interrupting the active capture.
 
 Let the human choose navigation, submissions and consequential application
 choices unless they delegate them. Provide active assistance with field values,

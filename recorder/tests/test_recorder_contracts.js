@@ -148,6 +148,22 @@ test('a late blocked response after Stop cannot redeclare the stopped context', 
   assert.equal(h.calls.filter((call) => call.method === 'POST').length, 1);
 });
 
+test('discovered sign-in origins are captured and can renew without a host list or request retry', async () => {
+  // An old saved host list must not gate a newly encountered identity provider.
+  const h = createHarness({ settings: { targetHosts: ['app.example.test'] } }); await h.start();
+  const signIn = { ...base, requestId: 'signin', url: 'https://identity.example.test/register', method: 'GET', type: 'main_frame' };
+  await h.emit('webNavigation', 'onCommitted', signIn);
+  await h.emit('webRequest', 'onBeforeRequest', signIn);
+  await h.emit('webRequest', 'onHeadersReceived', { ...signIn, statusCode: 428,
+    responseHeaders: [...headers('req-signin-block'), { name: 'X-Blocked-By', value: 'test-context' }] });
+  assert.ok(h.session.journey.events.some(e => e.type === 'navigation' && e.url === signIn.url));
+  assert.ok(h.session.journey.events.some(e => e.type === 'network_request' && e.url === signIn.url));
+  assert.equal(h.session.journey.events.find(e => e.type === 'context_renewed').after.safeyoloRequestId, 'req-signin-block');
+  assert.equal(h.calls.filter(call => call.method === 'POST').length, 2);
+  assert.ok(h.calls.filter(call => call.method === 'POST').every(call => call.body.context === h.session.journey.context));
+  assert.equal(h.session.journey.events.filter(e => e.type === 'network_request').length, 1, 'renewal does not replay the request');
+});
+
 test('test-secret logging is explicit and reference mode also protects classified OTPs', async () => {
   for (const recordSecrets of [true, false]) {
     const h = createHarness({ settings: { recordSecrets } }); await h.start();

@@ -37,7 +37,7 @@ function createHarness(options = {}) {
         } },
       runtime: { sendMessage: async (message) => { notices.push(message); }, onMessage: { addListener(fn) { listener = fn; } } },
       storage: {
-        local: { get: async () => ({ settings: { safeyoloKey: 'fixture-key', targetHosts: ['app.example.test'], ttlMinutes: 20, ...options.settings } }) },
+        local: { get: async () => ({ settings: { safeyoloKey: 'fixture-key', ttlMinutes: 20, ...options.settings } }) },
         session: {
           get: async (keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map((key) => [key, structuredClone(session[key])])),
           set: async (data) => Object.assign(session, structuredClone(data)),

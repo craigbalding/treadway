@@ -174,7 +174,6 @@
     renderStorageChoice();
     $('safeyolo-key').value = settings.safeyoloKey || '';
     $('jev-key').value = settings.jevKey || '';
-    $('target-hosts').value = (settings.targetHosts || []).join('\n');
     $('ttl-minutes').value = settings.ttlMinutes || 20;
     $('record-secrets').checked = settings.recordSecrets !== false;
     if (!settings.safeyoloKey) $('settings-section').open = true;
@@ -189,7 +188,6 @@
     const settings = {
       safeyoloKey: $('safeyolo-key').value.trim(),
       jevKey: $('jev-key').value.trim(),
-      targetHosts: $('target-hosts').value.split(/\s+/).filter(Boolean),
       ttlMinutes,
       recordSecrets: $('record-secrets').checked,
     };

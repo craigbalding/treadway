@@ -4,7 +4,7 @@ const Context = globalThis.TreadwayTestContext;
 const Jev = globalThis.TreadwayJev;
 const Fields = globalThis.TreadwayFields;
 const Network = globalThis.TreadwayNetwork;
-const DEFAULT_SETTINGS = { safeyoloKey: '', jevKey: '', targetHosts: [], ttlMinutes: 20, recordSecrets: true };
+const DEFAULT_SETTINGS = { safeyoloKey: '', jevKey: '', ttlMinutes: 20, recordSecrets: true };
 
 // Storage updates and context transitions have separate queues: a network response
 // may be recorded while an API call runs, but Start/Stop/Renew cannot interleave.
@@ -154,7 +154,8 @@ function renewAfter428(details, run) {
     const journey = stored.journey;
     if (!journey || journey.contextStatus !== 'active' || journey.contextFields.run !== run) return;
     const settings = await readSettings();
-    if (!Context.hostMatches(new URL(details.url).hostname, settings.targetHosts)) return;
+    // The proxy's explicit test-context block identifies the renewal need.
+    // A demonstrated journey can discover new origins (including sign-in).
     try {
       const declared = await Context.declareContext(fetch, settings.safeyoloKey, journey.context, Math.round(settings.ttlMinutes * 60));
       await updateJourneys((state) => {
