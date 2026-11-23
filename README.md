@@ -78,6 +78,7 @@ Observe Approved Request    ${author}    ${approved}    ${reviewer}
 | Continue a batch after session expiry | [Session recovery](docs/SESSION-RECOVERY.md) |
 | Shorten a proven flow for your objective | [Optimisation](docs/FLOW-OPTIMISATION.md) |
 | Show progress or inspect screenshots and failures | [Logs and screenshots](docs/OBSERVABILITY.md) |
+| Record a journey by hand for an agent to turn into a flow | [Flow Recorder extension](recorder/README.md) |
 | Map forms and React/Vue controls | [Forms](docs/forms.md) · [Widgets](docs/REUSABLE-WIDGETS.md) |
 
 Treadway is pre-1.0. The package includes browser-control code, guides, an agent

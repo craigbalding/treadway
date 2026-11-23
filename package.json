@@ -14,7 +14,8 @@
     "test:browserless:browser": "node --test --test-concurrency=1 tests/test_remote_browser.js tests/test_browser_state_browser.js tests/test_borrowed_browser.js tests/test_reconnect_browser.js tests/test_provider_profile_browser.js",
     "test:browserless:service": "node --test tests/test_browserless_service.js",
     "test:browserserve": "node --test tests/test_browserserve.js tests/test_browserless_reconnect.js tests/test_remote_transport.js",
-    "test:browserserve:service": "node --test tests/test_browserserve_service.js"
+    "test:browserserve:service": "node --test tests/test_browserserve_service.js",
+    "test:recorder": "node --test --test-concurrency=1 recorder/tests/test_recorder_logic.js recorder/tests/test_recorder_browser.js"
   },
   "dependencies": {
     "proxy-from-env": "2.1.0",

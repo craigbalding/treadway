@@ -1,0 +1,38 @@
+{
+  "personas": [
+    {
+      "id": "casey-submitter",
+      "role": "submitter",
+      "label": "Casey Example",
+      "facts": {
+        "given_name": "Casey",
+        "family_name": "Example",
+        "email": "casey.submitter@example.test",
+        "phone": "+353 1 555 0101",
+        "date_of_birth": "1988-04-12",
+        "address_line1": "1 Example Street",
+        "city": "Dublin",
+        "region": "Dublin",
+        "postcode": "D01 X2Y3",
+        "country": "Ireland",
+        "username": "casey.submitter"
+      },
+      "generate": ["ppsn", "test_card"],
+      "secrets": { "password": "CASEY_SUBMITTER_PASSWORD" }
+    },
+    {
+      "id": "sam-approver",
+      "role": "approver",
+      "label": "Sam Sample",
+      "facts": {
+        "given_name": "Sam",
+        "family_name": "Sample",
+        "email": "sam.approver@example.test",
+        "date_of_birth": "1979-11-30",
+        "username": "sam.approver"
+      },
+      "generate": ["ppsn"],
+      "secrets": { "password": "SAM_APPROVER_PASSWORD", "one_time_code": "SAM_APPROVER_TOTP" }
+    }
+  ]
+}

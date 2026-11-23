@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Treadway Flow Recorder</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header>
+    <h1>Treadway Flow Recorder</h1>
+    <p id="status" class="status idle">No journey running</p>
+  </header>
+
+  <section id="journey-section">
+    <h2>Journey</h2>
+    <label>Persona
+      <select id="persona"></select>
+    </label>
+    <label>Journey name
+      <input id="journey-name" placeholder="submit expense claim" autocomplete="off">
+    </label>
+    <div class="row">
+      <button id="start" class="primary">Start</button>
+      <button id="stop" disabled>Stop and save</button>
+    </div>
+    <div class="row" id="recording-actions">
+      <button id="fill" disabled>Fill all</button>
+      <button id="authenticated" disabled>Mark authenticated</button>
+    </div>
+    <div class="row">
+      <input id="step-name" placeholder="Step name" autocomplete="off" disabled>
+      <button id="step" disabled>Add step marker</button>
+    </div>
+    <div id="pending" hidden>
+      <p>The stopped journey has not been saved to the folder.</p>
+      <div class="row">
+        <button id="save-again" class="primary">Save again</button>
+        <button id="discard">Discard</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Messages</h2>
+    <ol id="messages" aria-live="polite"></ol>
+  </section>
+
+  <details id="settings-section">
+    <summary>Settings</summary>
+    <p class="hint">Folder: <span id="folder-name">not chosen</span></p>
+    <div class="row">
+      <button id="choose-folder">Choose folder</button>
+      <button id="reload-personas">Reload personas</button>
+    </div>
+    <label>SafeYOLO agent API key
+      <input id="safeyolo-key" type="password" autocomplete="off">
+    </label>
+    <label>Target hosts (as in the SafeYOLO test_context policy, one per line)
+      <textarea id="target-hosts" rows="3" placeholder="app.example.test&#10;*.example.test"></textarea>
+    </label>
+    <label>Test context timer (minutes)
+      <input id="ttl-minutes" type="number" min="1" max="120" value="20">
+    </label>
+    <label>TypeSafe AI API key for Jev (optional)
+      <input id="jev-key" type="password" autocomplete="off">
+    </label>
+    <button id="save-settings" class="primary">Save settings</button>
+  </details>
+
+  <script src="lib/personas.js"></script>
+  <script src="lib/test-context.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
