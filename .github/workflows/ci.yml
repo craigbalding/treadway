@@ -110,9 +110,16 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run test:recorder:logic
       - run: npx playwright install --with-deps chromium
+      - name: Verify installed Chrome sandbox helper
+        # Downloaded Chromium is outside Ubuntu's AppArmor userns allowlist.
+        # Use Chrome's existing privileged helper; keep browser sandboxing on.
+        run: |
+          test -u /opt/google/chrome/chrome-sandbox
+          test "$(stat -c '%u' /opt/google/chrome/chrome-sandbox)" = 0
       - name: Exercise the unpacked extension with the Chromium sandbox enabled
         env:
           RECORDER_REQUIRE_BROWSER: '1'
+          CHROME_DEVEL_SANDBOX: /opt/google/chrome/chrome-sandbox
         run: npm run test:recorder:browser
       - run: python -m pip install -e '.[robot]'
       - run: python recorder/examples/http-first/walkthrough.py

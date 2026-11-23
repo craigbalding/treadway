@@ -198,6 +198,10 @@ and exact request IDs. Contract tests cover redirects, cache/error/missing IDs,
 concurrent transitions and late outcomes across Stop/save. CI requires the
 browser suite; it cannot silently skip missing Playwright. Optional overrides:
 `RECORDER_PLAYWRIGHT` (module path), `RECORDER_CHROMIUM_BIN` (browser binary).
+Ubuntu CI uses the runner's existing root-owned, setuid Chrome sandbox helper
+via `CHROME_DEVEL_SANDBOX`, as described in the
+[Chromium sandbox guidance](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md).
+The browser sandbox stays enabled; no system-wide namespace restriction is changed.
 These fixtures do not constitute acceptance against a real SafeYolo proxy,
 TypeSafe service, or application. Automated compilation, principal verification,
 cross-role replay and testing mutations remain the consuming agent's work.
