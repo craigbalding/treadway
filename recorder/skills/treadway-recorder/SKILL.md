@@ -101,6 +101,12 @@ declaration or mix independent target work into the demonstration. Maintain the
 hold until the operator finishes or explicitly changes the arrangement. A human
 recording a baseline is not authorisation to launch independent assessment tests.
 
+Where available, watch the context countdown and use Renew context before it
+expires. A renewal must preserve the exact declaration fields, persona and run;
+do not reconstruct it with guessed step or intent fields. Keep externally
+performed renewals and their granted expiry in the capture evidence. A proxy
+context lease and an application's authentication session are separate states.
+
 Use meaningful step markers and expected outcomes without making the human
 annotate every click. Preserve their current tab, populated values and capture
 when helping. Reconcile a dispatched or uncertain submission before retrying;

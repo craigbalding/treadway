@@ -9,6 +9,14 @@
   <header>
     <h1>Treadway Flow Recorder</h1>
     <p id="status" class="status idle">No journey running</p>
+    <div id="context-clock" class="context-clock" hidden>
+      <div class="row">
+        <strong>Context remaining</strong>
+        <span id="context-countdown" aria-live="off"></span>
+      </div>
+      <p id="context-notice" role="status" aria-live="polite"></p>
+      <button id="renew-context" disabled>Renew context</button>
+    </div>
   </header>
 
   <section id="journey-section">

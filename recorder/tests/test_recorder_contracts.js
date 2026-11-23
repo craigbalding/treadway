@@ -175,3 +175,43 @@ test('test-secret logging is explicit and reference mode also protects classifie
     assert.equal(entry.redacted, recordSecrets ? undefined : true);
   }
 });
+
+test('manual renewal preserves the journey and its history without dispatching an application request', async () => {
+  const h = createHarness(); const started = await h.start();
+  await h.command({ kind: 'page-event', event: { type: 'click' } });
+  const prior = h.session.journey.events.map(e => e.eventId);
+  h.external.context = null; // An expired declaration can be renewed in-place.
+  const renewed = await h.command({ kind: 'renew-context' });
+  assert.equal(renewed.context, started.context);
+  assert.equal(renewed.startedAt, started.startedAt);
+  assert.deepEqual(renewed.events.slice(0, prior.length).map(e => e.eventId), prior);
+  assert.equal(renewed.events.at(-1).type, 'context_renewed');
+  assert.equal(renewed.events.at(-1).source, 'operator');
+  assert.equal(renewed.events.some(e => e.type === 'network_request'), false);
+  assert.equal(renewed.contextRenewalStatus, 'confirmed');
+});
+
+test('manual renewal leaves another owner intact and cannot run after Stop', async () => {
+  const h = createHarness(); await h.start();
+  h.external.context = 'run=another;agent=fixture-agent';
+  assert.match((await h.command({ kind: 'renew-context' })).error, /different journey/);
+  assert.equal(h.external.context, 'run=another;agent=fixture-agent');
+  assert.equal(h.calls.filter(c => c.method === 'POST').length, 1);
+  await h.command({ kind: 'stop' });
+  assert.match((await h.command({ kind: 'renew-context' })).error, /active journey/);
+  assert.equal(h.calls.filter(c => c.method === 'POST').length, 1);
+});
+
+test('a lost renewal response stays unconfirmed and is never automatically retried', async () => {
+  let fail = false;
+  const h = createHarness({ fetchHook: async (_url, options) => {
+    if (fail && options.method === 'POST') throw new Error('lost renewal reply');
+  } });
+  await h.start(); fail = true;
+  assert.match((await h.command({ kind: 'renew-context' })).error, /lost renewal reply/);
+  await h.idle();
+  assert.equal(h.calls.filter(c => c.method === 'POST').length, 2);
+  assert.equal(h.session.journey.contextRenewalStatus, 'unconfirmed');
+  assert.equal(h.session.journey.events.at(-1).type, 'context_renew_failed');
+  assert.equal(h.session.journey.events.at(-1).declarationAttempted, true);
+});
