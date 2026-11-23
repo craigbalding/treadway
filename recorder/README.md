@@ -7,6 +7,14 @@ application work; keep browser operations for authentication, browser behavior
 and controls that need them. See the [conversion guide](CONVERSION.md) and the
 [runnable HTTP-first example](examples/http-first/README.md).
 
+For an agent-assisted demonstration, use the companion
+[`treadway-recorder` skill](skills/treadway-recorder/SKILL.md). It asks the agent
+to prepare usable persona data, confirm a receivable verification address with
+you, configure the recorder, and help with filling and verification while you
+drive. The packaged example personas are local demonstration fixtures, not
+registration-ready identities. Install the `skills/treadway-recorder` directory
+in your agent's skill directory, or have the agent read it from this checkout.
+
 The recorder observes request metadata and SafeYolo response IDs passively. It
 adds no application request headers and copies no request/response bodies into
 the journal. Bodies remain in SafeYolo's FlowStore.
