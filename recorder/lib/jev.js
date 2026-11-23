@@ -6,7 +6,7 @@
 
   const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
   const JEV_MODEL = 'jev-latest';
-  const MIN_CONFIDENCE = 0.6;
+  const MIN_CONFIDENCE = 0.51;
   const OTHER = 'other';
 
   function describe(field) {
@@ -28,7 +28,7 @@
       state.fields[field.key] = describe(field);
       questions[field.key] = {
         type: 'choice',
-        instructions: 'Which kind of value does the web form field "' + field.key + '" in fields expect?',
+        instructions: 'Choose the closest matching persona field type for "' + field.key + '". Make your best guess even if its label differs. Use other only when no candidate reasonably fits or the control is not a data field. Do not abstain merely because confidence is low.',
         criteria,
       };
     }
@@ -36,14 +36,15 @@
   }
 
   // Returns {key: {type, confidence}} for confident answers only.
-  function readJevAnswers(body, keys, minimum) {
+  function readJevAnswers(body, keys, minimum, choices) {
     const threshold = minimum === undefined ? MIN_CONFIDENCE : minimum;
     const answers = (body && body.answers) || {};
     const result = {};
     for (const key of keys) {
       const answer = answers[key];
       if (!answer || answer.type !== 'choice' || typeof answer.choice !== 'string') continue;
-      if (answer.choice === OTHER || !(answer.confidence >= threshold)) continue;
+      if (answer.choice === OTHER || !Number.isFinite(answer.confidence) || answer.confidence > 1 || answer.confidence < threshold) continue;
+      if (choices && !Object.prototype.hasOwnProperty.call(choices, answer.choice)) continue;
       result[key] = { type: answer.choice, confidence: answer.confidence };
     }
     return result;
@@ -58,7 +59,7 @@
     });
     const text = await response.text();
     if (!response.ok) throw new Error('Jev returned HTTP ' + response.status + ': ' + text.slice(0, 300));
-    return readJevAnswers(JSON.parse(text), fields.map((field) => field.key));
+    return readJevAnswers(JSON.parse(text), fields.map((field) => field.key), undefined, choices);
   }
 
   const api = { JEV_URL, JEV_MODEL, MIN_CONFIDENCE, buildJevRequest, readJevAnswers, classifyWithJev };

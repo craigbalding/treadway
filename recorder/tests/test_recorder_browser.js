@@ -116,6 +116,17 @@ function fakeSafeyolo() {
           return response.end();
         }
         if (url.pathname === '/api/claims') return json(201, { id: 'claim-1' });
+        if (url.pathname === '/add-details') {
+          response.writeHead(200, { 'Content-Type': 'text/html' });
+          return response.end('<form id="details" onsubmit="event.preventDefault()">' +
+            '<label>Given name<input name="given" autocomplete="given-name"></label>' +
+            '<label>Surname<input name="surname" autocomplete="family-name"></label>' +
+            '<label>Display Name<input name="displayName"></label>' +
+            '<label>Show me as<input name="publicLabel"></label>' +
+            '<label>New password<input type="password" name="newPassword" autocomplete="new-password"></label>' +
+            '<label>Confirm password<input type="password" name="confirmPassword" autocomplete="new-password"></label>' +
+            '<button>Finish</button></form>');
+        }
         if (url.pathname === '/api/delayed') { state.releaseResponse = () => json(200, { done: true }); return; }
         if (url.pathname === '/frame') {
           response.writeHead(200, { 'Content-Type': 'text/html' });
@@ -302,9 +313,12 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
     globalThis.fetch = (url, options) => {
       if (url !== 'https://api.typesafe.ai/v1/systemone') return nativeFetch(url, options);
       const request = JSON.parse(options.body);
+      globalThis.fixtureJevRequests ||= [];
+      globalThis.fixtureJevRequests.push(request);
       return Promise.resolve(new Response(JSON.stringify({ answers: Object.fromEntries(
         Object.entries(request.state.fields).map(([key, field]) => [key, {
-          type: 'choice', choice: field.label === 'Code' ? 'one_time_code' : 'other', confidence: 0.99,
+          type: 'choice', choice: field.label === 'Code' ? 'one_time_code' : field.name === 'publicLabel' ? 'display_name' : 'other',
+          confidence: field.name === 'publicLabel' ? 0.52 : 0.99,
         }])) }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     };
     const stored = await chrome.storage.local.get('settings');
@@ -353,6 +367,37 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   // events, unlike Playwright's buffer-based synthetic input/change dispatch.
   await app.locator('input[type=file]').setInputFiles(uploadPath);
 
+  // Actual Fill all button: missing registration credentials are created and
+  // persisted once, Display Name defaults to full name, and Jev picks a close
+  // ordinary label above the operator's 0.51 confidence floor.
+  const details = await context.newPage();
+  await details.goto('http://app.example.test/add-details');
+  await details.getByLabel('New password', { exact: true }).waitFor();
+  await details.bringToFront();
+  await panel.locator('#fill').click();
+  await waitFor(async () => (await details.getByLabel('Confirm password', { exact: true }).inputValue()).length > 0, 'password pair automatically filled');
+  await panel.locator('#messages').getByText('Generated and saved a test password for this persona.', { exact: false }).first().waitFor();
+  const generatedPassword = await details.getByLabel('New password', { exact: true }).inputValue();
+  assert.equal(await details.getByLabel('Confirm password', { exact: true }).inputValue(), generatedPassword);
+  assert.equal(await details.getByLabel('Display Name', { exact: true }).inputValue(), 'Casey Example');
+  assert.equal(await details.getByLabel('Show me as', { exact: true }).inputValue(), 'Casey Example');
+  assert.equal(await details.getByLabel('Given name', { exact: true }).inputValue(), 'Casey');
+  assert.equal(proxy.state.appRequests.filter(r => r.method === 'POST' && r.path === '/add-details').length, 0);
+  assert.equal(await worker.evaluate(password => JSON.stringify(globalThis.fixtureJevRequests).includes(password), generatedPassword), false,
+    'Jev sees descriptors and choices, never the generated password');
+  assert.equal(await worker.evaluate(async password => JSON.stringify((await chrome.storage.local.get('personaCredentials')).personaCredentials).includes(password), generatedPassword), true);
+  if (mode === 'remount') assert.equal(await panel.evaluate(async () => JSON.parse((await chrome.storage.local.get('personaText')).personaText).personas[0].credentials.new_password), generatedPassword);
+  await details.locator('form').evaluate(form => form.reset());
+  await panel.locator('#fill').click();
+  await waitFor(async () => (await details.getByLabel('Confirm password', { exact: true }).inputValue()) === generatedPassword, 'saved credential reused after reset');
+  await waitFor(async () => (await ask({ kind: 'status' })).journey.events.filter(e => e.type === 'fill' && e.filled.some(f => f.type === 'new_password')).length >= 2, 'second credential fill journaled');
+  await details.getByLabel('New password', { exact: true }).fill('HumanChosenPassword!8');
+  await details.getByLabel('Confirm password', { exact: true }).fill('');
+  await panel.locator('#fill').click();
+  await waitFor(async () => (await details.getByLabel('Confirm password', { exact: true }).getAttribute('data-treadway-manual')) === 'saved password differs from existing input', 'human password choice is preserved');
+  assert.equal(await details.getByLabel('New password', { exact: true }).inputValue(), 'HumanChosenPassword!8');
+  assert.equal(await details.getByLabel('Confirm password', { exact: true }).inputValue(), '');
+
   await app.evaluate(() => { window.delayed = fetch('/api/delayed'); });
   await waitFor(() => Boolean(proxy.state.releaseResponse), 'pending request reaches fixture');
   await panel.locator('#stop').click();
@@ -381,6 +426,10 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   proxy.state.releaseResponse();
   await waitFor(async () => (await readFile()).networkCapture.complete, 'late outcome saved');
   const finished = await readFile();
+  assert.equal(JSON.stringify(finished).includes(generatedPassword), mode === 'remount', 'automatic password fill obeys the run secret policy');
+  assert.equal(JSON.stringify(finished).includes('HumanChosenPassword!8'), mode === 'remount', 'manual password edits obey the same policy');
+  assert.ok(finished.events.some(e => e.type === 'credential_prepared'));
+  assert.ok(finished.events.some(e => e.type === 'fill' && e.filled.some(f => f.type === 'display_name' && f.by === 'jev' && f.confidence === 0.52)));
   assert.ok(finished.revision > pendingSnapshot.revision, 'the saved file includes late outcomes: ' +
     JSON.stringify({ pendingRevision: pendingSnapshot.revision, finalRevision: finished.revision,
       complete: finished.networkCapture.complete, late: finished.events.filter((event) => event.url?.endsWith('/api/delayed')).map((event) => event.type) }));
@@ -432,6 +481,20 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
 
   if (mode === 'stable') {
     const fixture = await context.newPage();
+    await fixture.setContent('<form><label>Current password<input name="currentPassword" type="password" autocomplete="current-password"></label>' +
+      '<label>New password<input name="newPassword" type="password" autocomplete="new-password"></label>' +
+      '<label>Confirm password<input name="confirmPassword" type="password" autocomplete="new-password"></label></form>');
+    await fixture.addScriptTag({ path: path.join(extensionRoot, 'lib/fields.js') });
+    await fixture.addScriptTag({ path: path.join(extensionRoot, 'lib/page-fill.js') });
+    const rotation = await fixture.evaluate(async () => {
+      const report = await TreadwayPageFill.fillAll(document, { values: {
+        password: { value: 'OldSyntheticPassword!1', credential: true, source: 'credential' },
+        new_password: { value: 'NewSyntheticPassword!2', credential: true, source: 'credential' },
+      } });
+      return { filled: report.filled.length, values: [...document.querySelectorAll('input')].map(input => input.value) };
+    });
+    assert.equal(rotation.filled, 3);
+    assert.deepEqual(rotation.values, ['OldSyntheticPassword!1', 'NewSyntheticPassword!2', 'NewSyntheticPassword!2']);
     await fixture.setContent(`<form>
       <label>First name<input name="given" autocomplete="given-name" data-test-id='first"name'></label>
       <label>Email<input name="email" type="email"></label>

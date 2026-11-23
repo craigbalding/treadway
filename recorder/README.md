@@ -70,8 +70,9 @@ Optional Jev classification uses a TypeSafe AI key and needs policy access to
 **Record test passwords and one-time codes** is enabled by default. Turn it off
 to record secret references instead of typed values. This setting is fixed when
 a journey starts and applies to both rule-based and Jev-classified controls.
-Secrets are always entered by the operator, never by Fill all. The API keys live
-in this profile's extension settings; they are not included in the journey file.
+Fill all uses supplied test credentials and can generate a missing registration
+password. The API keys live in this profile's extension settings; they are not
+included in the journey file.
 
 The journal observes all accessible tabs and frames while recording, including
 newly encountered sign-in, verification and supporting sites. No host list is
@@ -128,7 +129,20 @@ check is a read-before-clear check, not a server-side compare-and-delete lock.
 
 Empty, visible, enabled controls are classified using autocomplete, input type,
 name/id/label/placeholder, then optional Jev. Jev receives field descriptions
-and option labels, never persona values. Confidence below 0.6 is ignored.
+and option labels, never persona values or passwords. Jev is asked for the closest
+reasonable available match; confidence below **0.51** is ignored, as are invented
+candidate names. Ordinary Display Name controls have a deterministic mapping and
+default to the persona's full name, with an explicit `display_name` taking priority.
+
+Supplied `credentials.password` and `credentials.new_password` values are filled
+locally. When an empty registration/new-password form has no supplied or saved
+password, Fill all generates one and saves it in this profile **before** using it
+in the password and confirmation controls. Subsequent fills reuse that credential.
+It does not invent an unknown existing-account password on a sign-in-only page.
+Downloads mode also adds the prepared credentials to that persona's local JSON;
+folder mode retains a private profile overlay without rewriting the source file.
+Existing input is preserved; a conflicting password is highlighted rather than
+overwritten. One-time codes still require a live value from the operator or agent.
 
 Fields are filled sequentially with native setters and input/change events.
 The helper re-resolves a unique live control after framework remounts, waits for
@@ -137,7 +151,7 @@ again at the end. Up to three passes cover newly revealed fields. A successful
 fill means the live control held the value at readback; it does not prove that
 the application accepted or persisted it.
 
-Manual reasons include `unclassified`, `secret`, `no persona value`,
+Manual reasons include `unclassified`, `secret` (no usable credential), `no persona value`,
 `no matching option`, `ambiguous option`, `did not stick`, `field changed`,
 `multiple selection requires human`, and `recording stopped`. Custom widgets,
 checkboxes, radio groups, files and multi-selects need human action. File events
@@ -170,7 +184,12 @@ not evidence that an identity or payment instrument is authorised.
 }
 ```
 
-`secrets` contains reference names, not the values to type. Supported field types
+`secrets` contains reference names. An optional private `credentials` object
+contains supplied test password values, for example
+`{"password":"EXAMPLE_ONLY_PrivateTestPassword7!"}`. The same value can serve a
+new-password pair; provide distinct `password` and `new_password` for a password
+change. Agents should generate real trial credentials privately instead of using
+the published example. A reference name alone is not a password value. Supported field types
 include names, contact/address fields, dates of birth, username, PPSN, payment
 card fields, passwords and one-time codes; see [fields.js](lib/fields.js) for the
 complete list. Additional fact keys are offered to Jev as choices. The event log

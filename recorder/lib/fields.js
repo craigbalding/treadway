@@ -8,6 +8,7 @@
     given_name: 'First or given name of a person',
     family_name: 'Last name, surname or family name of a person',
     full_name: 'Full name of a person in one field',
+    display_name: 'Public or display name shown on the profile; use the persona display name',
     email: 'Email address',
     phone: 'Telephone or mobile number',
     date_of_birth: 'Date of birth',
@@ -30,7 +31,7 @@
     one_time_code: 'One-time code, verification code or MFA code',
   };
 
-  // Secret values are never filled or recorded; the persona names a reference.
+  // Secret handling and recording follow the supplied credential and run policy.
   const SECRET_TYPES = new Set(['password', 'new_password', 'one_time_code']);
 
   const AUTOCOMPLETE_TYPES = {
@@ -77,6 +78,7 @@
     [/date of birth|birth ?date|\bdob\b|\bbday\b/, 'date_of_birth'],
     [/first ?name|given ?name|forename/, 'given_name'],
     [/last ?name|surname|family ?name/, 'family_name'],
+    [/display ?name|public ?name|preferred ?name|profile ?name/, 'display_name'],
     [/full ?name|^name$|your name/, 'full_name'],
     [/user ?name|login/, 'username'],
     [/phone|mobile|\btel\b|telephone/, 'phone'],

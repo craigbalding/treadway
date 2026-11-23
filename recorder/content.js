@@ -81,6 +81,10 @@
   }, true);
   document.addEventListener('change', fieldChanged, true);
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
+    if (message.kind === 'inspect-fill' && window === window.top) {
+      reply(PageFill.credentialNeeds(document));
+      return false;
+    }
     if (message.kind === 'recording') {
       setRecording(message.active, message.recordSecrets);
       Promise.resolve(activeFill).then(() => Promise.all([...pending])).then(() => reply({ flushed: true, failures: failures.slice() }));

@@ -33,6 +33,16 @@ appropriate; reuse supplied values when intended. Keep the identity stable durin
 a journey and label subsequent personas distinctly. Avoid unnecessary personal
 data. Do not use an already registered identity for a fresh-registration flow.
 
+Prepare common fields up front: given/family/full/display name, email and the
+application's login identifier, plus known contact, address and form-specific
+fields. Include a privately generated test password or resolve the intended
+existing credential into the persona's private `credentials` values and reference
+names. Respect an existing chosen password. This preparation works together with
+the extension's native defaults and password generation; routine fields should
+not require another agent conversation. Read the installed recorder version's
+schema rather than declaring a missing built-in field unsupported: extra persona
+field keys are offered to Jev as classification choices.
+
 For email verification, use an address the operator confirms they can receive.
 Propose the exact address, including a fresh alias suffix where appropriate, and
 ask whether it reaches them. Reuse an existing confirmation covering that mailbox
@@ -89,11 +99,13 @@ navigation as a request to withdraw AI help. Follow requests to fill or retrieve
 code within existing authorisation. Obtain mail through an already authorised
 tool, or ask for just the received code when mailbox access is unavailable.
 
-The recorder's Fill all skips passwords, one-time codes and unsupported controls.
-Explain a specific unresolved field and help complete it; do not claim that a
-secret reference contains a usable password. Use a private credential binding or
-the operator's input as appropriate. Jev can classify fields lacking useful
-labels, but classification is not proof of a correct or persisted value.
+Fill all uses supplied password values, generates and saves a missing registration
+password, and defaults Display Name to full name. Jev chooses the closest
+reasonable field type with a 0.51 confidence floor; it receives descriptors and
+candidate types, not persona values. Help with an actually unresolved control or
+live code; do not turn a helper limitation into a claim that the agent cannot
+assist, or make the human prepare fixture data. A secret reference is not a
+password value. Classification is not proof of a correct or persisted value.
 
 Coordinate with other agents before recording: SafeYolo's declared context is
 agent-wide, not profile-local. A testing agent must not overwrite the recorder's

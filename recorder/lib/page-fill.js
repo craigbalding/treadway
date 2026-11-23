@@ -234,6 +234,20 @@
   function classifiedTypeFor(element) {
     return classifiedFields.get(element.ownerDocument)?.get(bindingKey(bindingFor(element))) || null;
   }
+  function credentialNeeds(document) {
+    const fields = Array.from(document.querySelectorAll('input')).filter(element =>
+      visible(element) && !element.disabled && !element.readOnly && element.type === 'password');
+    const newFields = fields.filter(element => Fields.ruleType(describeField(element))?.type === 'new_password');
+    const forms = new Set(newFields.map(field => field.form));
+    const signup = fields.filter(field => forms.has(field.form) && !currentPassword(describeField(field)));
+    const limits = signup.map(element => element.maxLength).filter(value => value > 0);
+    return { needsNewPassword: newFields.length > 0 && signup.some(isEmpty) && !signup.some(field => field.value),
+      maximumLength: limits.length ? Math.min(...limits) : null };
+  }
+  function currentPassword(field) {
+    return field.autocomplete.split(/\s+/).includes('current-password') ||
+      /\b(current|old|existing)\b/.test(Fields.normalise([field.label, field.name, field.id].join(' ')));
+  }
   async function abortable(promise, signal) {
     if (!signal) return promise;
     if (signal.aborted) return undefined;
@@ -263,6 +277,14 @@
         const rule = Fields.ruleType(field);
         return { binding, field, key: 'f' + round + '_' + index, type: rule && rule.type, by: rule && rule.by };
       });
+      // A plain Password beside Confirm/New password belongs to that signup
+      // group. An explicit current-password autocomplete keeps its own binding.
+      for (const plan of plans) {
+        if (plan.type !== 'password' || currentPassword(plan.field)) continue;
+        const element = resolveField(document, plan.binding);
+        if (plans.some(other => other.type === 'new_password' &&
+          resolveField(document, other.binding)?.form === element?.form)) plan.type = 'new_password';
+      }
       const unknown = plans.filter((plan) => !plan.type);
       if (unknown.length && classify) {
         let answers = {};
@@ -286,8 +308,16 @@
         if (!element || !visible(element)) reason = 'field changed';
         else if (element.localName === 'select' && element.multiple) reason = 'multiple selection requires human';
         else if (!plan.type) reason = 'unclassified';
-        else if (Fields.SECRET_TYPES.has(plan.type)) reason = 'secret';
+        else if (Fields.SECRET_TYPES.has(plan.type) && (!values[plan.type]?.credential ||
+          plan.type === 'one_time_code' || (element.type !== 'password' &&
+            !['new-password', 'current-password'].includes(plan.field.autocomplete)))) reason = 'secret';
         else if (!values[plan.type]) reason = 'no persona value';
+        if (!reason && plan.type === 'new_password') {
+          const existing = Array.from(document.querySelectorAll('input[type=password]')).filter(candidate =>
+            candidate.form === element.form && visible(candidate) && candidate.value &&
+            !currentPassword(describeField(candidate)) && Fields.ruleType(describeField(candidate))?.type !== 'one_time_code');
+          if (existing.some(candidate => candidate.value !== values[plan.type].value)) reason = 'saved password differs from existing input';
+        }
         if (!reason && !isEmpty(element)) continue;
         if (!reason) {
           const value = Fields.formatValue(plan.type, values[plan.type].value, plan.field);
@@ -302,6 +332,8 @@
             rememberType(live, plan.type);
             const filled = Object.assign(entry, { selectors: selectorsFor(live), value,
               expectedValue: expected, observedValue: live.value, source: values[plan.type].source });
+            if (Fields.SECRET_TYPES.has(plan.type)) Object.assign(filled, {
+              secret: true, secretReference: values[plan.type].secretReference });
             report.filled.push(filled);
             completed.push({ binding: plan.binding, expected, entry: filled });
             continue;
@@ -330,7 +362,7 @@
   }
 
   const api = { describeField, selectorsFor, actionTarget, fillableFields, setFieldValue, waitForSettle, fillAll,
-    classifiedTypeFor, bindingFor, resolveField, MANUAL_ATTRIBUTE };
+    classifiedTypeFor, bindingFor, resolveField, credentialNeeds, MANUAL_ATTRIBUTE };
   root.TreadwayPageFill = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);
