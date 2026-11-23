@@ -26,7 +26,7 @@
   function buildContext({ agent, persona, journey, startedAt }) {
     const test = slug(journey);
     const fields = {
-      run: test + '-' + timestamp(startedAt),
+      run: test + '-' + timestamp(startedAt) + '-' + root.crypto.randomUUID().slice(0, 8),
       agent,
       role: persona.role,
       test,

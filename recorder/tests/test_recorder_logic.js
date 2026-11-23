@@ -103,7 +103,9 @@ test('test context uses SafeYOLO-safe values and the trusted agent', () => {
     journey: 'Approve expense claim!',
     startedAt: new Date('2026-11-23T10:11:12.345Z'),
   });
-  assert.equal(context.header, 'run=approve-expense-claim-20261123T101112Z;agent=browser-agent;role=approver;test=approve-expense-claim;persona=sam-approver');
+  assert.match(context.header, /^run=approve-expense-claim-20261123T101112Z-[a-f0-9]{8};agent=browser-agent;role=approver;test=approve-expense-claim;persona=sam-approver$/);
+  const again = Context.buildContext({ agent: 'browser-agent', persona: { id: 'sam-approver', role: 'approver' }, journey: 'Approve expense claim!', startedAt: new Date('2026-11-23T10:11:12.345Z') });
+  assert.notEqual(context.fields.run, again.fields.run, 'recordings started together cannot share event/file IDs');
   assert.throws(() => Context.slug('!!!'), /at least one letter/);
   assert.throws(() => Context.buildContext({ agent: 'bad agent', persona: { id: 'p', role: 'r' }, journey: 'x', startedAt: new Date() }), /agent/);
 });

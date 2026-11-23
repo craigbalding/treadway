@@ -8,6 +8,8 @@
   let personas = [];
   let folder = null;
   let status = { journey: null, finished: null };
+  let saveQueue = Promise.resolve();
+  let saving = false;
 
   // ---- messages -----------------------------------------------------------
   function say(text, level) {
@@ -40,8 +42,8 @@
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message.kind === 'panel-notice') {
-      say(message.text, message.level);
-      refresh();
+      if (message.text) say(message.text, message.level);
+      refresh().then(saveUpdatedSnapshot).catch((error) => say(error.message, 'error'));
     }
   });
 
@@ -107,16 +109,36 @@
     return persona;
   }
 
-  async function saveJourneyFile(record) {
-    const directory = await folderWithPermission();
-    const journeys = await directory.getDirectoryHandle('journeys', { create: true });
-    const name = record.contextFields.run + '.json';
-    const handle = await journeys.getFileHandle(name, { create: true });
-    const writable = await handle.createWritable();
-    await writable.write(JSON.stringify(Object.assign({ format: 'treadway-journey-events/1' }, record), null, 2) + '\n');
-    await writable.close();
-    await ask({ kind: 'saved' });
-    say('Saved ' + record.events.length + ' events to ' + directory.name + '/journeys/' + name);
+  function saveJourneyFile(record) {
+    const operation = saveQueue.then(() => writeJourneyFile(record));
+    saveQueue = operation.catch(() => undefined);
+    return operation;
+  }
+  async function writeJourneyFile(record) {
+    if (!record) throw new Error('No stopped journey to save');
+    saving = true;
+    try {
+      const latest = await ask({ kind: 'status' });
+      // Another queued write may already have saved and closed this run. Never
+      // overwrite its newer file with an old snapshot retained by a caller.
+      if (!latest.finished || latest.finished.contextFields.run !== record.contextFields.run) return;
+      record = latest.finished;
+      const directory = await folderWithPermission();
+      const journeys = await directory.getDirectoryHandle('journeys', { create: true });
+      const name = record.contextFields.run + '.json';
+      const handle = await journeys.getFileHandle(name, { create: true });
+      const writable = await handle.createWritable();
+      await writable.write(JSON.stringify(Object.assign({ format: 'treadway-journey-events/2' }, record), null, 2) + '\n');
+      await writable.close();
+      const result = await ask({ kind: 'saved', run: record.contextFields.run, revision: record.revision });
+      say('Saved ' + record.events.length + ' events to ' + directory.name + '/journeys/' + name);
+      if (result.pendingRequests) say(result.pendingRequests + ' request(s) still pending; this snapshot will update while the panel is open.');
+    } finally { saving = false; }
+  }
+  async function saveUpdatedSnapshot() {
+    const record = status.finished;
+    if (!record || saving || record.lastSavedRevision === undefined || record.lastSavedRevision === record.revision || !folder) return;
+    if ((await folder.queryPermission({ mode: 'readwrite' })) === 'granted') await saveJourneyFile(record);
   }
 
   // ---- settings -------------------------------------------------------------
@@ -126,6 +148,7 @@
     $('jev-key').value = settings.jevKey || '';
     $('target-hosts').value = (settings.targetHosts || []).join('\n');
     $('ttl-minutes').value = settings.ttlMinutes || 20;
+    $('record-secrets').checked = settings.recordSecrets !== false;
     if (!settings.safeyoloKey) $('settings-section').open = true;
   }
 
@@ -137,6 +160,7 @@
       jevKey: $('jev-key').value.trim(),
       targetHosts: $('target-hosts').value.split(/\s+/).filter(Boolean),
       ttlMinutes,
+      recordSecrets: $('record-secrets').checked,
     };
     await chrome.storage.local.set({ settings });
     say('Settings saved');
@@ -153,14 +177,17 @@
         journey.context + ', expires ' + new Date(journey.expiresAt).toLocaleTimeString() + '. ' + journey.events.length + ' events.';
       line.className = 'status recording';
     } else {
-      line.textContent = status.finished ? 'Journey stopped, not yet saved' : 'No journey running';
+      line.textContent = status.finished ? 'Journey stopped; ' + status.pendingRequests + ' pending request(s); save the latest snapshot or finish incomplete.' : 'No journey running';
       line.className = 'status idle';
     }
     $('start').disabled = running || Boolean(status.finished);
-    for (const id of ['stop', 'fill', 'authenticated', 'step', 'step-name']) $(id).disabled = !running;
+    $('stop').disabled = !running;
+    const active = running && status.journey.contextStatus === 'active';
+    for (const id of ['fill', 'authenticated', 'step', 'step-name', 'step-expected', 'observed-account']) $(id).disabled = !active;
     $('persona').disabled = running;
     $('journey-name').disabled = running;
     $('pending').hidden = !status.finished;
+    $('finish-incomplete').hidden = !status.pendingRequests;
   }
 
   async function start() {
@@ -173,8 +200,9 @@
   }
 
   async function stop() {
-    const { finished, clearError } = await ask({ kind: 'stop' });
+    const { finished, clearError, clearSkipped } = await ask({ kind: 'stop' });
     if (clearError) say('Journey stopped, but SafeYOLO did not clear the context: ' + clearError, 'warning');
+    if (clearSkipped) say('Journey stopped; a different declared context was left intact.', 'warning');
     await saveJourneyFile(finished);
   }
 
@@ -193,9 +221,12 @@
   async function marker(kind) {
     const name = kind === 'step' ? $('step-name').value.trim() : undefined;
     if (kind === 'step' && !name) throw new Error('Type a step name');
-    await ask({ kind: 'marker', marker: kind, name });
+    await ask({ kind: 'marker', marker: kind, name,
+      expectedOutcome: kind === 'step' ? $('step-expected').value.trim() : undefined,
+      observedAccount: kind === 'authenticated' ? $('observed-account').value.trim() : undefined });
     say(kind === 'step' ? 'Step marker: ' + name : 'Marked authenticated');
     if (kind === 'step') $('step-name').value = '';
+    if (kind === 'step') $('step-expected').value = '';
   }
 
   // ---- wiring ------------------------------------------------------------------
@@ -212,9 +243,13 @@
   $('authenticated').addEventListener('click', guarded(() => marker('authenticated')));
   $('step').addEventListener('click', guarded(() => marker('step')));
   $('save-again').addEventListener('click', guarded(() => saveJourneyFile(status.finished)));
+  $('finish-incomplete').addEventListener('click', guarded(async () => {
+    const result = await ask({ kind: 'finish-incomplete' });
+    await saveJourneyFile(result.finished);
+  }));
   $('discard').addEventListener('click', guarded(async () => {
     if (!window.confirm('Discard the stopped journey without saving its events?')) return;
-    await ask({ kind: 'saved' });
+    await ask({ kind: 'discard' });
     say('Discarded the stopped journey');
   }));
 
@@ -228,6 +263,6 @@
       else say('Click "Reload personas" to give the recorder access to ' + folder.name);
     }
     await refresh();
-    setInterval(() => refresh().catch(() => undefined), 5000);
+    setInterval(() => refresh().then(saveUpdatedSnapshot).catch(() => undefined), 5000);
   })().catch((error) => say(error.message, 'error'));
 })();

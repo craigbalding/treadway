@@ -27,14 +27,21 @@
       <button id="fill" disabled>Fill all</button>
       <button id="authenticated" disabled>Mark authenticated</button>
     </div>
+    <label>Account you see (optional)
+      <input id="observed-account" placeholder="visible account name or test identity" autocomplete="off">
+    </label>
     <div class="row">
       <input id="step-name" placeholder="Step name" autocomplete="off" disabled>
       <button id="step" disabled>Add step marker</button>
     </div>
+    <label>Expected result for this step (optional)
+      <input id="step-expected" placeholder="claim saved; created ID visible; reload shows the change" autocomplete="off">
+    </label>
     <div id="pending" hidden>
-      <p>The stopped journey has not been saved to the folder.</p>
+      <p>Stopped journey retained; save the latest snapshot before closing.</p>
       <div class="row">
         <button id="save-again" class="primary">Save again</button>
+        <button id="finish-incomplete">Finish with pending requests</button>
         <button id="discard">Discard</button>
       </div>
     </div>
@@ -64,6 +71,7 @@
     <label>TypeSafe AI API key for Jev (optional)
       <input id="jev-key" type="password" autocomplete="off">
     </label>
+    <label><input id="record-secrets" type="checkbox" checked> Record typed test passwords and one-time codes</label>
     <button id="save-settings" class="primary">Save settings</button>
   </details>
 

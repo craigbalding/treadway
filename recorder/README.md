@@ -1,220 +1,203 @@
 # Treadway Flow Recorder
 
-A Chrome extension for driving each user journey of a web application by hand,
-once, while it records a labelled trace. An agent then turns the trace into a
-Treadway flow. This first version covers four things:
+Demonstrate a journey once, using persona filling and step markers to reduce
+manual work. Give the saved event log and the matching SafeYolo captures to an
+agent, which authors a Treadway flow. Prefer HTTP operations for repeatable
+application work; keep browser operations for authentication, browser behavior
+and controls that need them. See the [conversion guide](CONVERSION.md) and the
+[runnable HTTP-first example](examples/http-first/README.md).
 
-- **Test context.** Starting a journey declares a SafeYOLO test context, so
-  SafeYOLO records the journey's HTTP traffic under that context in its flow
-  store.
-- **Personas.** Test users come from a `personas.json` file in a folder you
-  choose. Identifiers such as PPSNs and test cards are generated from a seed, so
-  each persona always gets the same values.
-- **Fill all.** One button fills a form's empty fields from the persona. Fields
-  the recorder cannot fill are highlighted for you.
-- **Event log.** Clicks, submits, step markers and where each field value came
-  from are saved to the folder when you stop.
+The recorder observes request metadata and SafeYolo response IDs passively. It
+adds no application request headers and copies no request/response bodies into
+the journal. Bodies remain in SafeYolo's FlowStore.
 
-The recorder does not capture HTTP traffic itself and adds no request headers.
-HTTP detail comes from the SafeYOLO flow store, which you join to the event log
-by the test context's `run` value.
+## Install and configure
 
-## Requirements
+Use Chrome/Chromium 116+ behind the SafeYolo proxy. In `chrome://extensions`,
+enable Developer mode and **Load unpacked** this `recorder` directory. Open the
+side panel using its toolbar icon. Reload the extension after updates; reload
+application tabs so the new content scripts attach.
 
-- Chrome or Chromium 116 or later, using the SafeYOLO proxy. This is normally the
-  browser on the SafeYOLO agent's desktop.
-- A SafeYOLO policy whose `test_context` section lists the application's hosts
-  and enables declared contexts:
+SafeYolo policy must list the target hosts and enable declared contexts:
 
-  ```yaml
-  addons:
-    test_context:
-      target_hosts:
-        - "app.example.test"
-      inject_declared: true
-      declared_ttl_max: 1200   # seconds; SafeYOLO caps the recorder's timer at this value
-  ```
+```yaml
+addons:
+  test_context:
+    target_hosts: ["app.example.test"]
+    inject_declared: true
+    declared_ttl_max: 1200
+```
 
-  Without `inject_declared: true`, SafeYOLO accepts the declaration but does not
-  apply it to the browser's requests.
-- The SafeYOLO agent API key: the contents of `/app/agent_token` in the agent.
-- Optional: a TypeSafe AI API key, used for Jev field classification. SafeYOLO
-  policy must allow egress to `api.typesafe.ai`.
+In Settings, choose a folder containing [personas.json](examples/personas.json),
+enter the SafeYolo **agent** API key and matching target hosts, and save. The
+context timer defaults to 20 minutes; SafeYolo may cap it. Wildcard host patterns
+match subdomains, not the parent host. Optional Jev classification uses a TypeSafe
+AI key and needs policy access to `api.typesafe.ai`.
 
-## Install
+**Record test passwords and one-time codes** is enabled by default. Turn it off
+to record secret references instead of typed values. This setting is fixed when
+a journey starts and applies to both rule-based and Jev-classified controls.
+Secrets are always entered by the operator, never by Fill all. The API keys live
+in this profile's extension settings; they are not included in the journey file.
 
-1. Open `chrome://extensions` and turn on **Developer mode**.
-2. Choose **Load unpacked** and select this `recorder` folder.
-3. Click the recorder's toolbar icon to open the side panel.
+The journal observes all accessible tabs and frames while recording, including
+non-target pages. `targetHosts` controls context renewal, not recording scope.
+Use the intended test profile. Fill all acts only in the active tab's top frame.
 
-## Set up once per engagement
+## Demonstrate a journey
 
-1. Make a folder that the agent can read and write, and put a `personas.json`
-   in it (see [the example](examples/personas.json)).
-2. In the side panel, open **Settings**:
-   - **Choose folder** and select that folder. Chrome asks for read and write
-     access. If Chrome later asks again, click **Reload personas**.
-   - Paste the SafeYOLO agent API key.
-   - List the target hosts exactly as in the SafeYOLO policy. `*.example.test`
-     matches subdomains only.
-   - Set the test context timer. The default is 20 minutes.
-   - Optionally paste the TypeSafe AI API key.
-3. Click **Save settings**.
+1. Pick a persona and name the journey. **Start** reads the trusted agent identity
+   and declares a context containing `run`, `agent`, `role`, `test` and `persona`.
+   Each run has a timestamp and random suffix; a journey's `test` name is stable.
+2. Sign in normally. **Mark authenticated** can include the account you observed.
+   This is an operator annotation, not an application principal check.
+3. Add a step name and its expected outcome before the next meaningful action.
+   Use **Fill all**, complete highlighted controls, and perform the action.
+   For a save, inspect persisted state with a fresh load/read as well as the
+   acknowledgement. Those observations make the later conversion much easier.
+4. If SafeYolo returns a test-context block (428 with `X-Blocked-By: test-context`),
+   the recorder renews its context and tells you. Explicitly repeat the blocked
+   action when ready. It never retries application requests. An application's
+   own 428 does not trigger renewal.
+5. **Stop and save** stops new capture, interrupts any fill, drains available
+   content-script messages, and clears the declaration only if it still matches
+   this journey. Another owner's declaration is left intact. A declaration or
+   clear with an uncertain outcome stays explicitly recorded.
 
-Both keys are stored in this browser profile's extension storage.
+The file is `journeys/<run>.json` in your chosen folder. If requests were already
+in flight, it is a pending snapshot. Their responses and completion/error events
+remain associated with the original run and step after Stop. While the panel is
+open it updates an already saved snapshot. If closed, reopen it and **Save again**
+when requests finish. The stopped run stays available until its latest revision
+is saved. You can **Finish with pending requests** to record an incomplete capture
+explicitly; that does not cancel a request or establish its application effect.
+A save failure retains the run for retry. **Discard** drops that retained capture.
+Chrome session storage survives service-worker suspension, but is not a durable
+backup across browser/profile shutdown; save before closing the test browser.
 
-## Record a journey
+Start, Stop and renewal are serialized. A failed declaration can be uncertain;
+use Stop to reconcile it before starting another journey. Do not run two recorder
+profiles against one agent declaration concurrently: SafeYolo's context belongs
+to the agent, not an individual tab or extension profile. The Stop ownership
+check is a read-before-clear check, not a server-side compare-and-delete lock.
 
-1. Pick a persona, type a journey name such as `submit expense claim`, and click
-   **Start**. The recorder asks SafeYOLO which agent the key belongs to, then
-   declares this context:
+## Fill all
 
-   ```text
-   run=submit-expense-claim-20261123T101112Z;agent=<agent>;role=submitter;test=submit-expense-claim;persona=casey-submitter
-   ```
+Empty, visible, enabled controls are classified using autocomplete, input type,
+name/id/label/placeholder, then optional Jev. Jev receives field descriptions
+and option labels, never persona values. Confidence below 0.6 is ignored.
 
-   `run` is unique to this recording. `test` names the journey across
-   recordings. `role` and `persona` show who did it.
-2. Use the application normally. On a form, click **Fill all**. Add a step
-   marker when the journey moves to a new stage. Click **Mark authenticated**
-   once you are signed in.
-3. If the timer runs out, SafeYOLO answers a target-host request with HTTP 428.
-   The recorder then declares the same context again and shows a message.
-   Resubmit the action yourself; the recorder does not retry it.
-4. Click **Stop and save**. The recorder clears the SafeYOLO context and writes
-   `journeys/<run>.json` into the folder. After stopping, requests to target
-   hosts get HTTP 428 until you start another journey.
+Fields are filled sequentially with native setters and input/change events.
+The helper re-resolves a unique live control after framework remounts, waits for
+DOM settling (up to 1.5 seconds), reads its value back, and checks earlier fills
+again at the end. Up to three passes cover newly revealed fields. A successful
+fill means the live control held the value at readback; it does not prove that
+the application accepted or persisted it.
 
-If the file cannot be written, the side panel keeps the journey. Click **Save
-again** to retry, or **Discard** to drop it.
+Manual reasons include `unclassified`, `secret`, `no persona value`,
+`no matching option`, `ambiguous option`, `did not stick`, `field changed`,
+`multiple selection requires human`, and `recording stopped`. Custom widgets,
+checkboxes, radio groups, files and multi-selects need human action. File events
+record selected-file metadata and a fixture binding, not file contents or a
+reusable fake path. Human multi-select events include `selectedValues`.
 
-## How Fill all works
+The current binding uses tag, input type, id, name, label and form id/name.
+Duplicate controls remain unresolved rather than selecting an arbitrary match.
+Changed bindings need operator review. Manual highlights clear on trusted input;
+a later remount can remove a highlight, so also inspect the panel's report.
 
-Fill all only fills empty fields in the top-level page. It works out what each
-field expects in this order:
+## Personas
 
-1. The `autocomplete` attribute, then the input type (`email` or `password`).
-2. The field's name, id, label and placeholder.
-3. Jev, if a TypeSafe key is set. All remaining fields go in one request.
-   Answers with confidence below 0.6 are ignored.
-
-Each value is set with the field's native value setter. The recorder then sends
-`input` and `change` events and blurs the field, so React and similar frameworks
-update their state. Fields are filled one at a time. After each one, the
-recorder waits up to 1.5 seconds for the page to settle and then reads the value
-back. Fields that appear during filling are handled in up to two more passes.
-
-A field is highlighted in orange, for you to fill, when:
-
-| Reason | Meaning |
-| --- | --- |
-| `unclassified` | Neither the rules nor Jev could tell what the field expects. |
-| `secret` | A password or one-time code. These are never filled. |
-| `no persona value` | The persona has no value for that type. |
-| `no matching option` | No `select` option matches the persona's value. |
-| `did not stick` | The page changed or rejected the value, or marked it invalid. |
-
-The highlight clears when you type in the field.
-
-### What is sent to Jev
-
-Only field descriptions go to Jev: label, name, id, placeholder, input type,
-autocomplete, nearby text and up to 20 `select` option labels. Persona values
-are never sent.
-
-## personas.json
+The selected folder contains a `personas` array. `id` and `role` must use letters,
+digits and `_ . : -`. `label` defaults to `id`. `facts` supply fixed values;
+`generate` supports `ppsn` and `test_card` with `seed` defaulting to `id`. Facts
+win over generated values. Dates use `YYYY-MM-DD`; text inputs showing a date
+layout receive that layout. Generators are deterministic test-data helpers,
+not evidence that an identity or payment instrument is authorised.
 
 ```json
 {
-  "personas": [
-    {
-      "id": "casey-submitter",
-      "role": "submitter",
-      "label": "Casey Example",
-      "facts": { "given_name": "Casey", "family_name": "Example", "email": "casey@example.test" },
-      "generate": ["ppsn", "test_card"],
-      "secrets": { "password": "CASEY_SUBMITTER_PASSWORD" }
-    }
-  ]
+  "personas": [{
+    "id": "casey-submitter", "role": "submitter", "label": "Casey Example",
+    "facts": {"given_name": "Casey", "family_name": "Example", "email": "casey@example.test"},
+    "generate": ["ppsn", "test_card"],
+    "secrets": {"password": "CASEY_PASSWORD", "one_time_code": "CASEY_CODE"}
+  }]
 }
 ```
 
-| Key | Meaning |
+`secrets` contains reference names, not the values to type. Supported field types
+include names, contact/address fields, dates of birth, username, PPSN, payment
+card fields, passwords and one-time codes; see [fields.js](lib/fields.js) for the
+complete list. Additional fact keys are offered to Jev as choices. The event log
+records whether each fill came from persona facts or a generator.
+
+## Journey format and exact request joins
+
+The export uses `format: "treadway-journey-events/2"`. Consumers must check this
+version; v1 lacked exact request joins and document provenance. The top level
+contains context fields, persona/reference metadata, start/stop timestamps,
+secret policy, revision, `networkCapture`, and an append-only `events` array.
+
+Each event has a unique `eventId`, `stepId`, source timestamp `at` and background
+receipt timestamp `receivedAt`. Page observations include Chrome's actual
+`tabId`, `frameId` and `documentId`, plus the content script's document instance
+and client event IDs. Source clocks and message delivery can differ; receipt
+order and timing alone do not prove causality.
+
+| Event family | Evidence retained |
 | --- | --- |
-| `id`, `role` | Required. Letters, digits and `_ . : -` only, because both go into the test context. |
-| `label` | Name shown in the picker. Defaults to `id`. |
-| `facts` | Fixed values, keyed by field type. Dates use `YYYY-MM-DD`. A text field whose placeholder or label shows `DD/MM/YYYY` or `MM/DD/YYYY` gets that layout. |
-| `generate` | `ppsn`, `test_card` or both. |
-| `seed` | Seed for generated values. Defaults to `id`. |
-| `secrets` | Reference names for secrets, never the secrets themselves. Typed passwords are logged only as these names. |
+| `page`, `navigation` | Page title or navigation URL; committed documents, history push/replace, and fragment changes with frame/document identity. |
+| `click`, `submit`, `field` | Selector candidates, control descriptors, human values and classification, checked/selected states or file metadata. Input and change can both describe the same edit; fold them at the action boundary. |
+| `fill`, `fill_error` | Observed fill/readback results, expected values, sources, manual reasons and partial/interrupted outcomes. |
+| `marker` | Step/expected outcome or observed account, explicitly `source: operator_annotation`, with the active tab/document. |
+| `network_request` | Chrome request ID, URL/method/type, start time and run/step/frame binding. |
+| `network_response` | Every observed response leg: status, response index, cache flag, exact SafeYolo ID or missing/ambiguous correlation. |
+| `network_redirect`, `network_completed`, `network_error` | Redirect destination, linked response event, terminal outcome or transport error. |
+| Context/flush/incomplete events | Declaration/renewal/clear outcomes, content drain results and explicit abandonment of pending capture. |
 
-The field types are `given_name`, `family_name`, `full_name`, `email`, `phone`,
-`date_of_birth`, `address_line1`, `address_line2`, `city`, `region`,
-`postcode`, `country`, `username`, `ppsn`, `card_number`, `card_name`,
-`card_expiry`, `card_expiry_month`, `card_expiry_year`, `card_cvc`, `password`,
-`new_password` and `one_time_code`. `full_name` and `card_name` default to the
-given and family names. You can add other fact keys; Jev is offered them as
-extra choices.
+`chromeRequestId` groups Chrome's request lifecycle; it can span several redirect
+or authentication response legs. **`safeyoloRequestId` comes from the observed
+`X-SafeYolo-Request-Id` response header and is the exact FlowStore lookup key.**
+Do not substitute a Chrome ID, a run name, URL or nearest timestamp. The run
+context remains useful for discovering related/background captures.
 
-The generators produce:
+`flowCorrelation` is `response_header`, `missing_header`, `ambiguous_header` or
+`no_response_headers`. Distinct competing header IDs are preserved without
+choosing one. A cached response can refer to an older retained flow: inspect
+`fromCache` and the stored wire timestamps. A header reference does not establish
+that a full original body is retained; retrieve and verify it separately.
 
-- `ppsn`: a check-character-valid PPSN in the current format, such as `1234567FA`.
-- `test_card`: a published Stripe test card number, an expiry of December three
-  years ahead, and CVC `123`.
+Requests bind to the run and step at request start. `precedingUiEventId` is an
+optional same-frame temporal candidate, labelled
+`uiAssociation: preceding_event_only_not_causality`. One action can cause many
+requests, and a request may have no identifiable UI action. Do not manufacture
+one-to-one links. Responses without a browser tab, restricted Chrome pages,
+pre-start traffic, some worker traffic and service-worker synthetic responses
+may have no journal join; record that limitation in the conversion evidence.
 
-A fact of the same type overrides a generated value.
+`networkCapture.complete` describes only tracked network outcomes. It does not
+certify complete browser coverage, successful content drains, complete stored
+bodies, a correct account, or successful application persistence.
 
-## Journey file
-
-`journeys/<run>.json` has the format `treadway-journey-events/1`:
-
-```json
-{
-  "format": "treadway-journey-events/1",
-  "journey": "submit expense claim",
-  "context": "run=...;agent=...;role=submitter;test=submit-expense-claim;persona=casey-submitter",
-  "contextFields": { "run": "...", "agent": "...", "role": "submitter", "test": "...", "persona": "casey-submitter" },
-  "persona": { "id": "casey-submitter", "role": "submitter", "label": "Casey Example", "secrets": { "password": "CASEY_SUBMITTER_PASSWORD" } },
-  "startedAt": "...", "expiresAt": "...", "stoppedAt": "...",
-  "events": [ { "at": "2026-11-23T10:11:13.001Z", "type": "click", "url": "...", "selectors": { } } ]
-}
-```
-
-Each event has an `at` timestamp and a `type`:
-
-| `type` | Contents |
-| --- | --- |
-| `context_declared`, `context_renewed`, `context_cleared`, `context_clear_failed` | SafeYOLO test context changes. `context_renewed` names the request that received the 428. |
-| `page`, `navigation` | Page load (with title), or a `popstate` or `hashchange` in a single-page app. |
-| `click` | The clicked element: `tag` and `selectors`. |
-| `submit` | The form's `selectors`, plus the submit button's `submitter` selectors if there was one. |
-| `field` | A change you made: `source: "human"`, `value`, and `fieldType` if the rules recognised it. Passwords and one-time codes have `redacted: true` and a `secretReference` instead of a value. |
-| `fill` | Result of Fill all: `filled` entries (selectors, type, how it was classified, value, and source `persona` or `generated`) and `manual` entries (with reasons). |
-| `marker` | `marker: "step"` with a `name`, or `marker: "authenticated"`. |
-
-`selectors` gives several candidates: `testId`, `id`, `name`, `role` (role and
-accessible name) and a short `css` path. The agent chooses the most stable one.
-
-Events are recorded from every tab and frame in the browser while a journey is
-running.
-
-## Not in this version
-
-Transparent retry after a 428, cross-role replay, autopilot, the coverage
-checklist, observed-role checks and automated flow compilation. For now, an
-agent builds flows from the journey file and the flow store, with your guidance.
-
-## Tests
-
-From the repository root:
+## Validation
 
 ```sh
-npm run test:recorder
+npm ci --ignore-scripts
+npm run test:recorder:logic
+npx playwright install chromium
+RECORDER_REQUIRE_BROWSER=1 npm run test:recorder:browser
+python -m pip install -e '.[robot]'
+python recorder/examples/http-first/walkthrough.py
 ```
 
-This runs the offline logic tests. If Playwright and the repository's
-devDependencies (`npm ci --ignore-scripts`) are present, it also runs a browser
-test. That test loads the unpacked extension in Chromium behind a fake SafeYOLO
-proxy and records a journey through a synthetic React form, including a 428
-renewal. If Playwright is missing, the browser test is skipped. Set
-`RECORDER_PLAYWRIGHT` to load Playwright from another path.
+The browser suite loads the actual extension in sandboxed Chromium with a local
+synthetic proxy and React fixtures. It covers remounts, rejected edits, dynamic
+fields, classifications, secret modes, SPA routes, same-URL frames, file metadata
+and exact request IDs. Contract tests cover redirects, cache/error/missing IDs,
+concurrent transitions and late outcomes across Stop/save. CI requires the
+browser suite; it cannot silently skip missing Playwright. Optional overrides:
+`RECORDER_PLAYWRIGHT` (module path), `RECORDER_CHROMIUM_BIN` (browser binary).
+These fixtures do not constitute acceptance against a real SafeYolo proxy,
+TypeSafe service, or application. Automated compilation, principal verification,
+cross-role replay and testing mutations remain the consuming agent's work.
