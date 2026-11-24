@@ -54,6 +54,31 @@ test('fill readback distinguishes retention from validation and instant scroll p
     assert.equal(entry.reason, 'validation error'); assert.equal(entry.retained, true);
     assert.equal(entry.expectedValue, 'Alex'); assert.equal(entry.observedValue, 'Alex');
   });
+  await t.test('a later required asterisk preserves the same control binding and retained value', async () => {
+    await fixture('<label id="first-label" for="first">Given name</label><input id="first" name="givenName">' +
+      '<label>Surname<input name="surname" oninput="document.getElementById(\'first-label\').textContent=\'Given name *\';document.getElementById(\'first\').required=true"></label>');
+    const report = await fill({ given_name: { value: 'Alex', source: 'persona' }, family_name: { value: 'Example', source: 'persona' } });
+    assert.equal(report.filled.length, 2); assert.equal(report.manual.length, 0);
+    const entry = report.filled.find(item => item.type === 'given_name');
+    assert.equal(entry.retained, true); assert.equal(entry.observedValue, 'Alex');
+    assert.equal(await page.evaluate(binding => TreadwayPageFill.resolveField(document, binding)?.id, entry.binding), 'first');
+    assert.equal(await page.evaluate(() => TreadwayPageFill.describeField(document.getElementById('first')).label), 'Given name *', 'raw observation retains the decoration');
+  });
+  await t.test('a genuine question change is reported as unknown binding, not inferred value loss', async () => {
+    await fixture('<label id="first-label" for="first">Given name</label><input id="first" name="givenName">' +
+      '<label>Surname<input name="surname" oninput="document.getElementById(\'first-label\').textContent=\'A different question\'"></label>');
+    const report = await fill({ given_name: { value: 'Alex', source: 'persona' }, family_name: { value: 'Example', source: 'persona' } });
+    const entry = report.manual.find(item => item.type === 'given_name');
+    assert.equal(entry.reason, 'field changed'); assert.equal(entry.observedValue, null); assert.equal(entry.retained, null);
+    assert.equal(await page.locator('#first').inputValue(), 'Alex', 'a failed binding is not evidence of value loss');
+  });
+  await t.test('normalising decoration never chooses between ambiguous controls', async () => {
+    await fixture('<label>Given name<input id="duplicate" name="givenName"></label>' +
+      '<label>Given name *<input id="duplicate" name="givenName"></label>');
+    const report = await fill({ given_name: { value: 'Alex', source: 'persona' } });
+    assert.equal(report.filled.length, 0); assert(report.manual.every(entry => entry.reason === 'field changed'));
+    assert.deepEqual(await page.locator('input').evaluateAll(nodes => nodes.map(node => node.value)), ['', '']);
+  });
   await t.test('CSS smooth scrolling cannot leave the prepared hit point offscreen', async () => {
     await fixture('<style>html{scroll-behavior:smooth}body{height:3200px;margin:0}#deep{position:absolute;top:2200px;left:80px;width:220px;height:40px}</style><input id="deep" aria-label="Deep field">');
     const result = await page.evaluate(() => {

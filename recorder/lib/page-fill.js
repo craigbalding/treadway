@@ -296,7 +296,11 @@
   function bindingFor(element) {
     const field = describeField(element);
     const form = element.form;
-    return { tag: field.tag, inputType: field.inputType, id: field.id, name: field.name, label: field.label,
+    // Required decorations can appear when another field changes. Preserve
+    // their raw observed label, but do not treat a trailing asterisk as a new
+    // control identity. All other binding parts and uniqueness checks remain.
+    const label = field.label.replace(/\s*\*+\s*$/, '').trim();
+    return { tag: field.tag, inputType: field.inputType, id: field.id, name: field.name, label,
       formId: form ? form.id : '', formName: form ? form.getAttribute('name') || '' : '' };
   }
   function bindingKey(binding) { return JSON.stringify(binding); }
@@ -769,11 +773,12 @@
           await abortable(waitForSettle(document), signal);
           const live = resolveField(document, resultBinding);
           Object.assign(entry, { value, expectedValue: expected ?? null, observedValue: live ? fieldValue(live) : null,
-            retained: Boolean(live && retained(live, expected)), validation: validationState(live, Fields.SECRET_TYPES.has(plan.type)),
+            retained: live ? retained(live, expected) : null, validation: validationState(live, Fields.SECRET_TYPES.has(plan.type)),
             source });
           if (Fields.SECRET_TYPES.has(plan.type)) Object.assign(entry, { secret: true, secretReference: values[plan.type].secretReference });
           if (signal?.aborted) { report.interrupted = true; reason = 'recording stopped'; }
           else if (!reason && expected === null) reason = 'no matching option';
+          else if (!reason && !live) reason = 'field changed';
           else if (!reason && !entry.retained) reason = 'did not stick';
           else if (!reason && entry.validation?.invalid) reason = 'validation error';
           if (!reason) {
@@ -803,11 +808,11 @@
     // A later field can reset an earlier one. Verify the final live form too.
     for (const item of completed) {
       const live = resolveField(document, item.binding);
-      const valueRetained = Boolean(live && retained(live, item.expected));
+      const valueRetained = live ? retained(live, item.expected) : null;
       const validation = validationState(live, Fields.SECRET_TYPES.has(item.entry.type));
       Object.assign(item.entry, { retained: valueRetained, validation, observedValue: live ? fieldValue(live) : null });
       if (!valueRetained || validation?.invalid) {
-        const reason = valueRetained ? 'validation error' : 'did not stick';
+        const reason = !live ? 'field changed' : valueRetained ? 'validation error' : 'did not stick';
         report.filled = report.filled.filter((entry) => entry !== item.entry);
         if (live) markManual(live, reason);
         report.manual.push(Object.assign({}, item.entry, { reason }));

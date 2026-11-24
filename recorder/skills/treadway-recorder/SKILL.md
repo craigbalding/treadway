@@ -200,6 +200,12 @@ latest revision, pending requests and content-drain results. Retain explicit gap
 and late responses; ensure the final revision is saved before closing. Do not
 discard an incomplete run to make the result look successful.
 
+When the operator ends the engagement, stop the assistance and journal observers.
+Preserve captures, candidates and any pending request state. Do not contact or
+reopen target pages to tidy up after authorisation ends. Before starting a new
+engagement, reconcile retained requests with the operator's current intent;
+do not automatically resume an old request or carry forward target authorisation.
+
 Keep the journal, persona bindings, expected outcomes and exact SafeYolo captures
 together privately. Use each observed `safeyoloRequestId` to retrieve its FlowStore
 record; a Chrome request ID or nearby timestamp is not an exact join. Verify body

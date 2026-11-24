@@ -198,6 +198,11 @@ with the observed validation state; it is not counted as a successful fill or
 mislabelled `did not stick`. That latter reason means the expected value was not
 retained. Validation can change after a later field, so the final readback checks
 both retention and validation again.
+Required-field asterisks can change without replacing the control. They remain
+in the observed label but do not invalidate its binding. Other question changes
+and ambiguous matches still stop filling. An unresolved binding is reported as
+`field changed`, with unknown retention (`null`); it does not establish that the
+entered value was lost.
 
 Radio groups and checkboxes can use explicit persona facts such as `"retired":
 "No"` or `"has_registration_number": "No"`. Negated checkbox wording is matched
