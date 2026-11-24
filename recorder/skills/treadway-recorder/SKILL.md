@@ -1,6 +1,6 @@
 ---
 name: treadway-recorder
-description: Bootstrap and assist a human-driven journey with the Treadway Chrome recorder, preparing usable personas and confirmed verification contacts, then hand the capture to a flow-authoring agent.
+description: Bootstrap and assist a human-driven Treadway Chrome recording, discover persona needs from application context, prepare or enrich usable personas and confirmed verification contacts, then hand the capture to a flow-authoring agent.
 ---
 
 # Assist a recorded journey
@@ -24,6 +24,15 @@ Recover the intended journey, browser profile, application and any persona or
 contact preferences already supplied. Prepare the normal working flow before
 deliberate testing variations. Inspect retained requirements and existing working
 flows before asking questions or independently navigating the human's tab.
+
+The agent may be seeing these forms for the first time. Use the client's short
+application description, client/market context and intended actor to choose a
+generous core persona plus relevant domain coverage. Refine that coverage from
+available evidence; do not require an exhaustive form inventory before helping.
+Read [persona discovery and enrichment](references/persona-discovery.md) when
+preparing new personas or revisiting them as an engagement develops. It covers
+lightweight operator questions, public and SPA evidence, rich histories,
+consistency checks and preserving manual corrections during enrichment.
 
 Prepare a fresh, coherent persona with values usable in the actual form. A
 synthetic fixture that parses is not necessarily a usable registration identity:
@@ -91,6 +100,18 @@ watching its directory alone does not watch an in-progress journey. Confirm the
 observer is receiving current events before saying that you are monitoring. If
 live observation is unavailable, disclose that and arrange an accessible stream
 without restarting or interrupting the active capture.
+
+When the installed version provides `recorder/stream.mjs`, bootstrap it by default
+with the owned BrowserManager session, exact extension ID and a private shared
+JSONL destination. See the README's Live journal output instructions. Run it as
+a managed long-lived task in the browser-owning sandbox; verify its companion
+status file and panel connected state during setup, then a fresh journal event
+when recording starts before claiming to monitor activity. Other
+agents should read that file directly rather than asking the browser agent to
+inspect each event. Re-arm on expiry/failure; resume the same file only for its
+bound browser generation/extension. Preserve final Save and disclosed stream
+gaps. This observational exporter is separate from the assistance wake watcher
+and from Coord waiting.
 
 Let the human choose navigation, submissions and consequential application
 choices unless they delegate them. Provide active assistance with field values,

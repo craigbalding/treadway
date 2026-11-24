@@ -464,14 +464,22 @@ def test_borrowed_construction_and_wrong_entry_points_are_passive(tmp_path, monk
 @pytest.mark.parametrize('endpoint', ['shared'], indirect=True)
 def test_borrowed_unknown_write_keeps_all_resource_aliases_blocked_after_detach(tmp_path, endpoint, monkeypatch):
     from treadway.browser_state import BrowserStateIncomplete
+    from treadway.cdp import CdpSocket, CommandSession
     with BrowserRuntime(tmp_path/'operator', configuration=CONFIG, project_root=tmp_path/'operator-project') as operator:
         original = operator.acquire('operator')
         provide_attachment(monkeypatch, operator, endpoint)
         with BrowserRuntime(tmp_path/'borrower', configuration=BORROWED, project_root=tmp_path/'project') as borrower:
             member = borrower.borrow('member', borrowed_identity(tmp_path), permission='drive')
             with borrower.drive(member):
-                with pytest.raises(AssertionError, match='unknown|timed out|remote_command_incomplete'):
-                    operation(member.connection(), 'lose-reply', timeout_ms=100)
+                # Establish the transport before starting the deliberately short
+                # mutation deadline. A cold subprocess/handshake timeout can be
+                # correctly not-dispatched and cannot establish quarantine.
+                socket = CdpSocket(connection=member.connection(), timeout_seconds=5)
+                try:
+                    with pytest.raises((RuntimeError, TimeoutError), match='unknown|remote_command_incomplete'):
+                        CommandSession(socket).command('Runtime.evaluate', {'expression': 'lose-reply'}, timeout_seconds=.5)
+                finally:
+                    socket.close()
             released = borrower.release(member)
             assert released['attachmentDetached'] and not released['contextDisposed']
             assert released['identity']['recoveryRequired'] and released['contextLease']['recoveryRequired']

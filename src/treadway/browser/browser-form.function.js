@@ -150,7 +150,7 @@
   if (command === 'scroll') {
     const matches=document.querySelectorAll(args.selector);
     if(matches.length!==1)throw new Error('scroll_target_missing_or_ambiguous');
-    matches[0].scrollIntoView({block:'center',inline:'nearest'});
+    matches[0].scrollIntoView({behavior:'instant',block:'center',inline:'nearest'});
     return {scrolled:true};
   }
   if (command === 'locate') {
@@ -190,7 +190,10 @@
     let hit = e;
     if (!visible(e) && ['checkbox','radio'].includes(e.type)) hit = [...(e.labels || [])].find(visible);
     if (!hit || !visible(hit)) throw new Error('control_not_visible');
-    hit.scrollIntoView({ block: 'center', inline: 'center' });
+    // Hit geometry must describe the position reached by this call. CSS
+    // scroll-behavior:smooth otherwise starts an animation and the immediate
+    // centre-point check can falsely report an offscreen control as occluded.
+    hit.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
     const r = hit.getBoundingClientRect(), x = r.x + r.width/2, y = r.y + r.height/2;
     const cover = document.elementFromPoint(x, y);
     if (!cover || !(hit === cover || hit.contains(cover) || e === cover)) throw new Error('control_occluded');
@@ -210,7 +213,7 @@
     if (!visible(e)) throw new Error('frame_not_visible');
     for (let node=e;node;node=node.parentElement) if(getComputedStyle(node).transform!=='none') throw new Error('transformed_frame_not_calibrated');
     if (command === 'frame_bounds') {
-      e.scrollIntoView({block:'center',inline:'center'});
+      e.scrollIntoView({behavior:'instant',block:'center',inline:'center'});
       const r=e.getBoundingClientRect();
       if(Math.abs(r.width-e.offsetWidth)>1||Math.abs(r.height-e.offsetHeight)>1)throw new Error('scaled_frame_not_calibrated');
       return {left:r.x+e.clientLeft,top:r.y+e.clientTop,width:e.clientWidth,height:e.clientHeight};

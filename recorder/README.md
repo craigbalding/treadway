@@ -184,6 +184,13 @@ again at the end. Up to three passes cover newly revealed fields. A successful
 fill means the live control held the value at readback; it does not prove that
 the application accepted or persisted it.
 
+Readback records the intended/expected and observed values separately. A retained
+value with native or ARIA validation errors is reported as `validation error`,
+with the observed validation state; it is not counted as a successful fill or
+mislabelled `did not stick`. That latter reason means the expected value was not
+retained. Validation can change after a later field, so the final readback checks
+both retention and validation again.
+
 Radio groups and checkboxes can use explicit persona facts such as `"retired":
 "No"` or `"has_registration_number": "No"`. Negated checkbox wording is matched
 against the fact's meaning rather than blindly copying a boolean. Existing radio
@@ -193,7 +200,7 @@ are reported as gaps, rather than disappearing from the report. Controls disable
 by an earlier fill are retained separately as observed skips.
 
 Manual reasons include `unclassified`, `secret` (no usable credential), `no persona value`,
-`no matching option`, `ambiguous option`, `did not stick`, `field changed`,
+`no matching option`, `ambiguous option`, `did not stick`, `validation error`, `field changed`,
 `option match not confirmed`, `options changed`, `options still loading`,
 `decision service unavailable`, `form context changed`, `operator decision`,
 `file requires operator`, `multiple selection requires human`, and
@@ -247,6 +254,50 @@ The panel shows the active fill phase. Fill events include model decision
 provenance, fit/confidence, selected labels, batch sizes/timings, final readback,
 and observed skips. These describe assistance decisions, not extra business
 submissions. Stop cancels pending filling; late model replies cannot apply values.
+
+## Live journal output
+
+The paired agent should start the supported live exporter before the human
+demonstrates a journey. It uses the same owned BrowserManager session and the
+recorder's read-only incremental journal interface. It does not navigate or
+submit application requests, use an API key, or require a directory picker.
+It works with both Downloads and chosen-folder journey storage:
+
+```sh
+node recorder/stream.mjs /private/browser/session.json /private/capture/live.jsonl EXTENSION_ID 28800
+```
+
+Use the exact extension ID from this profile and keep its panel open for initial
+connection. Run the exporter as a managed long-lived task in the browser's
+sandbox. Confirm the companion status file and **Live output connected** panel
+state during setup, then verify a fresh event when the journey starts before
+claiming to be monitoring its activity. Other agents can
+read the shared file directly; subsequent observations require no agent relay or
+Stop+Save. The default poll is one second, with immediate bounded-page catch-up.
+
+The output is private append-only JSONL (0600). Event lines carry run, event ID
+and revision; separate source/state/gap lines identify the browser generation,
+extension, stopped/saved state and explicit retention gaps. Existing test-secret
+recording policy is preserved and extension API keys are removed. Stream health
+does not become a journey event. A companion `.status.json` reports the reader's
+last successful page and cursor. The panel shows disconnected after five seconds
+without reads and displays reported write errors.
+
+Restart the same command against the same output to catch up without duplicate
+event IDs. Existing file contents are authoritative; cursors advance only after
+durable writes. A changed browser generation/extension, partial final line or
+conflicting live writer stops export rather than mixing or discarding evidence.
+Preserve a partial file for repair and use a new output for a different browser
+generation. SIGINT/SIGTERM close the exporter cleanly; a normal run is bounded to
+eight hours and needs re-arming afterwards.
+
+Saved/discarded journals remain available for short catch-up: the extension keeps
+up to four stopped runs in a conservative 3 MiB archive, trimming old events when
+necessary. Service-worker suspension preserves this session archive, but browser
+shutdown/extension reload does not. Delayed responses remain readable while a
+stopped journey is retained, and its final archived revision survives the Save
+acknowledgement. A consumer that falls behind retention receives an explicit gap;
+the live file does not replace the final acknowledged journey export.
 
 ## Phone a friend
 

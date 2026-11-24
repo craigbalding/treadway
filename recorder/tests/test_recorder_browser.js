@@ -483,8 +483,12 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
     assert.equal((await watch(inbox, { timeout: 0.05, interval: 0.01 })).timeout, true);
     await assert.rejects(complete(pending.requestFile, session, facts), /no longer active/);
     await panel.getByRole('button', { name: 'Phone a friend', exact: true }).click();
-    await profilePage.goto('http://app.example.test/assistance-profile?new-document=1');
+    await waitFor(async () => {
+      const current = await worker.evaluate(async () => (await chrome.storage.session.get('pendingAssistance')).pendingAssistance);
+      return current && !current.completed && current.requestId !== result.requestId;
+    }, 'new assistance request is active before changing its document');
     const active = await worker.evaluate(async () => (await chrome.storage.session.get('pendingAssistance')).pendingAssistance);
+    await profilePage.goto('http://app.example.test/assistance-profile?new-document=1');
     const rejected = await panel.evaluate(async requestId => {
       try { await treadwayCompleteAssistance({ requestId, facts: { institution: 'Different College' } }); return false; }
       catch (error) { return error.message; }
