@@ -1,6 +1,6 @@
 ---
 name: treadway-recorder
-description: Bootstrap and assist a human-driven journey with the Treadway Chrome recorder, preparing usable personas and confirmed verification contacts, then hand the capture to a flow-authoring agent.
+description: Bootstrap and assist a human-driven Treadway Chrome recording, discover persona needs from application context, prepare or enrich usable personas and confirmed verification contacts, then hand the capture to a flow-authoring agent.
 ---
 
 # Assist a recorded journey
@@ -24,6 +24,15 @@ Recover the intended journey, browser profile, application and any persona or
 contact preferences already supplied. Prepare the normal working flow before
 deliberate testing variations. Inspect retained requirements and existing working
 flows before asking questions or independently navigating the human's tab.
+
+The agent may be seeing these forms for the first time. Use the client's short
+application description, client/market context and intended actor to choose a
+generous core persona plus relevant domain coverage. Refine that coverage from
+available evidence; do not require an exhaustive form inventory before helping.
+Read [persona discovery and enrichment](references/persona-discovery.md) when
+preparing new personas or revisiting them as an engagement develops. It covers
+lightweight operator questions, public and SPA evidence, rich histories,
+consistency checks and preserving manual corrections during enrichment.
 
 Prepare a fresh, coherent persona with values usable in the actual form. A
 synthetic fixture that parses is not necessarily a usable registration identity:

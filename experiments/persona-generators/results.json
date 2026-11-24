@@ -1,0 +1,158 @@
+{
+  "referenceDate": "2026-11-24",
+  "samplesPerLocale": 500,
+  "scope": "Offline synthetic data only. No issuer, address deliverability, geography or application acceptance checks.",
+  "versions": {
+    "faker": "10.6.0",
+    "jsonSchemaFaker": "0.6.4",
+    "seedFaker": "0.4.0-alpha.1",
+    "dicebearCore": "10.7.0",
+    "dicebearStyles": "10.6.0",
+    "ibanTools": "4.5.4"
+  },
+  "faker": {
+    "IE": {
+      "samples": 500,
+      "repeatable": 500,
+      "composedAgeMatchesDob": 500,
+      "unconstrainedCountryMatchesLocale": 1,
+      "explicitIbanStructureAndChecksum": 500,
+      "independentIbanValid": 500,
+      "nameCollisions": 0,
+      "localCityDataAvailable": true
+    },
+    "GB": {
+      "samples": 500,
+      "repeatable": 500,
+      "composedAgeMatchesDob": 500,
+      "unconstrainedCountryMatchesLocale": 2,
+      "explicitIbanStructureAndChecksum": 500,
+      "independentIbanValid": 500,
+      "nameCollisions": 0,
+      "localCityDataAvailable": true
+    },
+    "DE": {
+      "samples": 500,
+      "repeatable": 500,
+      "composedAgeMatchesDob": 500,
+      "unconstrainedCountryMatchesLocale": 1,
+      "explicitIbanStructureAndChecksum": 500,
+      "independentIbanValid": 500,
+      "nameCollisions": 0,
+      "localCityDataAvailable": true
+    },
+    "US": {
+      "samples": 500,
+      "repeatable": 500,
+      "composedAgeMatchesDob": 500,
+      "unconstrainedCountryMatchesLocale": 1,
+      "explicitIbanStructureAndChecksum": 0,
+      "independentIbanValid": 0,
+      "nameCollisions": 0,
+      "localCityDataAvailable": true
+    },
+    "seedAloneSurvivesInsertedCall": false,
+    "note": "Age and explicit country/IBAN constraints above are composer logic; address components are not proven mutually consistent."
+  },
+  "seedFaker": {
+    "IE": {
+      "samples": 500,
+      "repeatable": 500,
+      "fullNameMatchesParts": 500,
+      "ageMatchesExactReferenceDate": 52,
+      "ageMatchesDocumentedYearRule": 500,
+      "countryMatchesLocale": 500,
+      "ibanChecksum": 3,
+      "independentIbanValid": 0,
+      "ibanPrefixMatchesLocale": 0,
+      "uniquePassports": 500
+    },
+    "GB": {
+      "samples": 500,
+      "repeatable": 500,
+      "fullNameMatchesParts": 500,
+      "ageMatchesExactReferenceDate": 52,
+      "ageMatchesDocumentedYearRule": 500,
+      "countryMatchesLocale": 500,
+      "ibanChecksum": 8,
+      "independentIbanValid": 2,
+      "ibanPrefixMatchesLocale": 90,
+      "uniquePassports": 500
+    },
+    "DE": {
+      "samples": 500,
+      "repeatable": 500,
+      "fullNameMatchesParts": 500,
+      "ageMatchesExactReferenceDate": 49,
+      "ageMatchesDocumentedYearRule": 500,
+      "countryMatchesLocale": 500,
+      "ibanChecksum": 4,
+      "independentIbanValid": 3,
+      "ibanPrefixMatchesLocale": 500,
+      "uniquePassports": 500
+    },
+    "US": {
+      "samples": 500,
+      "repeatable": 500,
+      "fullNameMatchesParts": 500,
+      "ageMatchesExactReferenceDate": 50,
+      "ageMatchesDocumentedYearRule": 500,
+      "countryMatchesLocale": 500,
+      "ibanChecksum": 8,
+      "independentIbanValid": 2,
+      "ibanPrefixMatchesLocale": 0,
+      "uniquePassports": 500
+    },
+    "ppsAcceptedByExistingValidator": 18,
+    "untilYearChangesAgeOrDob": true,
+    "fingerprint": "sf0-158dc9f79ce46b43",
+    "note": "Exact-day age and PPS checksum are suitability requirements, not promised guarantees. Age intentionally uses untilYear - birthYear - 1. Country/IBAN linkage is observed, not assumed. IBAN valid check digits are documented but not met by this published version."
+  },
+  "jsonSchemaFaker": {
+    "schemaSeedAloneRepeatsFakerValues": false,
+    "bothSeedsRepeat": true,
+    "checkedRecords": 100,
+    "unconstrainedImpossibleHistoryProduced": true,
+    "note": "Schema shape works; explicit relationship validation and narrative/history authorship remain necessary."
+  },
+  "dicebear": {
+    "samples": 500,
+    "repeatable": 500,
+    "uniqueSvgHashes": 500,
+    "style": "lorelei",
+    "styleLicense": {
+      "name": "CC0 1.0",
+      "url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "text": "Remix of „Lorelei” (https://www.figma.com/community/file/1198749693280469639) by „Lisa Wischofsky”, licensed under „CC0 1.0” (https://creativecommons.org/publicdomain/zero/1.0/)"
+    },
+    "note": "Byte uniqueness in this sample; no guarantee of perceptual distinctness or physical-attribute fidelity."
+  },
+  "existingTreadway": {
+    "ppsnAcceptedByExistingValidator": 500,
+    "note": "Existing format/checksum validator only; no issued-identity acceptance claim."
+  },
+  "sameComposerPolicy": {
+    "IE": {
+      "samples": 500,
+      "fakerDerivedAgeAndExplicitCountry": 500,
+      "seedFakerDerivedAgeAndExplicitCountry": 500
+    },
+    "GB": {
+      "samples": 500,
+      "fakerDerivedAgeAndExplicitCountry": 500,
+      "seedFakerDerivedAgeAndExplicitCountry": 500
+    },
+    "DE": {
+      "samples": 500,
+      "fakerDerivedAgeAndExplicitCountry": 500,
+      "seedFakerDerivedAgeAndExplicitCountry": 500
+    },
+    "US": {
+      "samples": 500,
+      "fakerDerivedAgeAndExplicitCountry": 500,
+      "seedFakerDerivedAgeAndExplicitCountry": 500
+    },
+    "note": "The same age-from-DOB and explicit-country policy works with both. These composed values are not attributed to either raw generator. IBANs use the same local and independent validators for both providers."
+  },
+  "elapsedMs": 7144
+}
