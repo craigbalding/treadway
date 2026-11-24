@@ -9,6 +9,7 @@
   const MANUAL_ATTRIBUTE = 'data-treadway-manual';
   const classifiedFields = new WeakMap();
   const humanEdits = new WeakMap();
+  const ownActions = new WeakMap();
   const fillContexts = new WeakMap();
   const CONTROL_SELECTOR = 'input, textarea, select, [role="combobox"]';
   function contextFor(document) {
@@ -177,7 +178,25 @@
     const scope = element.closest('[role="radiogroup"]') || element.form || element.ownerDocument;
     return [...scope.querySelectorAll('input[type="radio"]')].filter(candidate => candidate.name === element.name && candidate.form === element.form);
   }
-  function noteHumanEdit(element) { humanEdits.set(element, (humanEdits.get(element) || 0) + 1); }
+  // Native click() can synchronously emit trusted input/change events. Mark
+  // only our synchronous action stack, never the asynchronous Fill lifetime:
+  // genuine operator input while a provider request waits must still win.
+  function isOwnAction(eventOrElement) {
+    const element = eventOrElement?.target || eventOrElement;
+    return Boolean(ownActions.get(element?.ownerDocument));
+  }
+  function ownAction(element, action) {
+    const document = element.ownerDocument;
+    ownActions.set(document, (ownActions.get(document) || 0) + 1);
+    try { return action(); }
+    finally {
+      const depth = ownActions.get(document) - 1;
+      if (depth) ownActions.set(document, depth); else ownActions.delete(document);
+    }
+  }
+  function noteHumanEdit(element) {
+    if (!isOwnAction(element)) humanEdits.set(element, (humanEdits.get(element) || 0) + 1);
+  }
   function consent(element) {
     return element.type === 'checkbox' && /\bagree\b|\bconsent\b|\battest\b|\bcertify\b|accept.{0,20}terms|confirm.{0,30}(accur|truth|correct)/i.test(labelFor(element));
   }
@@ -210,11 +229,13 @@
       if (target === null) return null;
     }
     const view = element.ownerDocument.defaultView;
-    element.focus();
-    nativeSetter(element).call(element, target);
-    element.dispatchEvent(new view.Event('input', { bubbles: true }));
-    element.dispatchEvent(new view.Event('change', { bubbles: true }));
-    element.blur();
+    ownAction(element, () => {
+      element.focus();
+      nativeSetter(element).call(element, target);
+      element.dispatchEvent(new view.Event('input', { bubbles: true }));
+      element.dispatchEvent(new view.Event('change', { bubbles: true }));
+      element.blur();
+    });
     return target;
   }
 
@@ -246,7 +267,7 @@
     element.style.setProperty('outline', '3px solid #d97706', 'important');
     element.style.setProperty('outline-offset', '1px', 'important');
     element.addEventListener('input', function clear(event) {
-      if (!event.isTrusted) return;
+      if (!event.isTrusted || isOwnAction(event)) return;
       element.removeAttribute(MANUAL_ATTRIBUTE);
       element.style.removeProperty('outline');
       element.style.removeProperty('outline-offset');
@@ -316,6 +337,29 @@
   }
   const optionKey = option => JSON.stringify([option.label, option.value ?? null]);
   const optionSet = options => JSON.stringify(options.map(optionKey).sort());
+  function shortHash(value) {
+    let hash = 2166136261;
+    for (const char of value) { hash ^= char.codePointAt(0); hash = Math.imul(hash, 16777619); }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+  }
+  function directFactType(field, values, rule) {
+    const exact = Object.keys(values).filter(type => !Fields.SECRET_TYPES.has(type) &&
+      [field.name, field.id, field.label, field.groupLabel].some(label =>
+        Fields.normalise(label).replace(/[^a-z0-9 ]/g, '').trim() === Fields.normalise(type)));
+    return !Fields.SECRET_TYPES.has(rule?.type) && exact.length === 1 ? exact[0] : null;
+  }
+  function deductionBinding(document, binding, field) {
+    const scope = document.location.origin + document.location.pathname;
+    // A SPA may reuse the same control on several steps at the same path.
+    // Hash the observed context rather than persisting query strings or nearby
+    // text (which can contain private values) in the deduction identity.
+    const steps = root.TreadwayFormRuntime ? root.TreadwayFormRuntime('inspect').step.map(item => item.label) : [];
+    const headings = [...document.querySelectorAll('h1,h2,h3,[role="heading"]')].filter(visible).slice(0, 20).map(node => text(node.textContent));
+    const context = shortHash(JSON.stringify({ steps, headings, nearby: field.nearby || '', label: field.label || '',
+      placeholder: field.placeholder || '', autocomplete: field.autocomplete || '', inputType: field.inputType || '' }));
+    const fieldBinding = JSON.stringify({ scope, binding, groupLabel: field.groupLabel || '', context });
+    return { key: 'field-' + shortHash(fieldBinding), scope, fieldBinding };
+  }
   function localOptions(element) {
     if (element.localName === 'select') return [...element.options].filter(option => !option.disabled &&
       !option.closest('optgroup[disabled]') && option.value !== '').map(option => ({ label: text(option.textContent, 300), value: option.value }));
@@ -371,18 +415,20 @@
     let context;
     try { context = controlledContext(element); } catch (_) { return; }
     const target = listElement(document, context) || element;
-    target.dispatchEvent(new document.defaultView.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+    ownAction(target, () => target.dispatchEvent(new document.defaultView.KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })));
     // Restore only our own uncommitted search text, never human input.
     if (element.localName === 'input' && element.value === query && (humanEdits.get(element) || 0) === editEpoch) {
-      nativeSetter(element).call(element, '');
-      element.dispatchEvent(new document.defaultView.Event('input', { bubbles: true }));
-      element.blur();
+      ownAction(element, () => {
+        nativeSetter(element).call(element, '');
+        element.dispatchEvent(new document.defaultView.Event('input', { bubbles: true }));
+        element.blur();
+      });
       // Some widgets reopen on an empty input event; dismiss only this
       // controller's newly observed popup after restoring our query.
       if (element.getAttribute('aria-expanded') === 'true') {
         const reopened = controlledContext(element);
-        (listElement(document, reopened) || element).dispatchEvent(new document.defaultView.KeyboardEvent('keydown',
-          { key: 'Escape', code: 'Escape', bubbles: true }));
+        ownAction(element, () => (listElement(document, reopened) || element).dispatchEvent(new document.defaultView.KeyboardEvent('keydown',
+          { key: 'Escape', code: 'Escape', bubbles: true })));
       }
     }
     const deadline = Date.now() + 1000;
@@ -404,15 +450,17 @@
     const query = element.localName === 'input' ? String(value) : '';
     const editEpoch = continued?.editEpoch ?? (humanEdits.get(element) || 0);
     if (continued && ((element.localName === 'input' && element.value !== query) || (humanEdits.get(element) || 0) !== editEpoch)) throw new Error('field changed');
-    if (!continued) element.focus();
-    if (!continued && element.localName === 'input') {
-      nativeSetter(element).call(element, query);
-      element.dispatchEvent(new view.InputEvent('input', { inputType: 'insertText', data: query, bubbles: true }));
-    } else if (!continued) {
-      element.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, button: 0 }));
-      element.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true, button: 0 }));
-      element.click();
-    }
+    if (!continued) ownAction(element, () => {
+      element.focus();
+      if (element.localName === 'input') {
+        nativeSetter(element).call(element, query);
+        element.dispatchEvent(new view.InputEvent('input', { inputType: 'insertText', data: query, bubbles: true }));
+      } else {
+        element.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, button: 0 }));
+        element.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true, button: 0 }));
+        element.click();
+      }
+    });
     let context; let options = []; let loading = false; let observed = false;
     const deadline = Date.now() + (root.TreadwayChoiceBinding?.DEFAULT_WINDOW_MS || 15000);
     try {
@@ -447,7 +495,7 @@
       const current = localOptions(element);
       if (optionSet(current) !== optionSet(plan.observation.options)) throw new Error('options changed');
       const reference = prepareReference(element);
-      if (reference) root.TreadwayFormRuntime('select', { ref: reference.ref, value: chosen.value });
+      if (reference) ownAction(element, () => root.TreadwayFormRuntime('select', { ref: reference.ref, value: chosen.value }));
       else setFieldValue(element, chosen.value);
       return { binding: plan.binding, expected: chosen.value };
     }
@@ -461,7 +509,7 @@
       if (element.checked !== expected) {
         const reference = prepareReference(element);
         const target = reference ? document.elementFromPoint(reference.hit.x, reference.hit.y) : element;
-        target.click();
+        ownAction(element, () => target.click());
       }
       return { binding: bindingFor(element), expected };
     }
@@ -475,8 +523,20 @@
       const hit = root.TreadwayFormRuntime('prepare', { ref: option.ref, choice: choice.binding });
       const target = document.elementFromPoint(hit.x, hit.y)?.closest('[role="option"]');
       if (!target) throw new Error('field changed');
-      target.click();
+      const ownedList = listElement(document, current.context);
+      ownAction(target, () => target.click());
       await abortable(waitForSettle(document), signal);
+      // A closing popup can stop mutating the DOM before its CSS exit
+      // transition removes the modal hit target. Observe this exact owned
+      // list until it stops being visible; never click through its backdrop
+      // or assume that a fixed quiet period made the next field usable.
+      const deadline = Date.now() + 1500;
+      while (ownedList?.isConnected && visible(ownedList)) {
+        assertContext(document);
+        if (signal?.aborted) throw new Error('recording stopped');
+        if (Date.now() >= deadline) throw new Error('choice popup did not close');
+        await abortable(new Promise(resolve => setTimeout(resolve, 50)), signal);
+      }
       return { binding: plan.binding, expected: option.label };
     } catch (error) {
       await closeChoices(document, plan.binding, current.query, signal, current.editEpoch);
@@ -503,8 +563,10 @@
     try { return await fillImplementation(document, options); }
     finally { fillContexts.delete(document); }
   }
-  async function fillImplementation(document, { values, classify, decide, progress = () => {}, rounds, signal }) {
+  async function fillImplementation(document, { values, profile, classify, decide, progress = () => {}, rounds, signal }) {
     const report = { filled: [], manual: [], decisions: [], batches: [] };
+    const hasProfile = profile?.context && (profile.context.description?.trim() ||
+      ['facts', 'domains', 'preferences', 'circumstances', 'histories'].some(key => Object.keys(profile.context[key] || {}).length));
     const seen = new Set();
     const completed = [];
     for (let round = 0; round < (rounds || 3); round += 1) {
@@ -516,12 +578,13 @@
         seen.add(bindingKey(binding));
         const field = describeField(element);
         const rule = Fields.ruleType(field);
-        const exactFact = Object.keys(values).filter(type => !Fields.SECRET_TYPES.has(type) &&
-          [field.name, field.id, field.label, field.groupLabel].some(label =>
-            Fields.normalise(label).replace(/[^a-z0-9 ]/g, '').trim() === Fields.normalise(type)));
-        const direct = !Fields.SECRET_TYPES.has(rule?.type) && exactFact.length === 1 ? exactFact[0] : null;
+        const direct = directFactType(field, values, rule);
+        const profileBinding = deductionBinding(document, binding, field);
+        const cached = profile?.deductions?.[profileBinding.key];
+        const reusable = cached?.fieldBinding === profileBinding.fieldBinding ? cached : null;
         return { binding, field, key: 'f' + round + '_' + index,
-          type: direct || rule?.type, by: direct ? 'persona key' : rule?.by,
+          type: direct || rule?.type || reusable?.type, by: direct ? 'persona key' : rule?.by,
+          profileBinding, cached: reusable,
           unsupported: element.type === 'file' ? 'file requires operator' : consent(element) ? 'operator decision' : null };
       });
       // A plain Password beside Confirm/New password belongs to that signup
@@ -536,7 +599,7 @@
       // (phone vs mobile_phone, region vs county). Let Jev resolve these too;
       // a recognized label alone must not prevent using the available data.
       const unknown = plans.filter((plan) => !plan.unsupported &&
-        (!plan.type || (!values[plan.type] && !plan.type.startsWith('previous_'))));
+        !plan.cached && (!plan.type || (!values[plan.type] && !plan.type.startsWith('previous_'))));
       if (unknown.length && classify) {
         let answers = {};
         progress('classify', unknown.length);
@@ -551,10 +614,23 @@
         }
         report.batches.push({ phase: 'classify', count: unknown.length, elapsedMs: Date.now() - started });
       }
+      // A single generic education fact must not be copied into several distinct
+      // history rows. Distinct row-specific keys are usable because their types
+      // differ; matching the generic label is not a distinct record binding.
+      const historyTypes = new Set(['institution', 'qualification_level', 'degree_title', 'classification', 'year_obtained']);
+      const plannedTypes = new Map(plans.map(plan => [bindingKey(plan.binding), plan.type]));
+      const observedTypes = [...document.querySelectorAll(CONTROL_SELECTOR)].filter(visible).map(element => {
+        const field = describeField(element), rule = Fields.ruleType(field);
+        return plannedTypes.get(bindingKey(bindingFor(element))) || directFactType(field, values, rule) ||
+          classifiedTypeFor(element) || rule?.type;
+      });
+      for (const plan of plans) if (historyTypes.has(plan.type) &&
+        observedTypes.filter(type => type === plan.type).length > 1) plan.unsupported = 'repeated history field needs an explicit persona binding';
       // Observe widget options first, then resolve independent semantic matches
       // in ONE model request. No per-option or per-poll inference loop.
       const jobs = [];
-      const jobFor = plan => ({ key: plan.key, field: plan.field, type: plan.type, intent: String(plan.value),
+      const jobFor = plan => ({ key: plan.key, field: plan.field, type: plan.type,
+        ...(plan.mode === 'profile' ? { mode: 'profile' } : { intent: String(plan.value) }),
         options: plan.observation.options.map(option => ({ label: option.label })),
         loading: plan.observation.loading, error: plan.observation.error });
       async function resolveDecisions(batch) {
@@ -574,7 +650,9 @@
               plan.choiceError = 'ambiguous option';
             } else {
               plan.optionIndex = answer.index; plan.choiceError = null;
-              plan.optionDecision = { action: 'select', confidence: answer.confidence, fit: answer.fit, label: selected.label };
+              plan.optionDecision = { action: 'select', confidence: answer.confidence, fit: answer.fit, label: selected.label,
+                ...(plan.mode === 'profile' ? { mode: 'profile', personaRevision: profile.revision } : {}) };
+              if (plan.mode === 'profile') plan.value = selected.label;
             }
           } else plan.choiceError = batchError ? 'decision service unavailable' :
             answer?.action === 'wait' ? 'options still loading' : 'option match not confirmed';
@@ -587,8 +665,20 @@
         if (signal?.aborted) break;
         const element = resolveField(document, plan.binding);
         if (plan.unsupported || !element || !visible(element) || !isEmpty(element) ||
-          !choiceControl(element) || element.multiple || !values[plan.type] || Fields.SECRET_TYPES.has(plan.type)) continue;
-        plan.value = Fields.formatValue(plan.type, values[plan.type].value, plan.field);
+          !choiceControl(element) || element.multiple || Fields.SECRET_TYPES.has(plan.type)) continue;
+        if (!values[plan.type]) {
+          if (!hasProfile || !decide) continue;
+          plan.mode = 'profile';
+          plan.type ||= Fields.normalise(plan.field.name || plan.field.groupLabel || plan.field.label).replace(/[^a-z0-9]+/g, '_').slice(0, 80) || 'profile_choice';
+          plan.profileBinding = deductionBinding(document, plan.binding, plan.field);
+          plan.cached = profile.deductions?.[plan.profileBinding.key];
+          plan.value = plan.cached?.value || '';
+          // Autocomplete needs a sourced query; selecting an arbitrary history
+          // record or fabricating search text would mix persona records.
+          if (element.localName === 'input' && !['radio', 'checkbox'].includes(element.type) && !plan.cached) {
+            plan.choiceError = 'profile lookup needs a sourced query'; continue;
+          }
+        } else plan.value = Fields.formatValue(plan.type, values[plan.type].value, plan.field);
         let observation;
         try {
           observation = await observeChoices(document, plan.binding, plan.value, signal, { retain: true });
@@ -608,7 +698,18 @@
           if (observation.error) { plan.choiceError = observation.error; continue; }
           if (observation.options.length > 255) { plan.choiceError = 'too many options; narrow the lookup'; continue; }
           plan.choiceError = null;
-          plan.optionIndex = exactOption(observation.options, plan.value, element, plan.type);
+          plan.optionIndex = plan.mode === 'profile' ? null : exactOption(observation.options, plan.value, element, plan.type);
+          if (plan.mode === 'profile' && plan.cached?.fieldBinding === plan.profileBinding.fieldBinding &&
+            plan.cached.optionSignature === shortHash(optionSet(observation.options))) {
+            const matches = observation.options.map((option, index) => ({ option, index })).filter(({ option }) =>
+              option.label === plan.cached.selectedLabel && (option.value ?? null) === (plan.cached.selectedValue ?? null));
+            if (matches.length === 1) {
+              plan.optionIndex = matches[0].index;
+              plan.optionDecision = { action: 'select', mode: 'profile', source: 'cache', personaRevision: profile.revision,
+                confidence: plan.cached.confidence, fit: plan.cached.fit, label: matches[0].option.label };
+              plan.value = matches[0].option.label;
+            }
+          }
           if (plan.optionIndex === null && decide &&
             !/password|secret|token|one.?time|\botp\b|api.?key|^card_|ppsn|email|phone|username/i.test(plan.type)) jobs.push(jobFor(plan));
         } catch (error) { plan.choiceError = error.message; }
@@ -637,7 +738,7 @@
           else if (Fields.SECRET_TYPES.has(plan.type) && (!values[plan.type]?.credential ||
             plan.type === 'one_time_code' || (element.type !== 'password' &&
               !['new-password', 'current-password'].includes(plan.field.autocomplete)))) reason = 'secret';
-          else if (!values[plan.type]) reason = 'no persona value';
+          else if (!values[plan.type] && plan.mode !== 'profile') reason = 'no persona value';
         }
         if (!reason && plan.type === 'new_password') {
           const existing = Array.from(document.querySelectorAll('input[type=password]')).filter(candidate =>
@@ -648,7 +749,8 @@
         if (!reason && !isEmpty(element)) continue;
         if (!reason && choiceControl(element) && (!plan.observation || plan.optionIndex === null || plan.optionIndex === undefined)) reason = 'no matching option';
         if (!reason) {
-          const value = Fields.formatValue(plan.type, values[plan.type].value, plan.field);
+          const value = plan.mode === 'profile' ? plan.value : Fields.formatValue(plan.type, values[plan.type].value, plan.field);
+          const source = plan.mode === 'profile' ? 'jev profile' : values[plan.type].source;
           let expected;
           let resultBinding = plan.binding;
           try {
@@ -664,7 +766,7 @@
           const live = resolveField(document, resultBinding);
           Object.assign(entry, { value, expectedValue: expected ?? null, observedValue: live ? fieldValue(live) : null,
             retained: Boolean(live && retained(live, expected)), validation: validationState(live, Fields.SECRET_TYPES.has(plan.type)),
-            source: values[plan.type].source });
+            source });
           if (Fields.SECRET_TYPES.has(plan.type)) Object.assign(entry, { secret: true, secretReference: values[plan.type].secretReference });
           if (signal?.aborted) { report.interrupted = true; reason = 'recording stopped'; }
           else if (!reason && expected === null) reason = 'no matching option';
@@ -673,8 +775,15 @@
           if (!reason) {
             rememberType(live, plan.type);
             const filled = Object.assign(entry, { selectors: selectorsFor(live), field: describeField(live), binding: resultBinding, value,
-              expectedValue: expected, observedValue: fieldValue(live), source: values[plan.type].source });
+              expectedValue: expected, observedValue: fieldValue(live), source });
             if (plan.optionDecision) filled.optionDecision = plan.optionDecision;
+            if (plan.mode === 'profile' && plan.optionDecision?.source !== 'cache') {
+              const selected = plan.observation.options[plan.optionIndex];
+              filled.profileDeduction = { ...plan.profileBinding, type: plan.type, value: selected.label,
+                field: plan.field, binding: resultBinding, selectedLabel: selected.label, selectedValue: selected.value ?? null,
+                optionSignature: shortHash(optionSet(plan.observation.options)),
+                confidence: plan.optionDecision.confidence, fit: plan.optionDecision.fit };
+            }
             if (Fields.SECRET_TYPES.has(plan.type)) Object.assign(filled, {
               secret: true, secretReference: values[plan.type].secretReference });
             report.filled.push(filled);
@@ -708,12 +817,13 @@
       if (live) markManual(live, entry.reason);
       return true;
     });
+    report.deductions = report.filled.filter(entry => entry.profileDeduction).map(entry => entry.profileDeduction);
     progress('done', report.filled.length);
     return report;
   }
 
   const api = { describeField, selectorsFor, actionTarget, fillableFields, setFieldValue, waitForSettle, fillAll,
-    classifiedTypeFor, bindingFor, resolveField, credentialNeeds, noteHumanEdit, isEmpty, fieldValue, MANUAL_ATTRIBUTE };
+    classifiedTypeFor, bindingFor, resolveField, credentialNeeds, noteHumanEdit, isOwnAction, isEmpty, fieldValue, MANUAL_ATTRIBUTE };
   root.TreadwayPageFill = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

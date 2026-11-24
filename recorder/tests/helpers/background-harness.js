@@ -13,6 +13,7 @@ function createHarness(options = {}) {
   const notices = [];
   const calls = [];
   const external = { context: null };
+  const local = { settings: { safeyoloKey: 'fixture-key', ttlMinutes: 20, ...options.settings }, ...options.local };
   const apiContext = () => typeof external.context === 'string' ? Object.fromEntries(
     external.context.split(';').map(part => part.split('='))) : external.context;
   const webRequest = Object.fromEntries(['onBeforeRequest', 'onHeadersReceived', 'onBeforeRedirect', 'onCompleted', 'onErrorOccurred'].map((key) => [key, event()]));
@@ -41,7 +42,11 @@ function createHarness(options = {}) {
       runtime: { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', getManifest: () => ({ version: '0.1.5' }),
         sendMessage: async (message) => { notices.push(message); }, onMessage: { addListener(fn) { listener = fn; } } },
       storage: {
-        local: { get: async () => ({ settings: { safeyoloKey: 'fixture-key', ttlMinutes: 20, ...options.settings } }) },
+        local: {
+          get: async keys => keys === undefined ? structuredClone(local) : Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(key => [key, structuredClone(local[key])])),
+          set: async data => Object.assign(local, structuredClone(data)),
+          remove: async keys => { for (const key of Array.isArray(keys) ? keys : [keys]) delete local[key]; },
+        },
         session: {
           get: async (keys) => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map((key) => [key, structuredClone(session[key])])),
           set: async (data) => Object.assign(session, structuredClone(data)),
@@ -62,7 +67,7 @@ function createHarness(options = {}) {
   }
   async function emit(group, name, details) { ({ webRequest, webNavigation })[group][name].emit(details); await idle(); }
   const persona = { id: 'fixture-persona', role: 'submitter', label: 'Fixture person', secrets: { one_time_code: 'FIXTURE_OTP', password: 'FIXTURE_PASSWORD' } };
-  return { session, external, notices, calls, command, emit, idle, persona,
+  return { session, local, external, notices, calls, command, emit, idle, persona,
     start: (journeyName = 'Submit fixture') => command({ kind: 'start', persona, journeyName }) };
 }
 module.exports = { createHarness };

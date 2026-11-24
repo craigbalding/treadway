@@ -1,0 +1,1 @@
+{"name":"treadway-persona-ingredients","version":"0.1.0","private":true,"type":"module","engines":{"node":">=22.13.0"},"scripts":{"test":"node --test test_generate.mjs"},"dependencies":{"@faker-js/faker":"10.6.0","@dicebear/core":"10.7.0","@dicebear/styles":"10.6.0"}}

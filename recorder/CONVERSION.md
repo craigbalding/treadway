@@ -15,6 +15,15 @@ Keep redirect/authentication legs and errors, not just the final response. Verif
 the stored method, URL, timestamps, context, capture completeness and original
 request/response bodies. A response ID does not prove that bodies were retained.
 
+For rich-persona captures, bind each fill to its `personaRevision` and the
+matching `personaRevisions` context/signature in that export. Retain accepted
+categorical deductions with confidence, support and observed option/control
+binding; these are assistance decisions, not proof of application acceptance.
+Resolve HTTP request values from the demonstrated revision and actual request
+body, rather than silently substituting a later edited persona. Repeated history
+records remain distinct. Resolve credentials through their private references;
+semantic context intentionally omits contact and account/document identifiers.
+
 Keep source originals distinct from excerpts or projections. A cached header can
 reference a previous capture. A missing/ambiguous ID, unfinished request, failed
 content drain or truncated body stays an explicit gap. Use the run context for

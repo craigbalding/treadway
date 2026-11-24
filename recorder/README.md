@@ -141,7 +141,7 @@ password, Fill all generates one and saves it in this profile **before** using i
 in the password and confirmation controls. Subsequent fills reuse that credential.
 It does not invent an unknown existing-account password on a sign-in-only page.
 Downloads mode also adds the prepared credentials to that persona's local JSON;
-folder mode retains a private profile overlay without rewriting the source file.
+folder mode updates the selected folder's persona with the same prepared credential.
 Existing input is preserved; a conflicting password is highlighted rather than
 overwritten. One-time codes still require a live value from the operator or agent.
 Every Fill all reloads the persisted persona first, so an agent's saved fact
@@ -165,7 +165,7 @@ option set, URL or wizard step rejects the stale decision.
 Semantic requests include the non-secret categorical intent and option labels.
 Passwords, OTPs, payment data, API credentials and supplied contact identifiers
 are excluded from these requests; those values stay in local filling paths.
-Jev selects from supplied facts/options; it does not generate missing free text.
+Jev selects from supplied facts/options or the redacted persona context described below; it does not generate missing free text.
 At most 255 observed options are considered per control; a larger result needs
 a narrower lookup rather than silently truncating the choice set.
 
@@ -176,6 +176,10 @@ a second decision request. It does not repeatedly type while a lookup is pending
 Option discovery closes its own popup and restores only its own uncommitted
 query. Applying the chosen option may reopen the widget and perform a second
 lookup; the option set must still match. A typed query alone is never success.
+After an option click, the recorder also waits up to 1.5 seconds for that exact
+popup to finish closing. A quiet DOM alone does not establish that a closing
+modal backdrop has released the next control. Stop and context changes interrupt
+this observation; unrelated overlays still block filling.
 
 Fields are applied sequentially with native setters and input/change events.
 The helper re-resolves a unique live control after framework remounts, waits for
@@ -183,6 +187,10 @@ DOM settling (up to 1.5 seconds), reads its value back, and checks earlier fills
 again at the end. Up to three passes cover newly revealed fields. A successful
 fill means the live control held the value at readback; it does not prove that
 the application accepted or persisted it.
+
+The recorder distinguishes its own synchronous input/click effects from human
+edits even when Chromium marks a generated radio change as trusted. Real operator
+input during a pending model request remains recorded and prevents overwriting.
 
 Readback records the intended/expected and observed values separately. A retained
 value with native or ARIA validation errors is reported as `validation error`,
@@ -254,6 +262,86 @@ The panel shows the active fill phase. Fill events include model decision
 provenance, fit/confidence, selected labels, batch sizes/timings, final readback,
 and observed skips. These describe assistance decisions, not extra business
 submissions. Stop cancels pending filling; late model replies cannot apply values.
+
+### Inspect, edit and enrich personas
+
+Version **0.1.8** adds a persona manager in the panel. Open a persona to inspect its
+portrait, description, editable facts, domains, preferences, circumstances and
+history records. Add fields or records, correct values and **Save changes**.
+Local checks show each pass, failure, uncertainty and preparation gap; **Validate
+with Jev** adds named semantic checks when configured. A passing check does not
+prove an identifier is issued, an address receives mail or an application accepts it.
+
+**New persona** creates an editable draft. **Create with agent** and **Enrich
+selected** send one request to the existing paired agent; select several personas
+for a batched enrichment. Provide the client's short application brief, market,
+intended actor and any newly discovered context. Forms need not be known upfront.
+The visible state distinguishes waiting, acknowledged, review, completed,
+cancelled and failed requests. The agent returns candidate personas; review the
+individual additions and conflicts, then **Apply reviewed changes**. Operator
+corrections stay selected only by explicit review. These actions do not navigate,
+submit, update application accounts or automatically run Fill all.
+
+Arm the current `assist.mjs watch` as described under Phone a friend. Persona work
+uses `persona-<uuid>.json` in the same assistance inbox, in both storage modes.
+The watcher returns the operation and request path. The agent acknowledges promptly:
+
+```sh
+node recorder/assist.mjs acknowledge /private/persona-request.json /private/browser/session.json
+node recorder/assist.mjs complete /private/persona-request.json /private/browser/session.json /private/candidates.json
+```
+
+The private response is `{ "personas": [ ... ] }` containing every requested
+persona. Existing contacts, identity, account bindings and credentials must be
+preserved. A new persona may supply a privately generated test password; enriching
+an existing persona cannot replace its password. Completion presents proposals
+for review. Cancellation or a changed source revision rejects a late response.
+Re-arm the watcher after handling a request; restart an old watcher after an
+extension/CLI update so it understands the installed packet schema.
+
+### Rich persona records and deductions
+
+Existing flat personas remain compatible. Additional optional fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `description` | Coherent context, motivations and qualifiers consistent with the facts. |
+| `referenceDate` | Date used for age and chronology checks, `YYYY-MM-DD`. |
+| `portrait` | Stable packaged or self-contained image, alternative text and generation metadata. |
+| `domains`, `preferences`, `circumstances` | Editable structured objects; arbitrary useful application fields are preserved. |
+| `histories` | Named arrays of distinct records with stable record IDs, such as education or employment. |
+| `provenance`, `overrides` | Sources by JSON-pointer path and authoritative operator corrections. |
+| `revision`, `revisions` | Current input revision and prior snapshots; edits preserve stable identity/account bindings. |
+| `deductions` | Accepted categorical answers with confidence, support, input revision and observed-control binding. |
+| `accountLinks` | Existing account references, preserved by ordinary edits and enrichment. |
+
+See the [substantive synthetic examples](examples/personas.json),
+[discovery guidance](skills/treadway-recorder/references/persona-discovery.md) and
+[optional pinned ingredient generator](tools/personas/README.md). The generator
+reuses Faker, DiceBear and existing cryptographic credential helpers; an agent
+still supplies coherent histories, narrative and relevant domain coverage.
+Country fields are independent: residence, citizenship, document issuer, visa and
+bank jurisdiction must not be collapsed into a single locale. Preserve generated
+results, seed, package versions and reference date rather than regenerating an
+existing identity while enriching it. Published examples use reserved contacts
+and sample identifiers; replace verification contacts with operator-confirmed
+routes before a real demonstration.
+
+When no explicit fact exists for a categorical control, Jev may choose among the
+observed options using redacted rich context. For example, current employment plus
+supplementary-work plans supports Retired=No; age alone does not. A work-from-home
+preference differs from actual availability. Each answer must meet the **0.51**
+Choice and independent **0.80** support gates. Explicit facts and manual overrides
+win. Credentials, contact values, account/document/payment identifiers and API
+keys are excluded from semantic context. No missing free text is generated.
+
+Accepted deductions persist with the persona and capture. Reuse requires the same
+input revision/signature, route, observed step/field context and option set;
+edits invalidate deductions. A lookup still needs a sourced query, and a generic
+history fact cannot be copied into several education rows. Distinct histories
+need explicit row-specific facts or operator/agent assistance. Existing human
+choices, consent and submissions remain operator-controlled. Changes wait for
+an active fill to finish; editing a persona does not edit an application's account.
 
 ## Live journal output
 
@@ -349,6 +437,10 @@ The export uses `format: "treadway-journey-events/2"`. Consumers must check this
 version; v1 lacked exact request joins and document provenance. The top level
 contains context fields, persona/reference metadata, start/stop timestamps,
 secret policy, revision, `networkCapture`, and an append-only `events` array.
+`personaRevisions` retains the redacted contextual inputs used by each captured
+fill; fill events retain accepted deductions and their source revision. Later
+persona edits do not rewrite this evidence. Use these bindings when converting
+the capture into an HTTP-first flow, preserving browser steps where required.
 
 Each event has a unique `eventId`, `stepId`, source timestamp `at` and background
 receipt timestamp `receivedAt`. Page observations include Chrome's actual
