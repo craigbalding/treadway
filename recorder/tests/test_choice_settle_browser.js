@@ -22,7 +22,7 @@ function App(){const [region,setRegion]=React.useState(''),[postcode,setPostcode
  h(TextField,{name:'postcode',label:'Postcode',value:postcode,onChange:e=>setPostcode(e.target.value),fullWidth:true}));}
 ReactDOM.createRoot(document.getElementById('root')).render(h(App));</script>`;
 
-test('a selected modal choice finishes closing before another control is filled', { skip: !available, timeout: 30000 }, async t => {
+test('a selected modal choice finishes closing before another control is filled', { skip: !available, timeout: 45000 }, async t => {
   const browser = await playwright.chromium.launch({ headless: true, chromiumSandbox: true,
     ...(process.env.RECORDER_CHROMIUM_BIN ? { executablePath: process.env.RECORDER_CHROMIUM_BIN } : {}) });
   t.after(() => browser.close());
@@ -73,5 +73,27 @@ test('a selected modal choice finishes closing before another control is filled'
     const report = await pending;
     assert.equal(report.interrupted, true);
     assert.equal(await page.locator('input[name="postcode"]').inputValue(), '');
+  });
+  await t.test('an unconfirmed close never restores over a possibly committed selection', async () => {
+    await page.goto('about:blank');
+    await page.setContent('<label>Institution<input name="institution" role="combobox" aria-controls="choices" aria-expanded="false"></label>' +
+      '<ul id="choices" role="listbox" style="display:none"><li role="option">Example Academy</li></ul>');
+    for (const file of ['fields.js', 'form-runtime.js', 'choice-binding.js', 'page-fill.js']) {
+      await page.addScriptTag({ path: path.join(repository, 'recorder/lib', file) });
+    }
+    await page.evaluate(() => {
+      const input = document.querySelector('input'), list = document.querySelector('ul');
+      const show = visible => { input.setAttribute('aria-expanded', String(visible)); list.style.display = visible ? 'block' : 'none'; };
+      input.addEventListener('input', () => show(Boolean(input.value)));
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') show(false); });
+      list.firstElementChild.addEventListener('click', () => { input.value = 'Example Academy'; window.selectionCommitted = true; });
+    });
+    const report = await page.evaluate(() => TreadwayPageFill.fillAll(document, {
+      values: { institution: { value: 'Example Academy', source: 'persona' } },
+    }));
+    assert.equal(report.filled.length, 0);
+    assert(report.manual.some(entry => entry.reason === 'choice popup did not close'));
+    assert.equal(await page.evaluate(() => window.selectionCommitted), true);
+    assert.equal(await page.locator('input').inputValue(), 'Example Academy');
   });
 });

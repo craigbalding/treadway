@@ -514,6 +514,7 @@
       return { binding: bindingFor(element), expected };
     }
     const current = await observeChoices(document, plan.binding, plan.value, signal, { retain: true });
+    let selectionAttempted = false;
     try {
       if (optionSet(current.options) !== optionSet(plan.observation.options)) throw new Error('options changed');
       const matches = current.options.filter(option => optionKey(option) === optionKey(chosen));
@@ -524,6 +525,7 @@
       const target = document.elementFromPoint(hit.x, hit.y)?.closest('[role="option"]');
       if (!target) throw new Error('field changed');
       const ownedList = listElement(document, current.context);
+      selectionAttempted = true;
       ownAction(target, () => target.click());
       await abortable(waitForSettle(document), signal);
       // A closing popup can stop mutating the DOM before its CSS exit
@@ -539,7 +541,9 @@
       }
       return { binding: plan.binding, expected: option.label };
     } catch (error) {
-      await closeChoices(document, plan.binding, current.query, signal, current.editEpoch);
+      // Once dispatched, the option may be committed even if closing cannot
+      // be confirmed. Search cleanup must not erase that selected value.
+      if (!selectionAttempted) await closeChoices(document, plan.binding, current.query, signal, current.editEpoch);
       throw error;
     }
   }
