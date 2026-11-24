@@ -75,10 +75,75 @@
     if (!value || typeof value !== 'object' || Array.isArray(value)) fail(where + ' must be an object');
     const result = {};
     for (const [key, entry] of Object.entries(value)) {
+      if (['__proto__', 'constructor', 'prototype'].includes(key)) fail(where + ' contains an unsafe key');
       if (typeof entry !== 'string' || entry === '') fail(where + '.' + key + ' must be a non-empty string');
       result[key] = entry;
     }
     return result;
+  }
+
+  function jsonData(value, where, depth = 0) {
+    if (depth > 14) fail(where + ' is too deeply nested');
+    if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return value;
+    if (typeof value === 'string') {
+      if (value.length > (where.endsWith('.portrait.src') ? 1500000 : 30000)) fail(where + ' is too long');
+      return value;
+    }
+    if (Array.isArray(value)) {
+      if (value.length > 500) fail(where + ' has too many entries');
+      return value.map((item, index) => jsonData(item, where + '[' + index + ']', depth + 1));
+    }
+    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) fail(where + ' must contain JSON data');
+    const result = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (['__proto__', 'constructor', 'prototype'].includes(key) || key.length > 160) fail(where + ' contains an unsafe key');
+      result[key] = jsonData(item, where + '.' + key, depth + 1);
+    }
+    return result;
+  }
+  function objectData(value, where) {
+    if (value === undefined) return {};
+    if (!value || typeof value !== 'object' || Array.isArray(value)) fail(where + ' must be an object');
+    return jsonData(value, where);
+  }
+  function safePortraitSource(source) {
+    if (/^assets\/personas\/[A-Za-z0-9_.-]+\.(?:svg|png|jpg|jpeg|webp)$/.test(source)) return true;
+    if (/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(source)) return true;
+    if (!/^data:image\/svg\+xml;base64,[A-Za-z0-9+/=]+$/.test(source)) return false;
+    let svg;
+    try { svg = new TextDecoder().decode(Uint8Array.from(atob(source.split(',')[1]), char => char.charCodeAt(0))); } catch (_) { return false; }
+    if (!/^\s*<svg[\s>]/i.test(svg) || /<!|<\?|\\|\b(?:style|xml:base)\s*=|\bon[a-z]+\s*=|url\((?!\s*['"]?#)/i.test(svg)) return false;
+    const allowed = new Set(['svg', 'path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline', 'line', 'g', 'defs', 'clippath', 'mask', 'lineargradient', 'radialgradient', 'stop', 'title', 'desc', 'metadata', 'use']);
+    const links = [...svg.matchAll(/\b(?:href|src)\s*=\s*("([^"]*)"|'([^']*)')/gi)];
+    if (links.some(match => !/^#[A-Za-z0-9_.:-]+$/.test(match[2] || match[3] || '')) || /\b(?:href|src)\s*=\s*[^\s"']/.test(svg)) return false;
+    return [...svg.matchAll(/<\/?([A-Za-z0-9:-]+)/g)].every(match => allowed.has(match[1].toLowerCase()));
+  }
+  function richFields(entry, where) {
+    const revision = entry.revision === undefined ? 1 : entry.revision;
+    if (!Number.isSafeInteger(revision) || revision < 1) fail(where + '.revision must be a positive integer');
+    const referenceDate = entry.referenceDate || '';
+    if (referenceDate && (!/^\d{4}-\d{2}-\d{2}$/.test(referenceDate) || !Number.isFinite(Date.parse(referenceDate + 'T00:00:00Z')) || new Date(referenceDate + 'T00:00:00Z').toISOString().slice(0, 10) !== referenceDate)) fail(where + '.referenceDate must be a valid YYYY-MM-DD date');
+    if (entry.description !== undefined && typeof entry.description !== 'string') fail(where + '.description must be a string');
+    const portrait = objectData(entry.portrait === null ? undefined : entry.portrait, where + '.portrait');
+    if (portrait.src !== undefined && (typeof portrait.src !== 'string' || !safePortraitSource(portrait.src))) fail(where + '.portrait.src must be a safe local image or packaged persona asset');
+    const histories = objectData(entry.histories, where + '.histories');
+    for (const [kind, records] of Object.entries(histories)) {
+      if (!Array.isArray(records)) fail(where + '.histories.' + kind + ' must be an array');
+      const ids = new Set();
+      records.forEach(record => {
+        if (!record || typeof record !== 'object' || Array.isArray(record) || typeof record.id !== 'string' || !SAFE_TOKEN.test(record.id) || ids.has(record.id)) fail(where + '.histories.' + kind + ' records need unique stable ids');
+        ids.add(record.id);
+      });
+    }
+    const overrides = entry.overrides === undefined ? [] : entry.overrides;
+    if (!Array.isArray(overrides) || overrides.some(path => typeof path !== 'string' || !/^\//.test(path))) fail(where + '.overrides must contain JSON pointer paths');
+    if (entry.revisions !== undefined && !Array.isArray(entry.revisions)) fail(where + '.revisions must be an array');
+    return { revision, referenceDate, description: entry.description || '', portrait,
+      domains: objectData(entry.domains, where + '.domains'), preferences: objectData(entry.preferences, where + '.preferences'),
+      circumstances: objectData(entry.circumstances, where + '.circumstances'), histories,
+      provenance: objectData(entry.provenance, where + '.provenance'), overrides: [...new Set(overrides)],
+      deductions: objectData(entry.deductions, where + '.deductions'), revisions: entry.revisions === undefined ? [] : jsonData(entry.revisions, where + '.revisions'),
+      generation: objectData(entry.generation, where + '.generation'), accountLinks: objectData(entry.accountLinks, where + '.accountLinks') };
   }
 
   // Accepts the text of personas.json and returns validated personas.
@@ -116,6 +181,7 @@
         credentials: readStringMap(entry.credentials, where + '.credentials'),
         generate: generate.slice(),
         secrets: readStringMap(entry.secrets, where + '.secrets'),
+        ...richFields(entry, where),
       };
     });
   }
@@ -170,7 +236,7 @@
 
   const api = {
     GENERATORS, SAFE_TOKEN, TEST_CARDS,
-    parsePersonas, personaValues, seededRandom, ppsnValid, ppsnCheckCharacter, luhnValid,
+    parsePersonas, personaValues, seededRandom, ppsnValid, ppsnCheckCharacter, luhnValid, jsonData, safePortraitSource,
   };
   root.TreadwayPersonas = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

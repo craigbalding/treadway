@@ -17,9 +17,9 @@
       schema: 'treadway.assistance/1', requestId: id, createdAt: new Date().toISOString(), extensionId, version,
       run: journey.contextFields.run, stepId: journey.currentStepId,
       target: { tabId: target.id, url: snapshot.url, documentInstanceId: snapshot.documentInstanceId },
-      persona: { id: persona.id, role: persona.role,
-        facts: Object.fromEntries(Object.entries(persona.facts || {}).filter(([key]) => !SECRET.test(key))),
-        credentialTypes: Object.keys(persona.credentials || {}) },
+      persona: (root.TreadwayPersonaWork || (typeof require === 'function' ? require('./persona-work.js') : null)).safePersona(persona),
+      personaRevision: persona.revision || 1,
+      inputSignature: (root.TreadwayPersonaManager || (typeof require === 'function' ? require('./persona-manager.js') : null)).inputSignature(persona),
       form: snapshot.fields,
       lastFill: last ? { filled: last.filled.map(safeEntry), manual: last.manual.map(safeEntry),
         classifyError: last.classifyError } : null,
@@ -31,7 +31,10 @@
       if (SECRET.test(key) || ['email', 'username'].includes(key)) throw new Error('Assistance cannot change identity or credentials');
       if (typeof value !== 'string' || !value.trim()) throw new Error('Assistance facts must be non-empty strings');
     }
-    return { ...persona, facts: { ...persona.facts, ...facts } };
+    const manager = root.TreadwayPersonaManager || (typeof require === 'function' ? require('./persona-manager.js') : null);
+    const proposal = manager.proposeEnrichment(persona, { facts }, { expectedRevision: manager.revisionOf(persona) });
+    if (proposal.conflicts.length) throw new Error('Assistance conflicts with existing persona facts; review changes in Manage personas');
+    return manager.applyEnrichment(persona, proposal, { expectedRevision: manager.revisionOf(persona) });
   }
   const api = { request, mergeFacts };
   root.TreadwayAssistance = api;

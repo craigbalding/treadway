@@ -15,10 +15,218 @@
         "region": "Dublin",
         "postcode": "D01 X2Y3",
         "country": "Ireland",
-        "username": "casey.submitter"
+        "username": "casey.submitter",
+        "display_name": "Casey Example",
+        "age": "38",
+        "gender": "Non-binary",
+        "eye_colour": "Brown",
+        "height_cm": "174",
+        "weight_kg": "72",
+        "retired": "No",
+        "right_to_work": "Yes",
+        "driving_licence": "Yes"
       },
-      "generate": ["ppsn", "test_card"],
-      "secrets": { "password": "CASEY_SUBMITTER_PASSWORD" }
+      "generate": [
+        "ppsn",
+        "test_card"
+      ],
+      "secrets": {
+        "password": "CASEY_SUBMITTER_PASSWORD"
+      },
+      "revision": 1,
+      "referenceDate": "2026-11-24",
+      "provenance": {},
+      "overrides": [],
+      "deductions": {},
+      "revisions": [],
+      "portrait": {
+        "src": "assets/personas/casey-submitter.svg",
+        "alt": "Distinctive illustrated portrait for Casey Example",
+        "generator": "DiceBear Lorelei",
+        "version": "core10.7.0/styles10.6.0",
+        "seed": "casey-submitter:casey-submitter",
+        "licence": "CC0-1.0"
+      },
+      "generation": {
+        "kind": "authored_synthetic_example",
+        "referenceDate": "2026-11-24",
+        "contactStatus": "Reserved example address; replace with an operator-confirmed deliverable contact before registration",
+        "externalValidation": "Sample identifiers and accounts have not been verified with issuers"
+      },
+      "description": "Casey Example is a 38-year-old academic who lives in Dublin and is currently employed by Example University on a continuing contract. Casey has taught computing since 2012, first as a teaching assistant and then as a lecturer, and is not retired. Their current duties include undergraduate programming modules, supervising final-year projects and coordinating assessment moderation. Casey wants supplementary examination and tutoring work during summer breaks rather than a replacement full-time job. They can undertake up to ten additional paid days each summer and one evening each week in term time. Casey needs at least two days working from home in any regular five-day arrangement because they share caring responsibilities for an older relative. They can attend planned local meetings on Tuesdays and Thursdays, prefer written instructions and email contact, and can travel up to 40 kilometres for occasional work. They have no current benefit claim. Their teaching qualification followed the computing degree; it did not precede it. Casey enjoys accessible teaching, practical electronics and walking. All names, employment and identity records here are fictional demonstration data.",
+      "preferences": {
+        "work": {
+          "desired_engagements": [
+            "summer_examining",
+            "evening_tutoring"
+          ],
+          "minimum_remote_days_per_week": 2,
+          "maximum_one_way_commute_km": 40,
+          "relocation": "No",
+          "instructions": "written"
+        },
+        "communication": {
+          "preferred_channel": "email",
+          "preferred_language": "English"
+        },
+        "learning": {
+          "interests": [
+            "accessible assessment design",
+            "practical electronics"
+          ]
+        }
+      },
+      "circumstances": {
+        "current_employment_status": "employed",
+        "retired": false,
+        "receives_benefits": false,
+        "caring_commitments": "Shares care of an older relative",
+        "term_time_extra_evenings_per_week": 1,
+        "summer_extra_work_days": 10,
+        "onsite_meeting_days": [
+          "Tuesday",
+          "Thursday"
+        ]
+      },
+      "domains": {
+        "identity": {
+          "citizenships": [
+            {
+              "id": "citizenship-ie",
+              "country": "IE"
+            }
+          ],
+          "passports": [
+            {
+              "id": "passport-ie",
+              "citizenshipId": "citizenship-ie",
+              "issuingCountry": "IE",
+              "number": "PA1234567",
+              "issueDate": "2019-06-01",
+              "expiryDate": "2029-06-01",
+              "fixtureStatus": "synthetic; issuer acceptance not verified"
+            }
+          ],
+          "immigration": {
+            "residenceCountry": "IE",
+            "status": "citizen_resident",
+            "workPermission": "Yes"
+          }
+        },
+        "banking": {
+          "accounts": [
+            {
+              "id": "account-ie",
+              "kind": "personal_current",
+              "country": "IE",
+              "iban": "IE29AIBK93115212345678",
+              "accountHolder": "Casey Example",
+              "fixtureStatus": "public checksum-valid example; ownership not verified"
+            }
+          ]
+        },
+        "recruitment": {
+          "specialisms": [
+            "Computer Science",
+            "Programming",
+            "Assessment moderation"
+          ],
+          "professional_registration": {
+            "scheme": "Example Teaching Register",
+            "status": "registered",
+            "number": "EX-TEACH-1001",
+            "renewalDate": "2027-08-31"
+          },
+          "references": [
+            {
+              "id": "reference-1",
+              "name": "Morgan Example",
+              "relationship": "Head of department",
+              "email": "morgan.reference@example.test",
+              "contactPermission": "Ask before contact"
+            }
+          ],
+          "languages": [
+            {
+              "language": "English",
+              "level": "Fluent"
+            },
+            {
+              "language": "Irish",
+              "level": "Conversational"
+            }
+          ]
+        }
+      },
+      "histories": {
+        "education": [
+          {
+            "id": "computing-degree",
+            "institution": "Example University",
+            "country": "IE",
+            "qualification": "Honours Bachelor of Science",
+            "subject": "Computer Science",
+            "level": "Level 8",
+            "grade": "Second Class Honours, Grade 1",
+            "startDate": "2006-09-01",
+            "endDate": "2010-06-30",
+            "awardDate": "2010-07-15"
+          },
+          {
+            "id": "teaching-diploma",
+            "institution": "Example Education College",
+            "country": "IE",
+            "qualification": "Postgraduate Diploma in Education",
+            "subject": "Higher Education Teaching",
+            "startDate": "2011-09-01",
+            "endDate": "2012-06-30",
+            "awardDate": "2012-07-10"
+          }
+        ],
+        "employment": [
+          {
+            "id": "teaching-assistant",
+            "employer": "Example University",
+            "role": "Teaching Assistant",
+            "startDate": "2012-09-01",
+            "endDate": "2016-08-31",
+            "hoursPerWeek": 20,
+            "responsibilities": [
+              "Led programming laboratories",
+              "Supported student projects"
+            ],
+            "achievements": [
+              "Introduced accessible laboratory worksheets"
+            ]
+          },
+          {
+            "id": "lecturer",
+            "employer": "Example University",
+            "role": "Lecturer in Computing",
+            "startDate": "2016-09-01",
+            "current": true,
+            "hoursPerWeek": 35,
+            "responsibilities": [
+              "Coordinate undergraduate programming modules",
+              "Supervise final-year projects",
+              "Moderate assessments"
+            ],
+            "achievements": [
+              "Led assessment redesign across three modules",
+              "Mentored new teaching staff"
+            ]
+          }
+        ],
+        "residence": [
+          {
+            "id": "dublin-home",
+            "country": "IE",
+            "city": "Dublin",
+            "startDate": "2012-08-01",
+            "current": true
+          }
+        ]
+      }
     },
     {
       "id": "sam-approver",
@@ -29,10 +237,450 @@
         "family_name": "Sample",
         "email": "sam.approver@example.test",
         "date_of_birth": "1979-11-30",
-        "username": "sam.approver"
+        "username": "sam.approver",
+        "display_name": "Sam Sample",
+        "age": "46",
+        "gender": "Man",
+        "eye_colour": "Blue",
+        "height_cm": "181",
+        "weight_kg": "83",
+        "phone": "+44 7700 900111",
+        "address_line1": "12 Example Road",
+        "city": "Cambridge",
+        "region": "Cambridgeshire",
+        "postcode": "CB2 1TN",
+        "country": "United Kingdom",
+        "retired": "Yes",
+        "right_to_work": "Yes"
       },
-      "generate": ["ppsn"],
-      "secrets": { "password": "SAM_APPROVER_PASSWORD", "one_time_code": "SAM_APPROVER_TOTP" }
+      "generate": [
+        "ppsn"
+      ],
+      "secrets": {
+        "password": "SAM_APPROVER_PASSWORD",
+        "one_time_code": "SAM_APPROVER_TOTP"
+      },
+      "revision": 1,
+      "referenceDate": "2026-11-24",
+      "provenance": {},
+      "overrides": [],
+      "deductions": {},
+      "revisions": [],
+      "portrait": {
+        "src": "assets/personas/sam-approver.svg",
+        "alt": "Distinctive illustrated portrait for Sam Sample",
+        "generator": "DiceBear Lorelei",
+        "version": "core10.7.0/styles10.6.0",
+        "seed": "sam-approver:sam-approver",
+        "licence": "CC0-1.0"
+      },
+      "generation": {
+        "kind": "authored_synthetic_example",
+        "referenceDate": "2026-11-24",
+        "contactStatus": "Reserved example address; replace with an operator-confirmed deliverable contact before registration",
+        "externalValidation": "Sample identifiers and accounts have not been verified with issuers"
+      },
+      "description": "Sam Sample is a 46-year-old former university administrator now resident in Cambridge. Sam took early retirement from a continuing university post in May 2024 after twenty years in administration and governance. Sam funds this early retirement from accumulated savings and has not started drawing their occupational pension. They still describe their status as retired. Occasional paid consultancy and expense approval work supplements those savings; it does not mean they have returned to regular employment. Sam has Irish and British citizenship, retains their Irish national identifier from earlier work, and holds an Irish passport while living in the United Kingdom. They can accept no more than six consultancy days per month and prefer short, clearly defined remote assignments. They can attend an on-site meeting with a week of notice, avoid overnight travel, and volunteer at a community history group on Wednesdays. Their main interests are governance, financial controls and mentoring administrators. Sam prefers telephone contact for urgent issues and written follow-up for decisions. They have no employment-seeking benefit claim. These are fictional circumstances for demonstrating how retirement, residence and occasional work can coexist.",
+      "preferences": {
+        "work": {
+          "maximum_consultancy_days_per_month": 6,
+          "preferred_location": "remote",
+          "overnight_travel": "No",
+          "onsite_notice_days": 7
+        },
+        "communication": {
+          "urgent_channel": "telephone",
+          "decisions": "written_follow_up"
+        },
+        "activities": {
+          "volunteering_day": "Wednesday",
+          "interests": [
+            "local history",
+            "governance",
+            "mentoring"
+          ]
+        }
+      },
+      "circumstances": {
+        "retired": true,
+        "current_employment_status": "retired_with_occasional_consultancy",
+        "receives_occupational_pension": false,
+        "receives_jobseeking_benefits": false,
+        "volunteers_weekly": true,
+        "retirement_funding": "personal_savings"
+      },
+      "domains": {
+        "identity": {
+          "citizenships": [
+            {
+              "id": "citizenship-ie",
+              "country": "IE"
+            },
+            {
+              "id": "citizenship-gb",
+              "country": "GB"
+            }
+          ],
+          "passports": [
+            {
+              "id": "passport-ie",
+              "citizenshipId": "citizenship-ie",
+              "issuingCountry": "IE",
+              "number": "PB7654321",
+              "issueDate": "2021-02-01",
+              "expiryDate": "2031-02-01",
+              "fixtureStatus": "synthetic; issuer acceptance not verified"
+            }
+          ],
+          "nationalIds": [
+            {
+              "id": "nino-gb",
+              "country": "GB",
+              "scheme": "NINO",
+              "number": "AB123456C",
+              "fixtureStatus": "synthetic format example"
+            }
+          ],
+          "immigration": {
+            "residenceCountry": "GB",
+            "status": "citizen_resident",
+            "workPermission": "Yes"
+          }
+        },
+        "banking": {
+          "accounts": [
+            {
+              "id": "account-gb",
+              "country": "GB",
+              "kind": "personal_current",
+              "iban": "GB82WEST12345698765432",
+              "accountHolder": "Sam Sample",
+              "fixtureStatus": "public checksum-valid example; ownership not verified"
+            }
+          ]
+        },
+        "consulting": {
+          "specialisms": [
+            "governance",
+            "expense approval",
+            "financial controls"
+          ],
+          "professional_memberships": [
+            {
+              "id": "membership-1",
+              "organisation": "Example Governance Association",
+              "status": "active",
+              "joinedYear": 2014
+            }
+          ]
+        }
+      },
+      "histories": {
+        "education": [
+          {
+            "id": "business-degree",
+            "institution": "Example Metropolitan College",
+            "country": "IE",
+            "qualification": "Bachelor of Business Studies",
+            "subject": "Business Administration",
+            "grade": "Upper Second",
+            "startDate": "1998-09-01",
+            "endDate": "2002-06-30",
+            "awardDate": "2002-07-01"
+          },
+          {
+            "id": "governance-certificate",
+            "institution": "Example Governance Institute",
+            "country": "GB",
+            "qualification": "Certificate in Institutional Governance",
+            "startDate": "2013-09-01",
+            "endDate": "2014-06-30",
+            "awardDate": "2014-07-01"
+          }
+        ],
+        "employment": [
+          {
+            "id": "administrator",
+            "employer": "Example University",
+            "role": "University Administrator",
+            "startDate": "2004-01-01",
+            "endDate": "2016-12-31",
+            "responsibilities": [
+              "Coordinate departmental operations",
+              "Prepare expenditure reports"
+            ]
+          },
+          {
+            "id": "governance-manager",
+            "employer": "Example University",
+            "role": "Governance Manager",
+            "startDate": "2017-01-01",
+            "endDate": "2024-05-31",
+            "responsibilities": [
+              "Oversee expense approvals",
+              "Advise committees"
+            ],
+            "reasonForLeaving": "Early retirement"
+          },
+          {
+            "id": "consultant",
+            "employer": "Self-employed",
+            "role": "Occasional Governance Consultant",
+            "startDate": "2024-07-01",
+            "current": true,
+            "maximumDaysPerMonth": 6
+          }
+        ],
+        "residence": [
+          {
+            "id": "ireland-home",
+            "country": "IE",
+            "city": "Dublin",
+            "startDate": "2002-07-01",
+            "endDate": "2018-08-31"
+          },
+          {
+            "id": "uk-home",
+            "country": "GB",
+            "city": "Cambridge",
+            "startDate": "2018-09-01",
+            "current": true
+          }
+        ]
+      }
+    },
+    {
+      "id": "alex-applicant",
+      "role": "applicant",
+      "label": "Alex Example",
+      "seed": "alex-applicant",
+      "revision": 1,
+      "referenceDate": "2026-11-24",
+      "facts": {
+        "given_name": "Alex",
+        "family_name": "Example",
+        "full_name": "Alex Example",
+        "display_name": "Alex Example",
+        "email": "alex.applicant@example.test",
+        "username": "alex.applicant@example.test",
+        "date_of_birth": "1997-06-08",
+        "age": "29",
+        "gender": "Woman",
+        "eye_colour": "Green",
+        "height_cm": "168",
+        "weight_kg": "64",
+        "address_line1": "5 Example Lane",
+        "city": "Cambridge",
+        "region": "Cambridgeshire",
+        "postcode": "CB2 1TN",
+        "country": "United Kingdom",
+        "retired": "No",
+        "right_to_work": "Yes"
+      },
+      "generate": [],
+      "credentials": {},
+      "secrets": {
+        "password": "ALEX_APPLICANT_PASSWORD"
+      },
+      "portrait": {
+        "src": "assets/personas/alex-applicant.svg",
+        "alt": "Illustrated portrait for Alex Example",
+        "generator": "DiceBear Lorelei",
+        "version": "core10.7.0/styles10.6.0",
+        "seed": "alex-applicant:alex-applicant",
+        "licence": "CC0-1.0"
+      },
+      "description": "Alex Example is a 29-year-old researcher and occasional tutor living in Cambridge after moving from Germany for postgraduate study. Alex has German citizenship and keeps a German personal bank account while resident in the United Kingdom. Their test profile explicitly records settled status and current permission to work; these fictional grants are not established merely by nationality or residence. Alex is not retired and currently works as a research associate. They studied mathematics before completing a statistics masters, and have concrete experience in numerical modelling, supporting undergraduate laboratories and explaining statistical results to non-specialists. Alex seeks a stable role combining research and teaching. They require at least two remote days in a normal five-day working week, can travel up to 30 kilometres on the other days, and are available from January 2027 after completing a funded project. They prefer clear written requirements and would accept a part-time appointment of at least three days per week. Alex lives with a partner and a five-year-old child, receives Child Benefit in this fictional scenario, and collects the child from school on Thursdays. These caring commitments help explain the preference for a predictable hybrid arrangement. These facts are explicit scenario data, not deductions from age, nationality or occupation.",
+      "preferences": {
+        "work": {
+          "minimum_remote_days_per_week": 2,
+          "minimum_days_per_week": 3,
+          "maximum_commute_km": 30,
+          "desired_roles": [
+            "research",
+            "teaching"
+          ],
+          "relocation": "No"
+        },
+        "communication": {
+          "preferred_channel": "email",
+          "requirements": "written"
+        },
+        "learning": {
+          "interests": [
+            "statistical education",
+            "open research"
+          ]
+        }
+      },
+      "circumstances": {
+        "retired": false,
+        "current_employment_status": "employed",
+        "availableFrom": "2027-01-01",
+        "receives_benefits": true,
+        "benefit_type": "Child Benefit",
+        "dependants": 1,
+        "school_collection_day": "Thursday"
+      },
+      "domains": {
+        "identity": {
+          "citizenships": [
+            {
+              "id": "citizenship-de",
+              "country": "DE"
+            }
+          ],
+          "passports": [
+            {
+              "id": "passport-de",
+              "issuingCountry": "DE",
+              "citizenshipId": "citizenship-de",
+              "number": "C12345678",
+              "issueDate": "2021-07-01",
+              "expiryDate": "2031-07-01",
+              "fixtureStatus": "synthetic; issuer acceptance not verified"
+            }
+          ],
+          "immigration": {
+            "residenceCountry": "GB",
+            "status": "settled",
+            "workPermission": "Yes",
+            "grantDate": "2025-02-01",
+            "validity": "indefinite",
+            "visa_required": false,
+            "basis": "Explicit fictional scenario grant; not inferred from nationality or residence",
+            "externalVerification": "Not verified with an immigration service"
+          },
+          "nationalIds": [
+            {
+              "id": "nino-gb",
+              "scheme": "NINO",
+              "country": "GB",
+              "number": "CE234567D",
+              "fixtureStatus": "synthetic format example"
+            }
+          ]
+        },
+        "banking": {
+          "accounts": [
+            {
+              "id": "account-de",
+              "country": "DE",
+              "iban": "DE89370400440532013000",
+              "accountHolder": "Alex Example",
+              "fixtureStatus": "public checksum-valid example; ownership not verified"
+            }
+          ]
+        },
+        "recruitment": {
+          "specialisms": [
+            "Mathematics",
+            "Statistics",
+            "Numerical modelling"
+          ],
+          "professional_registration": {
+            "status": "not_registered",
+            "has_registration_number": false
+          },
+          "languages": [
+            {
+              "language": "German",
+              "level": "Native"
+            },
+            {
+              "language": "English",
+              "level": "Fluent"
+            }
+          ],
+          "references": [
+            {
+              "id": "reference-1",
+              "name": "Taylor Example",
+              "relationship": "Project supervisor",
+              "email": "taylor.reference@example.test"
+            }
+          ]
+        }
+      },
+      "histories": {
+        "education": [
+          {
+            "id": "maths-bachelor",
+            "institution": "Example Institute of Mathematics",
+            "country": "DE",
+            "qualification": "Bachelor of Science",
+            "subject": "Mathematics",
+            "startDate": "2015-10-01",
+            "endDate": "2018-07-31",
+            "awardDate": "2018-09-01",
+            "grade": "Very good"
+          },
+          {
+            "id": "statistics-master",
+            "institution": "Example University",
+            "country": "GB",
+            "qualification": "Master of Science",
+            "subject": "Statistics",
+            "startDate": "2019-09-01",
+            "endDate": "2021-06-30",
+            "awardDate": "2021-07-15",
+            "grade": "Distinction"
+          }
+        ],
+        "employment": [
+          {
+            "id": "research-assistant",
+            "employer": "Example Research Institute",
+            "role": "Research Assistant",
+            "startDate": "2021-09-01",
+            "endDate": "2024-08-31",
+            "responsibilities": [
+              "Develop numerical models",
+              "Support undergraduate laboratories"
+            ]
+          },
+          {
+            "id": "research-associate",
+            "employer": "Example University",
+            "role": "Research Associate",
+            "startDate": "2024-09-01",
+            "current": true,
+            "projectEndDate": "2026-12-31",
+            "responsibilities": [
+              "Analyse research data",
+              "Mentor project students"
+            ],
+            "achievements": [
+              "Delivered reproducible analysis training to two project teams"
+            ]
+          }
+        ],
+        "residence": [
+          {
+            "id": "germany-home",
+            "country": "DE",
+            "city": "Leipzig",
+            "startDate": "2015-10-01",
+            "endDate": "2019-08-31"
+          },
+          {
+            "id": "uk-home",
+            "country": "GB",
+            "city": "Cambridge",
+            "startDate": "2019-09-01",
+            "current": true
+          }
+        ]
+      },
+      "provenance": {},
+      "overrides": [],
+      "deductions": {},
+      "revisions": [],
+      "generation": {
+        "kind": "authored_synthetic_example",
+        "referenceDate": "2026-11-24",
+        "contactStatus": "Reserved example address; replace with an operator-confirmed deliverable contact before registration"
+      }
     }
   ]
 }

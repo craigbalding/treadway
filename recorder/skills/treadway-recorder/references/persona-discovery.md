@@ -40,6 +40,12 @@ references. For insurance, choose the relevant product's financial, health,
 property, vehicle or claims history. These are coverage examples, not fixed
 requirements for every application.
 
+Keep directly fillable, unambiguous values in the flat `facts` map as well as
+related contextual records. Extra fact keys are available to field classification.
+Do not flatten several histories into one institution/qualification value; use
+explicit row-specific fact keys when the intended record is known. Structured
+context supports categorical deductions, not generation of missing search text.
+
 Concrete histories have distinct records: an education record carries its own
 institution, subject, qualification, grade and dates; an employment record has
 employer, role, responsibilities, achievements and dates. Explain motivations,
@@ -78,13 +84,20 @@ a failed check. The preparing agent resolves real contradictions upfront.
 Overlapping study and employment or retirement with occasional work need not be
 contradictions. Treat deliberate negative-test circumstances explicitly.
 
-Use the installed recorder's parser to validate actual fill data. Recorder
-0.1.6 accepts string facts, credentials, generator names and secret references;
-it does not preserve a narrative, portrait or structured histories through its
-persona parser, and it has no profile-to-answer inference fallback. Preserve a
-rich dossier privately alongside the compatible fill data until runtime support
-exists. Do not claim that adding unsupported JSON properties makes them available
-to Jev, the extension or the capture. Keep references between dossier and persona.
+Use the installed recorder's parser and persona manager preflight to validate
+actual fill data. Recorder 0.1.8 preserves the rich description, portrait,
+structured domains/histories/preferences and revision metadata, and provides
+profile-to-option deduction for missing categorical facts. Older versions such as
+0.1.6 require a private dossier beside compatible flat fill data; unsupported
+JSON properties do not make context available to those runtimes.
+
+For a new identity, the optional `recorder/tools/personas` Node tool reuses pinned
+Faker ingredients, DiceBear portraits and existing Treadway helpers. Read its
+README and run its checks before use. It supplies ingredients, not a finished
+persona: complete the relevant histories, preferences and coherent narrative.
+Use cryptographic test credentials, not seeded Faker passwords. Save the private
+candidate and generated portrait; preserve them during later enrichment. Never
+invent a supposedly deliverable contact to satisfy a draft gap.
 
 Readiness is a usable persona with relevant domain coverage and disclosed gaps,
 not merely valid JSON or a large field count. Confirm deliverable contacts under
@@ -108,9 +121,21 @@ stored account. Reconcile that separately; do not silently mutate the account or
 rewrite earlier captures. Apply persona changes at an appropriate boundary rather
 than changing facts underneath an active fill.
 
-The planned persona manager should make this visible through Create, Inspect,
-Edit and Enrich actions, including enrichment of several selected personas. The
-operator must be able to add/correct facts, histories and narrative, see the
-portrait and validation gaps, and review proposed changes. A JSON textarea alone
-does not satisfy that interface. These controls are requirements for future
-runtime work, not capabilities shipped by this skill update.
+In 0.1.8 the panel's persona manager exposes New persona, Create with agent,
+inspection/editing and Enrich selected. Agent creation/enrichment uses the same
+assistance inbox and owned-panel completion transport as Phone a friend. Arm the
+current watcher, acknowledge the request promptly, return every requested
+persona through `assist.mjs complete`, and let the operator review proposed
+additions/conflicts. The request contains its original revision/signature;
+late, cancelled or stale replies cannot overwrite later edits. A completed
+proposal does not run Fill all, navigate or submit. Ordinary current-form
+assistance still completes through the extension's shared Fill all path.
+
+Use the local and optional named Jev checks before presenting a candidate as
+ready. Expose failures and uncertainties individually and repair contradictions
+upfront. During filling, Jev may deduce missing categorical answers only from
+relevant redacted context plus observed options, with independent choice/support
+gates. Explicit facts win; missing evidence stays a gap. Check qualifications
+and repeated histories by record, rather than applying one generic institution
+or degree fact to all rows. Preserve cached deduction revision/control context
+and the capture's historical inputs for later flow authoring.

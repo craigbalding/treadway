@@ -37,7 +37,7 @@
     if (started) record({ type: 'page', title: document.title });
   }
   document.addEventListener('click', (event) => {
-    if (!event.isTrusted || !(event.target instanceof Element)) return;
+    if (!event.isTrusted || PageFill.isOwnAction(event) || !(event.target instanceof Element)) return;
     const target = PageFill.actionTarget(event.target);
     record({ type: 'click', selectors: PageFill.selectorsFor(target), tag: target.localName });
   }, true);
@@ -48,7 +48,7 @@
   }, true);
   function fieldChanged(event) {
     const element = event.target;
-    if (!event.isTrusted || !(element instanceof Element) || !/^(input|select|textarea)$/.test(element.localName)) return;
+    if (!event.isTrusted || PageFill.isOwnAction(event) || !(element instanceof Element) || !/^(input|select|textarea)$/.test(element.localName)) return;
     PageFill.noteHumanEdit(element);
     const field = PageFill.describeField(element);
     const rule = Fields.ruleType(field);
@@ -112,13 +112,14 @@
       if (!recording) { reply({ error: 'Recording is not active' }); return false; }
       if (activeFill) { reply({ error: 'A fill is already running' }); return false; }
       fillController = new AbortController();
-      const classify = (fields) => send({ kind: 'classify', fields }).then((answer) => answer.types || {});
-      const decide = (jobs) => send({ kind: 'decide', jobs }).then((answer) => answer.decisions || {});
+      const classify = (fields) => send({ kind: 'classify', fields, fillToken: message.fillToken }).then((answer) => answer.types || {});
+      const decide = (jobs) => send({ kind: 'decide', jobs, fillToken: message.fillToken }).then((answer) => answer.decisions || {});
       const progress = (phase, count) => send({ kind: 'fill-progress', phase, count }).catch(() => undefined);
-      activeFill = PageFill.fillAll(document, { values: message.values, classify, decide, progress, signal: fillController.signal })
+      activeFill = PageFill.fillAll(document, { values: message.values, profile: message.profile, classify, decide, progress, signal: fillController.signal })
         .then(async (report) => {
           await record({ type: 'fill', filled: report.filled, manual: report.manual,
             decisions: report.decisions, batches: report.batches, skipped: report.skipped,
+            deductions: report.deductions, personaRevision: message.profile?.revision,
             interrupted: Boolean(report.interrupted), classifyError: report.classifyError, decisionError: report.decisionError }, true);
           reply({ report, url: location.href });
         })

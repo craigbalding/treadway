@@ -1,5 +1,5 @@
 // Owns the recording journal and passive request/flow-store references.
-importScripts('lib/fields.js', 'lib/jev.js', 'lib/test-context.js', 'lib/network.js', 'lib/personas.js', 'lib/credentials.js', 'lib/assistance.js', 'lib/journal-stream.js');
+importScripts('lib/fields.js', 'lib/personas.js', 'lib/persona-manager.js', 'lib/persona-work.js', 'lib/jev.js', 'lib/test-context.js', 'lib/network.js', 'lib/credentials.js', 'lib/assistance.js', 'lib/journal-stream.js');
 const Context = globalThis.TreadwayTestContext;
 const Jev = globalThis.TreadwayJev;
 const Fields = globalThis.TreadwayFields;
@@ -10,6 +10,37 @@ const DEFAULT_SETTINGS = { safeyoloKey: '', jevKey: '', ttlMinutes: 20, recordSe
 // may be recorded while an API call runs, but Start/Stop/Renew cannot interleave.
 let journalQueue = Promise.resolve();
 let transitionQueue = Promise.resolve();
+let fillInProgress = null;
+let personaEditLease = null;
+let personaWorkQueue = Promise.resolve();
+function personaWorkTransition(action) {
+  const next = personaWorkQueue.then(action); personaWorkQueue = next.catch(() => undefined); return next;
+}
+function assertNoPersonaEdit() {
+  if (personaEditLease && personaEditLease.expiresAt > Date.now()) throw new Error('Finish the persona edit before filling');
+  personaEditLease = null;
+}
+async function personaWorkCheck(requestId) {
+  const { pendingPersonaWork: request } = await chrome.storage.local.get('pendingPersonaWork');
+  if (!request || request.requestId !== requestId || TreadwayPersonaWork.terminal(request)) throw new Error('Persona request is cancelled, completed or no longer current');
+  return request;
+}
+function workState(requestId, status, extra = {}) {
+  return personaWorkTransition(async () => {
+    const request = await personaWorkCheck(requestId);
+    const allowed = { queued: ['accepted', 'proposed', 'cancelled', 'failed'],
+      accepted: ['accepted', 'proposed', 'cancelled', 'failed'], proposed: ['proposed', 'completed', 'cancelled', 'failed'] };
+    if (!allowed[request.status]?.includes(status)) throw new Error('Persona work transition is no longer valid');
+    const next = { ...request, ...extra, status, updatedAt: new Date().toISOString() };
+    await chrome.storage.local.set({ pendingPersonaWork: next }); notifyPanel({ refreshPersonaWork: true }); return { request: next };
+  });
+}
+function assertNoConfiguredKeys(value, settings) {
+  const keys = [settings.safeyoloKey, settings.jevKey].filter(Boolean);
+  const contains = item => typeof item === 'string' ? keys.some(key => item.includes(key)) :
+    item && typeof item === 'object' && Object.entries(item).some(([key, child]) => contains(key) || contains(child));
+  if (contains(value)) throw new Error('Persona context contains a configured API credential; remove it before using the recorder');
+}
 function transition(operation) {
   const next = transitionQueue.then(operation);
   transitionQueue = next.catch(() => undefined);
@@ -105,8 +136,10 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => 
 
 function startJourney({ persona, journeyName }) {
   return transition(async () => {
+    persona = TreadwayPersonas.parsePersonas(JSON.stringify({ personas: [persona] }))[0];
     const settings = await readSettings();
     if (!settings.safeyoloKey) throw new Error('Add the SafeYOLO agent API key in Settings first');
+    assertNoConfiguredKeys(persona, settings);
     // This check and the declaration are covered by the SAME transition lock.
     const before = await chrome.storage.session.get(['journey', 'finished']);
     if (before.journey) throw new Error('Stop the current journey first');
@@ -116,7 +149,10 @@ function startJourney({ persona, journeyName }) {
     const context = Context.buildContext({ agent: current.agent, persona, journey: journeyName, startedAt });
     const journey = {
       journey: journeyName, context: context.header, contextFields: context.fields,
-      persona: { id: persona.id, role: persona.role, label: persona.label, secrets: persona.secrets },
+      persona: { id: persona.id, role: persona.role, label: persona.label, secrets: persona.secrets,
+        revision: TreadwayPersonaManager.revisionOf(persona) },
+      personaRevisions: [{ revision: TreadwayPersonaManager.revisionOf(persona),
+        inputSignature: TreadwayPersonaManager.inputSignature(persona), profile: TreadwayPersonaManager.semanticContext(persona) }],
       startedAt: startedAt.toISOString(), contextStatus: 'declaring', currentStepId: 'step-0',
       nextStep: 0, revision: 0, recordSecrets: settings.recordSecrets, events: [],
     };
@@ -337,6 +373,7 @@ async function classifyFields(fields) {
   if (!journey || journey.contextStatus !== 'active') return {};
   const settings = await readSettings();
   if (!settings.jevKey) return {};
+  assertNoConfiguredKeys(fields, settings);
   const stored = await chrome.storage.session.get(['personaFieldTypes', 'personaFieldSources']);
   const choices = {};
   for (const type of [...(stored.personaFieldTypes || Object.keys(Fields.FIELD_TYPES)), ...Fields.SECRET_TYPES]) {
@@ -346,14 +383,24 @@ async function classifyFields(fields) {
   return Jev.classifyWithJev({ apiKey: settings.jevKey, fields, choices, fetch });
 }
 async function fillActiveTab({ values, persona, assistanceId }) {
+  if (fillInProgress) throw new Error('A fill is already running');
+  assertNoPersonaEdit();
+  const fill = { token: crypto.randomUUID() }; fillInProgress = fill;
+  try { return await performFillActiveTab({ values, persona, assistanceId }, fill); }
+  finally { if (fillInProgress === fill) fillInProgress = null; }
+}
+async function performFillActiveTab({ values, persona, assistanceId }, fill) {
   if (assistanceId) await checkAssistance(assistanceId);
   const journey = (await chrome.storage.session.get('journey')).journey;
   if (!journey || journey.contextStatus !== 'active') throw new Error('Start a journey before filling');
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) throw new Error('No active tab');
+  Object.assign(fill, { tabId: tab.id, run: journey.contextFields.run });
   let prepared = null;
+  const settings = await readSettings();
   if (persona) {
     persona = TreadwayPersonas.parsePersonas(JSON.stringify({ personas: [persona] }))[0];
+    assertNoConfiguredKeys(persona, settings);
     if (persona.id !== journey.persona.id || persona.role !== journey.persona.role) throw new Error('Fill persona does not match this journey');
     const needs = await pageRead(tab.id, 'inspect-fill');
     if (!needs) throw new Error('The page did not answer the fill inspection');
@@ -361,11 +408,22 @@ async function fillActiveTab({ values, persona, assistanceId }) {
       read: async () => (await chrome.storage.local.get('personaCredentials')).personaCredentials,
       write: async all => chrome.storage.local.set({ personaCredentials: all }),
     });
+    assertNoConfiguredKeys(prepared.persona, settings);
     values = TreadwayPersonas.personaValues(prepared.persona);
+    assertNoConfiguredKeys(values, settings);
+    Object.assign(fill, { profile: TreadwayPersonaManager.semanticContext(prepared.persona),
+      personaRevision: TreadwayPersonaManager.revisionOf(prepared.persona) });
     await updateJourneys(state => {
       const current = state.journey;
       if (!current || current.contextFields.run !== journey.contextFields.run) return;
       const changed = Object.entries(prepared.persona.secrets).some(([key, value]) => current.persona.secrets[key] !== value);
+      const signature = TreadwayPersonaManager.inputSignature(prepared.persona);
+      current.personaRevisions ||= [];
+      if (!current.personaRevisions.some(item => item.revision === fill.personaRevision && item.inputSignature === signature)) {
+        current.personaRevisions.push({ revision: fill.personaRevision, inputSignature: signature, profile: fill.profile });
+        appendEvent(current, { type: 'persona_revision', personaId: persona.id, personaRevision: fill.personaRevision, inputSignature: signature });
+      }
+      current.persona.revision = fill.personaRevision;
       if (prepared.generated || changed) {
         current.persona.secrets = Object.assign({}, current.persona.secrets, prepared.persona.secrets);
         appendEvent(current, { type: 'credential_prepared', source: 'extension', generated: prepared.generated,
@@ -377,12 +435,19 @@ async function fillActiveTab({ values, persona, assistanceId }) {
       throw new Error('Recording stopped before filling');
     }
   }
+  assertNoConfiguredKeys(values, settings);
   await chrome.storage.session.set({ personaFieldTypes: Object.keys(values), personaFieldSources:
     Object.fromEntries(Object.entries(values).map(([type, entry]) => [type, { derivedFrom: entry.derivedFrom || null }])) });
   if (assistanceId) await checkAssistance(assistanceId);
-  const answer = await chrome.tabs.sendMessage(tab.id, { kind: 'fill', values }, { frameId: 0 });
+  const answer = await chrome.tabs.sendMessage(tab.id, { kind: 'fill', values, fillToken: fill.token,
+    ...(prepared ? { profile: { context: fill.profile, revision: fill.personaRevision,
+      deductions: TreadwayPersonaManager.usableDeductions(prepared.persona) } } : {}) }, { frameId: 0 });
   if (!answer) throw new Error('The page did not answer; reload it so the recorder can attach');
   if (answer.error) throw new Error(answer.error);
+  const current = (await chrome.storage.session.get('journey')).journey;
+  if (prepared && !answer.report.interrupted && current?.contextFields.run === fill.run && current.contextStatus === 'active') {
+    prepared.persona = TreadwayPersonaManager.recordDeductions(prepared.persona, answer.report.deductions || [], { expectedRevision: fill.personaRevision });
+  }
   // The content script journals the result with Chrome's actual sender frame
   // and document identity BEFORE it answers, including partial/error reports.
   return Object.assign({}, answer.report, prepared ? { preparedPersona: prepared.persona, generatedPassword: prepared.generated } : {});
@@ -465,7 +530,7 @@ const handlers = {
     const state = await chrome.storage.session.get(['journey', 'finished', 'requests', 'liveStream']);
     state.requests = state.requests || {};
     const journey = state.journey || state.finished;
-    return { journey: forExport(state, state.journey), finished: forExport(state, state.finished), liveStream: state.liveStream || null,
+    return { journey: forExport(state, state.journey), finished: forExport(state, state.finished), liveStream: state.liveStream || null, fillBusy: Boolean(fillInProgress),
       pendingRequests: journey ? pendingRequests(state, journey.contextFields.run).length : 0 };
   },
   start: (message) => startJourney(message),
@@ -487,6 +552,41 @@ const handlers = {
     });
   },
   fill: (message) => fillActiveTab(message),
+  'persona-edit-begin': () => {
+    if (fillInProgress) throw new Error('Wait for Fill all to finish before changing personas');
+    assertNoPersonaEdit();
+    personaEditLease = { token: crypto.randomUUID(), expiresAt: Date.now() + 300000 };
+    return { token: personaEditLease.token };
+  },
+  'persona-edit-end': ({ token }) => {
+    if (personaEditLease?.token !== token) throw new Error('Persona edit lease changed');
+    personaEditLease = null; return { ok: true };
+  },
+  'persona-work-request': message => personaWorkTransition(async () => {
+    if (fillInProgress) throw new Error('Wait for Fill all before requesting persona work');
+    const { pendingPersonaWork } = await chrome.storage.local.get('pendingPersonaWork');
+    if (!TreadwayPersonaWork.terminal(pendingPersonaWork)) throw new Error('Complete or cancel the current persona request first');
+    const request = TreadwayPersonaWork.request(message, { id: 'persona-' + crypto.randomUUID(), extensionId: chrome.runtime.id, version: chrome.runtime.getManifest().version });
+    assertNoConfiguredKeys(request, await readSettings());
+    await chrome.storage.local.set({ pendingPersonaWork: request }); return { request };
+  }),
+  'persona-work-status': async () => {
+    const { pendingPersonaWork: request } = await chrome.storage.local.get('pendingPersonaWork'); return { request: request || null, status: request?.status || 'idle' };
+  },
+  'persona-work-check': async ({ requestId }) => ({ request: await personaWorkCheck(requestId) }),
+  'persona-work-ack': ({ requestId }) => workState(requestId, 'accepted'),
+  'persona-work-proposed': ({ requestId, proposal }) => workState(requestId, 'proposed', { proposal: { personaIds: (proposal?.personas || []).map(persona => persona.id) } }),
+  'persona-work-finished': ({ requestId, result }) => workState(requestId, 'completed', { result }),
+  'persona-work-cancel': ({ requestId }) => workState(requestId, 'cancelled'),
+  'persona-work-failed': ({ requestId, error }) => workState(requestId, 'failed', { error: String(error || 'Persona work failed').slice(0, 500) }),
+  'persona-preflight': async ({ persona }) => {
+    persona = TreadwayPersonas.parsePersonas(JSON.stringify({ personas: [persona] }))[0];
+    const local = TreadwayPersonaManager.preflight(persona); const settings = await readSettings();
+    if (!settings.jevKey) return { ...local, checks: [...local.checks, { id: 'semantic.not_checked', status: 'uncertain', message: 'Add the Jev key to check narrative consistency' }] };
+    const profile = TreadwayPersonaManager.semanticContext(persona); assertNoConfiguredKeys(profile, settings);
+    try { const semantic = await Jev.reviewPersona({ apiKey: settings.jevKey, profile, fetch }); return { checks: [...local.checks, ...semantic.checks] }; }
+    catch (error) { return { checks: [...local.checks, { id: 'semantic.unavailable', status: 'uncertain', message: error.message }] }; }
+  },
   'assistance-request': async ({ persona }) => {
     const { journey, pendingAssistance } = await chrome.storage.session.get(['journey', 'pendingAssistance']);
     if (!journey || journey.contextStatus !== 'active') throw new Error('Start a journey before asking for help');
@@ -516,13 +616,17 @@ const handlers = {
         { type: 'assistance_completed', requestId, filled, manual });
     });
   },
-  classify: async (message) => ({ types: await classifyFields(message.fields) }),
+  classify: async (message) => ({ types: message.fillToken && fillInProgress?.token !== message.fillToken ? {} : await classifyFields(message.fields) }),
   decide: async (message) => {
     const { journey } = await chrome.storage.session.get('journey');
     if (!journey || journey.contextStatus !== 'active') return { decisions: {} };
     const settings = await readSettings();
     if (!settings.jevKey) return { decisions: {} };
-    return { decisions: await Jev.decideWithJev({ apiKey: settings.jevKey, jobs: message.jobs, fetch }) };
+    assertNoConfiguredKeys(message.jobs, settings);
+    if (message.fillToken && fillInProgress?.token !== message.fillToken) return { decisions: {} };
+    const profile = message.fillToken ? fillInProgress?.profile : undefined;
+    if (profile) assertNoConfiguredKeys(profile, settings);
+    return { decisions: await Jev.decideWithJev({ apiKey: settings.jevKey, jobs: message.jobs, profile, fetch }) };
   },
   'fill-progress': (message) => {
     const phases = { classify: 'Matching persona fields', inspect: 'Reading available choices',

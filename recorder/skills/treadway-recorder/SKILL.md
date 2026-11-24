@@ -34,6 +34,15 @@ preparing new personas or revisiting them as an engagement develops. It covers
 lightweight operator questions, public and SPA evidence, rich histories,
 consistency checks and preserving manual corrections during enrichment.
 
+For version 0.1.8, use the panel persona manager to inspect or manually correct
+facts, histories, narrative and portrait. Create with agent and Enrich selected
+use the paired assistance watcher, acknowledge/complete transport and operator
+proposal review. Return complete candidates for every selected identity; retain
+stable bindings and manual overrides. Restart the assistance watcher with the
+updated CLI after an extension update, and re-arm the native journal stream for
+the current browser/worker generation. Validate visible states before claiming
+readiness. See the installed README for exact commands.
+
 Prepare a fresh, coherent persona with values usable in the actual form. A
 synthetic fixture that parses is not necessarily a usable registration identity:
 check required fields, formats, checksum rules, option labels, uniqueness needs
@@ -75,8 +84,8 @@ Jev key. No extension host list is needed: the journey can discover supporting
 sites and identity providers. Check existing SafeYolo policy and capture retention
 without treating the application's host as the whole journey. Read credentials
 from existing private provisioning without exposing them in messages or captures.
-Jev classifies controls; it does
-not provide email inboxes, allocate addresses or verify identity. Preserve the
+Jev classifies controls and selects supported categorical answers from rich
+persona context; it does not generate free text, provide email inboxes, allocate addresses or verify identity. Preserve the
 operator's chosen test-secret logging policy. Recorder API keys belong in local
 extension settings, not persona facts or the exported event journal.
 
@@ -125,7 +134,11 @@ password, and defaults Display Name to full name. Jev chooses the closest
 reasonable field type with a 0.51 Choice confidence floor and a separate
 0.80 semantic-fit probability gate. Classification receives descriptors/type
 names; semantic option decisions additionally receive non-secret categorical
-intent values and observed options. Credential and contact identifier values
+intent values and observed options. Version 0.1.8 can also send redacted
+description, relevant structured facts, histories, preferences and circumstances
+when a categorical fact is missing. An independent support gate rejects a best
+guess without evidence. Explicit facts and operator overrides win; accepted
+deductions are revision/context-bound and invalidated by edits. Credential and contact identifier values
 stay in local filling paths. Help with an actually unresolved control or
 live code; do not turn a helper limitation into a claim that the agent cannot
 assist, or make the human prepare fixture data. A secret reference is not a
@@ -135,9 +148,11 @@ Use the native semantic matching before rewriting a persona just to match UI
 wording. Supplied degree/grade/institution facts can match equivalent displayed
 options. The recorder batches independent decisions, waits for async suggestions,
 and verifies a selected option against the shared Treadway widget binding.
-Prepare explicit radio/checkbox facts for the intended persona (string Yes/No
-values are supported), including negative statements where required. Missing
-facts are not permission to invent a personal status. Existing human choices,
+Prepare explicit radio/checkbox facts where known (string Yes/No values are
+supported), including relevant negative statements. Rich context may support
+unforeseen categorical questions; missing facts alone are not permission to
+invent a personal status. A lookup still needs a sourced query. Repeated history
+rows need distinct facts bound to their own records. Existing human choices,
 consent/attestations and file uploads remain operator-controlled. Observe the
 panel's active phase, final fill report and remaining gaps before claiming success.
 Fill all rereads saved personas, so agent fact updates require no timing-sensitive

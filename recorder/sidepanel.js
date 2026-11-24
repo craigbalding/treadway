@@ -13,6 +13,10 @@
   let saveQueue = Promise.resolve();
   let saving = false;
   let renewing = false;
+  let filling = false;
+  let personaManagerUI = null;
+  let personaWrites = Promise.resolve();
+  let personaTextBaseline = '';
 
   function renderContextClock() {
     const stream = status.liveStream;
@@ -141,6 +145,80 @@
     say('Loaded ' + personas.length + ' persona(s) from ' + directory.name + '/personas.json');
   }
 
+  async function readPersonaDocument() {
+    let text;
+    if (storageMode === 'downloads') text = (await chrome.storage.local.get('personaText')).personaText || '';
+    else text = await (await (await (await folderWithPermission()).getFileHandle('personas.json')).getFile()).text();
+    if (!text.trim()) return { personas: [] };
+    const data = JSON.parse(text);
+    if (!data || !Array.isArray(data.personas)) throw new Error('The persona document must contain a personas array');
+    if (data.personas.length) Personas.parsePersonas(text);
+    return data;
+  }
+  async function writePersonaDocument(data) {
+    const encoded = JSON.stringify(data, null, 2) + '\n';
+    if (storageMode === 'downloads') await chrome.storage.local.set({ personaText: encoded });
+    else {
+      const file = await (await folderWithPermission()).getFileHandle('personas.json', { create: true });
+      const writer = await file.createWritable(); await writer.write(encoded); await writer.close();
+    }
+    $('personas-json').value = encoded;
+    personaTextBaseline = encoded;
+  }
+  async function personaWrite(action) {
+    const next = personaWrites.then(async () => {
+      const { token } = await ask({ kind: 'persona-edit-begin' });
+      try { return await action(); }
+      finally { await ask({ kind: 'persona-edit-end', token }); }
+    });
+    personaWrites = next.catch(() => undefined); return next;
+  }
+  async function persistPersonas(replacements, expected) {
+    await personaWrite(async () => {
+      const data = await readPersonaDocument();
+      const current = data.personas.length ? Personas.parsePersonas(JSON.stringify(data)) : [];
+      const expectedById = new Map(expected.map(persona => [persona.id, persona]));
+      for (const persona of replacements) {
+        const before = current.find(candidate => candidate.id === persona.id), original = expectedById.get(persona.id);
+        if (original) {
+          if (!before || JSON.stringify(before) !== JSON.stringify(original)) throw new Error('Persona changed since it was opened; reload before applying your edits');
+          if (before.role !== persona.role || ['email', 'username'].some(key => before.facts[key] && before.facts[key] !== persona.facts[key])) throw new Error('Persona identity binding changed; create a distinct persona');
+          if (['email', 'username'].some(key => !before.facts[key] && persona.facts[key])) {
+            const key = JSON.stringify([before.id, before.role, before.facts.email || '', before.facts.username || '']);
+            const cached = (await chrome.storage.local.get('personaCredentials')).personaCredentials?.[key];
+            if (cached?.password) {
+              const chosen = persona.credentials.password || persona.credentials.new_password || cached.password;
+              persona.credentials.password ||= chosen; persona.credentials.new_password ||= chosen;
+              if (chosen === cached.password && cached.reference) {
+                persona.secrets.password ||= cached.reference; persona.secrets.new_password ||= cached.reference;
+              }
+            }
+          }
+        } else if (before) throw new Error('That persona ID already exists');
+        const index = data.personas.findIndex(candidate => candidate.id === persona.id);
+        if (index < 0) data.personas.push(persona); else data.personas[index] = persona;
+      }
+      Personas.parsePersonas(JSON.stringify(data));
+      await writePersonaDocument(data);
+    });
+    await loadPersonas();
+  }
+  async function persistPreparedPersona(prepared, source) {
+    await personaWrite(async () => {
+      const data = await readPersonaDocument(), entry = data.personas.find(candidate => candidate.id === source.id);
+      if (!entry) throw new Error('Persona disappeared during fill; prepared credentials remain in the private profile');
+      const current = Personas.parsePersonas(JSON.stringify({ personas: [entry] }))[0];
+      const M = globalThis.TreadwayPersonaManager;
+      if (current.role !== source.role || M.revisionOf(current) !== M.revisionOf(source) || M.inputSignature(current) !== M.inputSignature(source) ||
+        ['email', 'username'].some(key => (current.facts[key] || '') !== (source.facts[key] || '')) ||
+        JSON.stringify(current.credentials) !== JSON.stringify(source.credentials)) throw new Error('Persona changed during fill; review before applying prepared credential or deduction updates');
+      entry.credentials = prepared.credentials; entry.secrets = prepared.secrets;
+      entry.deductions = prepared.deductions || current.deductions;
+      await writePersonaDocument(data);
+    });
+    await loadPersonas();
+  }
+
   function renderPersonas() {
     const select = $('persona');
     const previous = select.value;
@@ -151,6 +229,7 @@
       return option;
     }));
     if (personas.some((persona) => persona.id === previous)) select.value = previous;
+    personaManagerUI?.reload();
   }
 
   function selectedPersona() {
@@ -209,6 +288,7 @@
     storageMode = captureStorage === 'folder' || captureStorage === 'downloads' ? captureStorage : folder ? 'folder' : 'downloads';
     $('storage-mode').value = storageMode;
     $('personas-json').value = personaText;
+    personaTextBaseline = personaText;
     renderStorageChoice();
     $('safeyolo-key').value = settings.safeyoloKey || '';
     $('jev-key').value = settings.jevKey || '';
@@ -221,15 +301,29 @@
     const ttlMinutes = Number($('ttl-minutes').value);
     if (!(ttlMinutes >= 1)) throw new Error('Test context timer must be at least 1 minute');
     const captureStorage = $('storage-mode').value;
-    const personaText = $('personas-json').value;
-    const parsed = captureStorage === 'downloads' ? Personas.parsePersonas(personaText) : null;
+    let personaText = $('personas-json').value;
+    let parsed = captureStorage === 'downloads' ? (personaText.trim() ? Personas.parsePersonas(personaText) : []) : null;
     const settings = {
       safeyoloKey: $('safeyolo-key').value.trim(),
       jevKey: $('jev-key').value.trim(),
       ttlMinutes,
       recordSecrets: $('record-secrets').checked,
     };
-    await chrome.storage.local.set({ settings, captureStorage, personaText });
+    await personaWrite(async () => {
+      const { personaText: currentText = '' } = await chrome.storage.local.get('personaText');
+      if (captureStorage === 'downloads' && currentText !== personaTextBaseline) {
+        if (personaText !== personaTextBaseline) throw new Error('Persona settings changed elsewhere; reload before replacing them');
+        personaText = currentText; parsed = personaText.trim() ? Personas.parsePersonas(personaText) : [];
+      }
+      const latest = await ask({ kind: 'status' });
+      if (latest.journey && parsed) {
+        const before = personas.find(persona => persona.id === latest.journey.persona.id);
+        const after = parsed.find(persona => persona.id === latest.journey.persona.id);
+        if (!before || !after || before.role !== after.role || ['email', 'username'].some(key => (before.facts[key] || '') !== (after.facts[key] || ''))) throw new Error('Keep the recording persona identity intact; stop and save before replacing its binding');
+      }
+      await chrome.storage.local.set({ settings, captureStorage, personaText });
+    });
+    personaTextBaseline = personaText;
     storageMode = captureStorage;
     if (parsed) { personas = parsed; renderPersonas(); }
     else await loadPersonas();
@@ -253,12 +347,14 @@
     $('start').disabled = running || Boolean(status.finished) || !personas.length;
     $('stop').disabled = !running;
     const active = running && status.journey.contextStatus === 'active';
-    for (const id of ['fill', 'phone-friend', 'authenticated', 'step', 'step-name', 'step-expected', 'observed-account']) $(id).disabled = !active;
+    for (const id of ['fill', 'phone-friend', 'authenticated', 'step', 'step-name', 'step-expected', 'observed-account']) $(id).disabled = !active || (['fill', 'phone-friend'].includes(id) && (filling || status.fillBusy));
     $('persona').disabled = running;
     $('journey-name').disabled = running;
     $('pending').hidden = !status.finished;
     $('finish-incomplete').hidden = !status.pendingRequests;
     renderContextClock();
+    personaManagerUI?.update({ ...status, fillBusy: filling || status.fillBusy });
+    if (personaManagerUI) await personaManagerUI.syncWork();
   }
 
   async function renewContext() {
@@ -289,29 +385,17 @@
   }
 
   async function fill(assistanceId) {
+    filling = true;
+    try {
     // Agent assistance persists facts into the same profile. Always read that
     // source before filling rather than relying on an older panel closure.
     await loadPersonas();
     const persona = personas.find((candidate) => candidate.id === status.journey.persona.id);
     if (!persona) throw new Error('Persona ' + status.journey.persona.id + ' is no longer in personas.json');
+    const sourcePersona = JSON.parse(JSON.stringify(persona));
     const report = await ask({ kind: 'fill', persona, assistanceId });
     if (report.preparedPersona) {
-      Object.assign(persona, report.preparedPersona);
-      // The private profile cache is durable before fill. Downloads personas
-      // also receive the generated credential so it is visible/reusable here.
-      if (storageMode === 'downloads') {
-        const stored = await chrome.storage.local.get('personaText');
-        const document = JSON.parse(stored.personaText);
-        const entry = document.personas.find(entry => entry.id === persona.id);
-        if (!entry || entry.role !== persona.role || (entry.facts?.email || '') !== (persona.facts.email || '') ||
-            (entry.facts?.username || '') !== (persona.facts.username || '')) {
-          throw new Error('Persona configuration changed during fill. The credential remains saved in the private profile.');
-        }
-        entry.credentials = persona.credentials; entry.secrets = persona.secrets;
-        const text = JSON.stringify(document, null, 2);
-        await chrome.storage.local.set({ personaText: text });
-        $('personas-json').value = text;
-      }
+      await persistPreparedPersona(report.preparedPersona, sourcePersona);
       if (report.generatedPassword) say('Generated and saved a test password for this persona.');
     }
     say('Filled ' + report.filled.length + ' field(s); ' + report.manual.length + ' highlighted for you to fill.');
@@ -323,6 +407,7 @@
     if (report.classifyError) say('Jev could not classify fields: ' + report.classifyError, 'warning');
     if (report.decisionError) say('Jev could not resolve choices: ' + report.decisionError, 'warning');
     return report;
+    } finally { filling = false; }
   }
   async function phoneFriend() {
     const persona = personas.find(candidate => candidate.id === status.journey.persona.id);
@@ -334,32 +419,15 @@
   // connection. It deliberately uses the operator's ordinary fill() path.
   globalThis.treadwayCompleteAssistance = async ({ requestId, facts }) => {
     await refresh();
+    await loadPersonas();
     const request = await ask({ kind: 'assistance-check', requestId });
     const persona = personas.find(candidate => candidate.id === request.persona.id);
     if (!persona) throw new Error('Requested persona is no longer loaded');
+    const M = globalThis.TreadwayPersonaManager;
+    if ((request.personaRevision !== undefined && M.revisionOf(persona) !== request.personaRevision) ||
+        (request.inputSignature && M.inputSignature(persona) !== request.inputSignature)) throw new Error('Persona changed since assistance was requested; request fresh help');
     const updated = globalThis.TreadwayAssistance.mergeFacts(persona, facts);
-    // Persist the persona before attempting any form changes. Credential
-    // values and identity bindings remain exactly as already configured.
-    if (storageMode === 'downloads') {
-      const { personaText } = await chrome.storage.local.get('personaText');
-      const data = JSON.parse(personaText);
-      const entry = data.personas.find(candidate => candidate.id === persona.id && candidate.role === persona.role);
-      if (!entry || entry.facts.email !== persona.facts.email) throw new Error('Persona identity changed');
-      entry.facts = updated.facts;
-      const encoded = JSON.stringify(data, null, 2);
-      await chrome.storage.local.set({ personaText: encoded });
-      $('personas-json').value = encoded;
-    } else {
-      const directory = await folderWithPermission();
-      const handle = await directory.getFileHandle('personas.json');
-      const data = JSON.parse(await (await handle.getFile()).text());
-      const entry = data.personas.find(candidate => candidate.id === persona.id && candidate.role === persona.role);
-      if (!entry || entry.facts.email !== persona.facts.email) throw new Error('Persona identity changed');
-      entry.facts = updated.facts;
-      const writable = await handle.createWritable();
-      await writable.write(JSON.stringify(data, null, 2)); await writable.close();
-    }
-    Object.assign(persona, updated);
+    await persistPersonas([updated], [persona]);
     const report = await fill(requestId);
     const result = { requestId, filled: report.filled.length, manual: report.manual.length,
       remaining: report.manual.map(entry => ({ field: entry.field, type: entry.type, reason: entry.reason })) };
@@ -431,6 +499,9 @@
       if ((await folder.queryPermission({ mode: 'readwrite' })) === 'granted') await loadPersonas().catch((error) => say(error.message, 'error'));
       else say('Click "Reload personas" to give the recorder access to ' + folder.name);
     }
+    personaManagerUI = globalThis.TreadwayPersonaUI.mount({ container: $('persona-manager-content'), getPersonas: () => personas,
+      refreshPersonas: loadPersonas, persist: persistPersonas, ask, say,
+      exportRequest: request => globalThis.TreadwayDownloadExport.save(JSON.stringify(request, null, 2), request.requestId, { area: 'assistance' }) });
     await refresh();
     setInterval(() => refresh().then(saveUpdatedSnapshot).catch(() => undefined), 5000);
     setInterval(renderContextClock, 1000);
