@@ -17,7 +17,7 @@
     "test:browserserve:service": "node --test tests/test_browserserve_service.js",
     "test:recorder": "npm run test:recorder:logic && npm run test:recorder:browser",
     "test:recorder:logic": "node --test recorder/tests/test_recorder_logic.js recorder/tests/test_recorder_contracts.js recorder/tests/test_recorder_exports.js recorder/tests/test_recorder_decisions.js recorder/tests/test_journal_stream.js recorder/tests/test_persona_model.js recorder/tests/test_persona_jev.js recorder/tests/test_persona_transport.js recorder/tests/test_persona_work.js",
-    "test:recorder:browser": "node --test --test-concurrency=1 recorder/tests/test_recorder_browser.js recorder/tests/test_journal_stream_browser.js recorder/tests/test_widget_regressions.js recorder/tests/test_persona_manager_browser.js recorder/tests/test_persona_inference_browser.js recorder/tests/test_persona_history_browser.js recorder/tests/test_choice_settle_browser.js"
+    "test:recorder:browser": "node --test --test-concurrency=1 recorder/tests/test_recorder_browser.js recorder/tests/test_journal_stream_browser.js recorder/tests/test_widget_regressions.js recorder/tests/test_persona_manager_browser.js recorder/tests/test_persona_inference_browser.js recorder/tests/test_persona_history_browser.js recorder/tests/test_choice_settle_browser.js recorder/tests/test_query_diagnostics_browser.js"
   },
   "dependencies": {
     "proxy-from-env": "2.1.0",

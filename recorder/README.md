@@ -169,6 +169,17 @@ Jev selects from supplied facts/options or the redacted persona context describe
 At most 255 observed options are considered per control; a larger result needs
 a narrower lookup rather than silently truncating the choice set.
 
+Failed query-retention or changed-control observations include a bounded
+`queryDiagnostics` trace on that control's fill report. Up to 24 samples capture
+phase/focus events, `document.hasFocus()`, logical binding availability, original
+node connection/replacement, query equality and value length, expansion, loading
+and observed option count. The active element contributes only a generic tag,
+known role and input type. No query/value text, labels, IDs or selectors are
+retained in this diagnostic. Initial focus/dispatch samples, a rolling recent tail, a dropped-sample count
+and the final failed state keep long waits bounded without losing a late blur. Successful controls carry no trace; temporary observers are
+removed before cleanup or cancellation. This evidence diagnoses a failure and
+does not trigger retyping, refocusing or retries.
+
 Autocomplete uses a sourced query and waits within the library's 15-second
 choice window. A still-loading widget can obtain one bounded wait decision and
 continue observing the same pending query. Newly appearing options then justify

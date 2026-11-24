@@ -444,6 +444,46 @@
     } while (Date.now() < deadline && !signal?.aborted);
     if (element.getAttribute('aria-expanded') === 'true') throw new Error('choice popup did not close');
   }
+  // Bounded structural evidence for failed lookups. Never retain query text,
+  // values, labels, selectors or active-element identifiers in this trace.
+  function queryDiagnostics(document, binding, initial, query) {
+    const limit = 24, trace = [], started = Date.now();
+    const roles = new Set(['button', 'checkbox', 'combobox', 'dialog', 'listbox', 'option', 'radio', 'searchbox', 'textbox']);
+    const tags = new Set(['a', 'body', 'button', 'dialog', 'div', 'html', 'iframe', 'input', 'li', 'select', 'span', 'textarea', 'ul']);
+    let dropped = 0, optionCount = 0, observedLoading = false;
+    function sample(phase, observation = {}) {
+      if (observation.optionCount !== undefined) optionCount = observation.optionCount;
+      if (observation.loading !== undefined) observedLoading = observation.loading;
+      const live = 'element' in observation ? observation.element : resolveField(document, binding);
+      const active = document.activeElement;
+      const role = active?.getAttribute('role');
+      const value = live && 'value' in live && typeof live.value === 'string' ? live.value : null;
+      const expanded = live?.getAttribute('aria-expanded');
+      const entry = { phase, elapsedMs: Date.now() - started, documentFocused: document.hasFocus(),
+        bindingAvailable: Boolean(live), initialConnected: initial.isConnected, sameNode: live === initial,
+        connected: Boolean(live?.isConnected), controlActive: Boolean(live && (active === live || live.contains(active))),
+        activeElement: { tag: active ? (tags.has(active.localName) ? active.localName : 'other') : null, role: roles.has(role) ? role : null,
+          type: active?.localName === 'input' ? active.type : null },
+        queryMatches: value === null ? null : value === query, valueLength: value?.length ?? null,
+        expanded: expanded === 'true' || expanded === 'false' ? expanded : null,
+        loading: Boolean(live && (busy(live) || observedLoading)), observedOptionCount: optionCount };
+      // Preserve startup focus/dispatch evidence and a rolling recent tail, so
+      // a late blur or remount remains visible after a long stable wait.
+      if (trace.length === limit) { trace.splice(8, 1); dropped++; }
+      trace.push(entry);
+    }
+    const events = ['focus', 'focusin', 'blur', 'focusout'];
+    const observe = event => {
+      // Focus transfer destinations are represented only by safe structural
+      // attributes. Capture no page-provided IDs, names or text.
+      const live = resolveField(document, binding);
+      if (event.target === initial || event.target === live || event.target === document.activeElement) sample(event.type, { element: live });
+    };
+    for (const type of events) document.addEventListener(type, observe, true);
+    sample('before-focus');
+    return { sample, result: () => ({ limit, dropped, trace }),
+      stop: () => { for (const type of events) document.removeEventListener(type, observe, true); } };
+  }
   async function observeChoices(document, binding, value, signal, { retain = false, continued } = {}) {
     let element = resolveField(document, binding);
     if (!element || !visible(element) || (!isEmpty(element) && !continued)) throw new Error('field changed');
@@ -454,20 +494,24 @@
     const query = element.localName === 'input' ? String(value) : '';
     const editEpoch = continued?.editEpoch ?? (humanEdits.get(element) || 0);
     if (continued && ((element.localName === 'input' && element.value !== query) || (humanEdits.get(element) || 0) !== editEpoch)) throw new Error('field changed');
-    if (!continued) ownAction(element, () => {
-      element.focus();
-      if (element.localName === 'input') {
-        nativeSetter(element).call(element, query);
-        element.dispatchEvent(new view.InputEvent('input', { inputType: 'insertText', data: query, bubbles: true }));
-      } else {
-        element.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, button: 0 }));
-        element.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true, button: 0 }));
-        element.click();
-      }
-    });
-    let context; let options = []; let loading = false; let observed = false;
+    const diagnostics = queryDiagnostics(document, binding, element, query);
+    let context; let options = []; let loading = false; let observed = false; let observationStarted = false;
     const deadline = Date.now() + (root.TreadwayChoiceBinding?.DEFAULT_WINDOW_MS || 15000);
     try {
+      if (!continued) ownAction(element, () => {
+        element.focus();
+        diagnostics.sample('after-focus');
+        if (element.localName === 'input') {
+          nativeSetter(element).call(element, query);
+          element.dispatchEvent(new view.InputEvent('input', { inputType: 'insertText', data: query, bubbles: true }));
+        } else {
+          element.dispatchEvent(new view.MouseEvent('mousedown', { bubbles: true, button: 0 }));
+          element.dispatchEvent(new view.MouseEvent('mouseup', { bubbles: true, button: 0 }));
+          element.click();
+        }
+      });
+      diagnostics.sample('after-dispatch');
+      observationStarted = true;
       do {
         if (signal?.aborted) throw new Error('recording stopped');
         element = resolveField(document, binding);
@@ -476,6 +520,7 @@
         loading = busy(element, context);
         options = (context?.list.options || []).filter(option => option.visible && !option.disabled)
           .map(option => ({ label: option.label, value: option.value ?? null, ref: option.ref }));
+        diagnostics.sample('inspect', { element, optionCount: options.length, loading });
         if (options.length && !loading) break;
         if (element.getAttribute('aria-expanded') === 'false' && element.localName === 'input' && element.value !== query) throw new Error('query was not retained');
         await abortable(new Promise(resolve => setTimeout(resolve, 100)), signal);
@@ -485,8 +530,14 @@
       observed = true;
       if (retain && options.length && !loading) return observation;
       return observation;
+    } catch (error) {
+      if (error.message === 'query was not retained' || error.message === 'field changed') {
+        diagnostics.sample('failed', { element }); error.queryDiagnostics = diagnostics.result();
+      }
+      throw error;
     } finally {
-      if (!retain || !observed) await closeChoices(document, binding, query, signal, editEpoch);
+      diagnostics.stop();
+      if (observationStarted && (!retain || !observed)) await closeChoices(document, binding, query, signal, editEpoch);
     }
   }
   async function applyChoice(document, plan, signal) {
@@ -720,7 +771,7 @@
           }
           if (plan.optionIndex === null && decide &&
             !/password|secret|token|one.?time|\botp\b|api.?key|^card_|ppsn|email|phone|username/i.test(plan.type)) jobs.push(jobFor(plan));
-        } catch (error) { plan.choiceError = error.message; }
+        } catch (error) { plan.choiceError = error.message; if (error.queryDiagnostics) plan.queryDiagnostics = error.queryDiagnostics; }
         finally {
           if (observation?.kind === 'combobox') {
             try { await closeChoices(document, plan.binding, observation.query, signal, observation.editEpoch); }
@@ -734,7 +785,7 @@
         if (signal?.aborted) { report.interrupted = true; break; }
         const element = resolveField(document, plan.binding);
         const entry = { selectors: element ? selectorsFor(element) : {}, field: plan.field, binding: plan.binding,
-          type: plan.type || null, by: plan.by || null };
+          type: plan.type || null, by: plan.by || null, ...(plan.queryDiagnostics ? { queryDiagnostics: plan.queryDiagnostics } : {}) };
         if (element) rememberType(element, plan.type);
         if (plan.confidence !== undefined) entry.confidence = plan.confidence;
         if (plan.fit !== undefined) entry.fit = plan.fit;
@@ -769,7 +820,7 @@
               prepareReference(element);
               expected = setFieldValue(element, value);
             }
-          } catch (error) { reason = error.message; }
+          } catch (error) { reason = error.message; if (error.queryDiagnostics) entry.queryDiagnostics = error.queryDiagnostics; }
           await abortable(waitForSettle(document), signal);
           const live = resolveField(document, resultBinding);
           Object.assign(entry, { value, expectedValue: expected ?? null, observedValue: live ? fieldValue(live) : null,
