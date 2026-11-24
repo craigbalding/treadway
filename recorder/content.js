@@ -49,6 +49,7 @@
   function fieldChanged(event) {
     const element = event.target;
     if (!event.isTrusted || !(element instanceof Element) || !/^(input|select|textarea)$/.test(element.localName)) return;
+    PageFill.noteHumanEdit(element);
     const field = PageFill.describeField(element);
     const rule = Fields.ruleType(field);
     const fieldType = PageFill.classifiedTypeFor(element) || (rule ? rule.type : null);
@@ -92,8 +93,8 @@
             return { field, selectors: PageFill.selectorsFor(element), role: element.getAttribute('role'),
               required: element.required || element.getAttribute('aria-required') === 'true',
               disabled: element.disabled || element.getAttribute('aria-disabled') === 'true',
-              hasValue: Boolean(element.value),
-              ...(secret ? { secret: true } : { value: element.value ?? element.textContent?.trim(),
+              hasValue: !PageFill.isEmpty(element),
+              ...(secret ? { secret: true } : { value: PageFill.fieldValue(element),
                 ...(['radio', 'checkbox'].includes(element.type) ? { checked: element.checked } : {}) }) };
           }) });
       return false;
@@ -112,10 +113,13 @@
       if (activeFill) { reply({ error: 'A fill is already running' }); return false; }
       fillController = new AbortController();
       const classify = (fields) => send({ kind: 'classify', fields }).then((answer) => answer.types || {});
-      activeFill = PageFill.fillAll(document, { values: message.values, classify, signal: fillController.signal })
+      const decide = (jobs) => send({ kind: 'decide', jobs }).then((answer) => answer.decisions || {});
+      const progress = (phase, count) => send({ kind: 'fill-progress', phase, count }).catch(() => undefined);
+      activeFill = PageFill.fillAll(document, { values: message.values, classify, decide, progress, signal: fillController.signal })
         .then(async (report) => {
           await record({ type: 'fill', filled: report.filled, manual: report.manual,
-            interrupted: Boolean(report.interrupted), classifyError: report.classifyError }, true);
+            decisions: report.decisions, batches: report.batches, skipped: report.skipped,
+            interrupted: Boolean(report.interrupted), classifyError: report.classifyError, decisionError: report.decisionError }, true);
           reply({ report, url: location.href });
         })
         .catch(async (error) => {

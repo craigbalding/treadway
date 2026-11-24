@@ -1,4 +1,5 @@
 'use strict';
+const DEFAULT_WINDOW_MS=15000;
 function controlledBinding(snapshot,fieldRef){
   const field=snapshot.fields.find(item=>item.ref===fieldRef);
   if(!field||field.role!=='combobox'||field.choiceUsable!==true)throw new Error('choice_field_not_usable');
@@ -18,4 +19,4 @@ function choiceContext(snapshot,fieldRef,optionRef){
   if(!option.visible||option.disabled)throw new Error('choice_not_usable');
   return {option,binding:context.binding};
 }
-module.exports={controlledBinding,choiceContext};
+module.exports={controlledBinding,choiceContext,DEFAULT_WINDOW_MS};

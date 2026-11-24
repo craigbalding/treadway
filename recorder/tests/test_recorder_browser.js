@@ -40,6 +40,11 @@ county.addEventListener('mousedown',()=>{
  list.append(option);document.body.append(list);county.parentElement.setAttribute('aria-hidden','true');county.setAttribute('aria-expanded','true');county.setAttribute('aria-controls',list.id);
 });
 const institution=document.getElementById('institution');
+document.addEventListener('keydown', event => {
+ if(event.key !== 'Escape') return;
+ document.getElementById('county-list')?.remove();county.setAttribute('aria-expanded','false');county.parentElement.removeAttribute('aria-hidden');
+ document.getElementById('college-list')?.remove();institution.setAttribute('aria-expanded','false');
+});
 institution.addEventListener('input',()=>{
  document.getElementById('college-list')?.remove();
  const list=document.createElement('ul');list.id='college-list';list.setAttribute('role','listbox');
@@ -95,6 +100,7 @@ function fakeSafeyolo() {
   const assets = {
     '/react.js': path.join(repositoryRoot, 'node_modules/react/umd/react.development.js'),
     '/react-dom.js': path.join(repositoryRoot, 'node_modules/react-dom/umd/react-dom.development.js'),
+    '/mui.js': path.join(repositoryRoot, 'node_modules/@mui/material/umd/material-ui.development.js'),
   };
   const server = http.createServer((request, response) => {
     const url = new URL(request.url, 'http://' + request.headers.host);
@@ -145,6 +151,17 @@ function fakeSafeyolo() {
           return response.end();
         }
         if (url.pathname === '/api/claims') return json(201, { id: 'claim-1' });
+        if (url.pathname === '/api/colleges') {
+          state.collegeQueries = (state.collegeQueries || 0) + 1;
+          setTimeout(() => { if (!response.destroyed) json(200, [
+            { id: 'example-u', label: 'Example University (EU)' }, { id: 'other-u', label: 'Other College' },
+          ]); }, 3200);
+          return;
+        }
+        if (url.pathname === '/mui-profile') {
+          response.writeHead(200, { 'Content-Type': 'text/html' });
+          return response.end(fs.readFileSync(path.join(__dirname, 'fixtures/mui-profile.html')));
+        }
         if (url.pathname === '/assistance-profile') {
           response.writeHead(200, { 'Content-Type': 'text/html' });
           return response.end(assistanceProfile);
@@ -350,10 +367,11 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
       globalThis.fixtureJevRequests ||= [];
       globalThis.fixtureJevRequests.push(request);
       return Promise.resolve(new Response(JSON.stringify({ answers: Object.fromEntries(
-        Object.entries(request.state.fields).map(([key, field]) => [key, {
+        Object.entries(request.state.fields).flatMap(([key, field]) => [[key, {
           type: 'choice', choice: field.label === 'Code' ? 'one_time_code' : field.name === 'publicLabel' ? 'display_name' : 'other',
           confidence: field.name === 'publicLabel' ? 0.52 : 0.99,
-        }])) }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+        }], [key + '__fits', { type: 'noul', noul: field.label === 'Code' || field.name === 'publicLabel' ? 0.99 : 0.01 }]])
+      ) }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     };
     const stored = await chrome.storage.local.get('settings');
     await chrome.storage.local.set({ settings: { ...stored.settings, jevKey: 'fixture-provider-key' } });
@@ -633,8 +651,221 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
 });
 }
 
-async function waitFor(check, label) {
-  const deadline = Date.now() + 10000;
+test('real MUI profile batches semantic decisions, waits for async options, and preserves operator choices',
+  { skip: missing, timeout: 180000 }, async t => {
+  const proxy = await fakeSafeyolo();
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'recorder-real-mui-'));
+  fs.mkdirSync(path.join(profile, 'Default'));
+  fs.writeFileSync(path.join(profile, 'Default', 'Preferences'), JSON.stringify({ download: {
+    default_directory: path.join(profile, 'downloads'), prompt_for_download: false, directory_upgrade: true,
+  } }));
+  let context;
+  t.after(async () => {
+    if (context) await context.close();
+    proxy.server.closeAllConnections(); proxy.server.close();
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+  context = await playwright.chromium.launchPersistentContext(profile, {
+    headless: true, channel: 'chromium', chromiumSandbox: true,
+    ...(process.env.RECORDER_CHROMIUM_BIN ? { executablePath: process.env.RECORDER_CHROMIUM_BIN } : {}),
+    proxy: { server: 'http://127.0.0.1:' + proxy.port, bypass: '<-loopback>' },
+    args: ['--disable-extensions-except=' + extensionRoot, '--load-extension=' + extensionRoot],
+  });
+  const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
+  const id = new URL(worker.url()).host;
+  const personaText = JSON.stringify({ personas: [{ id: 'casey-profile', role: 'applicant', facts: {
+    given_name: 'Casey', family_name: 'Example', email: 'casey@example.test', mobile_phone: '5550101',
+    country: 'Ireland', county: 'Old County', classification: 'Second Class Honours, Grade 1',
+    qualification_level: 'Honours bachelor degree', institution: 'Example University',
+    retired: 'No', disability: 'No', has_registration_number: 'No', agreement: 'Yes',
+  } }] });
+  await worker.evaluate(async text => {
+    await chrome.storage.local.set({ captureStorage: 'downloads', personaText: text,
+      settings: { safeyoloKey: 'agent-key', jevKey: 'fixture-key', ttlMinutes: 20, recordSecrets: false } });
+    const nativeFetch = globalThis.fetch;
+    globalThis.fixtureJevRequests = [];
+    globalThis.fetch = async (url, options) => {
+      if (url !== 'https://api.typesafe.ai/v1/systemone') return nativeFetch(url, options);
+      const request = JSON.parse(options.body); globalThis.fixtureJevRequests.push(request);
+      const answers = {};
+      for (const [key, field] of Object.entries(request.state.fields || {})) {
+        const mapped = field.label === 'No registration number' ? 'has_registration_number' : 'mobile_phone';
+        answers[key] = { type: 'choice', choice: mapped, confidence: 0.99 };
+        answers[key + '__fits'] = { type: 'noul', noul: field.label === 'No registration number' ? 0.99 : 0.01 };
+      }
+      for (const [key, widget] of Object.entries(request.state.widgets || {})) {
+        const wanted = { classification: '2.1', county: 'Dublin', qualification_level: 'Level 8 Honours Bachelor Degree',
+          institution: 'Example University (EU)', has_registration_number: 'Checked' }[widget.factType];
+        const chosen = Object.entries(widget.options).find(([, label]) => label === wanted || label.startsWith(wanted + ':'))?.[0];
+        answers[key] = { type: 'choice', choice: chosen || 'o999', confidence: 0.96 };
+        answers[key + '__fits'] = { type: 'noul', noul: globalThis.fixtureLowFit ? 0.1 : 0.95 };
+        answers[key + '__action'] = { type: 'choice', choice: widget.readiness.loading ? 'wait' : 'select', confidence: 0.99 };
+      }
+      const response = new Response(JSON.stringify({ answers }), { status: 200 });
+      if (request.state.widgets && globalThis.fixtureDeferDecisions) {
+        globalThis.fixtureDeferDecisions = false;
+        return new Promise(resolve => { globalThis.fixtureReleaseDecision = () => resolve(response); });
+      }
+      return response;
+    };
+  }, personaText);
+  const panel = await context.newPage();
+  await panel.goto('chrome-extension://' + id + '/sidepanel.html');
+  await panel.locator('#persona option').first().waitFor({ state: 'attached' });
+  // Persist an agent edit after the panel loaded, without a Reload personas
+  // click. The actual Fill all path must consume the current configuration.
+  await worker.evaluate(async () => {
+    const stored = await chrome.storage.local.get('personaText');
+    const data = JSON.parse(stored.personaText); data.personas[0].facts.county = 'County Dublin';
+    await chrome.storage.local.set({ personaText: JSON.stringify(data) });
+  });
+  await panel.locator('#journey-name').fill('Synthetic profile');
+  await panel.locator('#start').click();
+  await waitFor(() => panel.locator('#fill').isEnabled(), 'MUI fixture capture ready');
+  const ask = message => panel.evaluate(message => chrome.runtime.sendMessage(message), message);
+  const app = await context.newPage();
+  app.on('pageerror', error => t.diagnostic('MUI fixture page error: ' + error.message));
+  await app.goto('http://app.example.test/mui-profile');
+  await app.getByLabel('Institution', { exact: true }).waitFor();
+  await app.bringToFront();
+  await panel.locator('#fill').click();
+  let fill;
+  await waitFor(async () => { fill = (await ask({ kind: 'status' })).journey.events.find(event => event.type === 'fill'); return fill; }, 'real MUI fill result', 45000);
+  const state = await app.evaluate(() => window.fixtureState);
+  if (state.classification !== '2.1') t.diagnostic(JSON.stringify(await app.evaluate(() => ({
+    scroll: window.scrollY, active: document.activeElement?.tagName,
+    lists: [...document.querySelectorAll('[role=listbox]')].map(node => ({ id: node.id, text: node.textContent })),
+    fields: ['country','county','classification','institution'].map(id => {
+      const node = document.getElementById(id); const r = node.getBoundingClientRect();
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { id, rect: { x:r.x, y:r.y, width:r.width, height:r.height }, expanded:node.getAttribute('aria-expanded'),
+        hit: { tag:hit?.tagName, id:hit?.id, class:hit?.className } };
+    }),
+  }))));
+  assert.equal(state.classification, '2.1', JSON.stringify(fill.manual));
+  assert.equal(state.county, 'Dublin');
+  assert.equal(state.country, 'Ireland');
+  assert.equal(state.qualification_level, 'level8');
+  assert.equal(state.institution?.id, 'example-u', JSON.stringify(fill.manual));
+  assert.equal(state.retired, 'No');
+  assert.equal(state.disability, 'Yes', 'pre-existing radio choice is preserved');
+  assert.equal(state.noRegistration, true, 'negated checkbox wording matches the supplied No fact');
+  assert.equal(await app.getByLabel('Contact email').inputValue(), 'human@example.test');
+  assert.equal(await app.getByLabel('I agree to the terms').isChecked(), false);
+  assert.equal(await app.evaluate(() => window.submissions), 0);
+  assert.equal(proxy.state.collegeQueries, 2, 'one discovery and one application query, no retyping during a pending lookup');
+  assert.equal(fill.batches.filter(batch => batch.phase === 'decide').length, 1, 'independent semantic matches are batched');
+  assert.equal(fill.batches.find(batch => batch.phase === 'decide').count, 5);
+  assert.equal(fill.manual.some(entry => entry.reason === 'file requires operator'), true);
+  assert.equal(fill.manual.some(entry => entry.reason === 'operator decision'), true);
+  assert.equal(fill.manual.some(entry => entry.type === 'home_phone' && entry.reason === 'no persona value'), true);
+  assert.equal(fill.skipped.some(entry => entry.reason === 'control disabled after fill'), true);
+  const requests = await worker.evaluate(() => globalThis.fixtureJevRequests);
+  assert.equal(JSON.stringify(requests).includes('NeverSendThisSynthetic!7'), false);
+  assert.equal(JSON.stringify(requests).includes('casey@example.test'), false);
+  assert.equal(JSON.stringify(requests).includes('5550101'), false);
+  assert.equal(requests.find(request => request.state.widgets)?.state.widgets[Object.keys(requests.find(request => request.state.widgets).state.widgets)
+    .find(key => requests.find(request => request.state.widgets).state.widgets[key].factType === 'county')].intendedValue, 'County Dublin');
+  await app.getByRole('button', { name: 'Rerender', exact: true }).click();
+  assert.equal((await app.evaluate(() => window.fixtureState)).institution.id, 'example-u');
+  await app.getByLabel('No registration number', { exact: true }).uncheck();
+  const firstFill = fill.eventId;
+  await app.bringToFront(); await panel.locator('#fill').click();
+  await waitFor(async () => { fill = (await ask({ kind: 'status' })).journey.events.filter(event => event.type === 'fill').at(-1); return fill.eventId !== firstFill; },
+    'human checkbox edit preserved', 30000);
+  assert.equal((await app.evaluate(() => window.fixtureState)).noRegistration, false);
+  assert.equal(proxy.state.collegeQueries, 2, 'filled autocomplete is not queried again');
+
+  // The model returns an option from its observed set, then the app changes
+  // that set. Reopening must reject the stale choice before pointer dispatch.
+  await app.goto('http://app.example.test/mui-profile?changed=1');
+  await app.getByLabel('Institution', { exact: true }).waitFor();
+  await app.bringToFront();
+  await worker.evaluate(() => { globalThis.fixtureDeferDecisions = true; });
+  const previous = fill.eventId;
+  await panel.locator('#fill').click();
+  await waitFor(() => worker.evaluate(() => typeof globalThis.fixtureReleaseDecision === 'function'), 'semantic request pending', 30000);
+  await app.evaluate(() => window.changeGradeOptions());
+  await worker.evaluate(() => { globalThis.fixtureReleaseDecision(); delete globalThis.fixtureReleaseDecision; });
+  await waitFor(async () => { fill = (await ask({ kind: 'status' })).journey.events.filter(event => event.type === 'fill').at(-1); return fill.eventId !== previous; }, 'changed-options result', 45000);
+  assert.equal((await app.evaluate(() => window.fixtureState)).classification, '');
+  assert.ok(fill.manual.some(entry => entry.type === 'classification' && entry.reason === 'options changed'), JSON.stringify(fill.manual));
+  assert.equal(await app.evaluate(() => window.submissions), 0);
+
+  await app.evaluate(() => window.resetGradeOptions());
+  await worker.evaluate(() => { globalThis.fixtureLowFit = true; });
+  const beforeLowFit = fill.eventId;
+  await panel.locator('#fill').click();
+  await waitFor(async () => { fill = (await ask({ kind: 'status' })).journey.events.filter(event => event.type === 'fill').at(-1); return fill.eventId !== beforeLowFit; }, 'low-fit result', 30000);
+  assert.equal((await app.evaluate(() => window.fixtureState)).classification, '');
+  assert.ok(fill.manual.some(entry => entry.type === 'classification' && entry.reason === 'option match not confirmed'));
+
+  await worker.evaluate(() => { globalThis.fixtureLowFit = false; globalThis.fixtureDeferDecisions = true; });
+  const beforeNavigation = fill.eventId;
+  await panel.locator('#fill').click();
+  await waitFor(() => worker.evaluate(() => typeof globalThis.fixtureReleaseDecision === 'function'), 'decision pending before SPA navigation');
+  await app.evaluate(() => history.pushState({}, '', '/mui-profile?different-stage=1'));
+  await worker.evaluate(() => { globalThis.fixtureReleaseDecision(); delete globalThis.fixtureReleaseDecision; });
+  await waitFor(async () => { fill = (await ask({ kind: 'status' })).journey.events.filter(event => event.type === 'fill').at(-1); return fill.eventId !== beforeNavigation; }, 'changed form context rejected', 30000);
+  assert.equal((await app.evaluate(() => window.fixtureState)).classification, '');
+  assert.ok(fill.manual.some(entry => entry.reason === 'form context changed'));
+
+  // Readiness is a real dependency: the pending query must survive a wait
+  // decision. Only the later, newly observed options need another decision.
+  const readiness = await context.newPage();
+  await readiness.setContent('<label>Institution<input id="lookup" name="institution" role="combobox" aria-expanded="false"></label>');
+  for (const file of ['fields.js', 'form-runtime.js', 'choice-binding.js', 'page-fill.js']) {
+    await readiness.addScriptTag({ path: path.join(extensionRoot, 'lib', file) });
+  }
+  const waited = await readiness.evaluate(async () => {
+    TreadwayChoiceBinding.DEFAULT_WINDOW_MS = 150;
+    const input = document.getElementById('lookup'); let queries = 0; let decisions = 0;
+    function close() { document.getElementById('lookup-options')?.remove(); input.setAttribute('aria-expanded', 'false'); }
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') close(); });
+    input.addEventListener('input', () => {
+      close();
+      if (!input.value) { input.setAttribute('aria-busy', 'false'); return; }
+      const query = ++queries; input.setAttribute('aria-busy', 'true');
+      setTimeout(() => {
+        if (!input.value) return;
+        const list = document.createElement('ul'); list.id = 'lookup-options'; list.setAttribute('role', 'listbox');
+        const option = document.createElement('li'); option.setAttribute('role', 'option'); option.textContent = 'Example University (EU)';
+        option.onclick = () => { input.value = option.textContent; close(); };
+        list.append(option); document.body.append(list); input.setAttribute('aria-controls', list.id);
+        input.setAttribute('aria-expanded', 'true'); input.setAttribute('aria-busy', 'false');
+      }, query === 1 ? 300 : 0);
+    });
+    const report = await TreadwayPageFill.fillAll(document, { values: { institution: { value: 'Example University', source: 'persona' } },
+      decide: async jobs => {
+        decisions++;
+        if (jobs[0].loading) {
+          if (queries !== 1) throw Error('query replayed while pending');
+          await new Promise(resolve => setTimeout(resolve, 250));
+          return { [jobs[0].key]: { action: 'wait', confidence: 0.99 } };
+        }
+        return { [jobs[0].key]: { action: 'select', index: 0, confidence: 0.96, fit: 0.95 } };
+      } });
+    return { report, queries, decisions, value: input.value };
+  });
+  assert.equal(waited.report.filled.length, 1, JSON.stringify(waited.report));
+  assert.equal(waited.value, 'Example University (EU)');
+  assert.equal(waited.queries, 2);
+  assert.equal(waited.decisions, 2);
+  await readiness.close();
+
+  await app.bringToFront();
+  await worker.evaluate(() => { globalThis.fixtureLowFit = false; globalThis.fixtureDeferDecisions = true; });
+  await panel.locator('#fill').click();
+  await waitFor(() => worker.evaluate(() => typeof globalThis.fixtureReleaseDecision === 'function'), 'decision pending before Stop');
+  await panel.locator('#stop').click();
+  await panel.locator('#messages').getByText(/Saved \d+ events/).first().waitFor();
+  await worker.evaluate(() => { globalThis.fixtureReleaseDecision(); delete globalThis.fixtureReleaseDecision; });
+  assert.equal((await app.evaluate(() => window.fixtureState)).classification, '', 'late model response cannot act after Stop');
+  assert.equal(await app.evaluate(() => window.submissions), 0);
+});
+
+async function waitFor(check, label, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
   while (!(await check())) {
     if (Date.now() > deadline) throw new Error('Timed out waiting for ' + label);
     await new Promise((resolve) => setTimeout(resolve, 50));

@@ -20,7 +20,7 @@ function createHarness(options = {}) {
   webNavigation.getAllFrames = async () => [{ frameId: 0, documentId: 'doc-a' }, { frameId: 2, documentId: 'doc-child' }];
   let listener;
   const context = vm.createContext({
-    console, Date, URL, Promise, setTimeout, clearTimeout, crypto: webcrypto,
+    console, Date, URL, Promise, AbortSignal, setTimeout, clearTimeout, crypto: webcrypto,
     fetch: async (url, request) => {
       calls.push({ method: request.method, ...(request.body ? { body: JSON.parse(request.body) } : {}) });
       if (options.fetchHook) await options.fetchHook(url, request);

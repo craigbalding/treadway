@@ -1,0 +1,74 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Synthetic MUI profile</title></head><body>
+<div id="root"></div>
+<script src="/react.js"></script><script src="/react-dom.js"></script><script src="/mui.js"></script>
+<script>
+const h = React.createElement;
+const { TextField, Select, MenuItem, FormControl, InputLabel, Autocomplete, RadioGroup,
+  FormControlLabel, Radio, Checkbox, CircularProgress } = MaterialUI;
+function App() {
+  const [state, update] = React.useState({ classification: '', county: '', country: '', qualification_level: '',
+    institution: null, retired: '', disability: 'Yes', noRegistration: false, registration: '' });
+  const [query, setQuery] = React.useState('');
+  const [options, setOptions] = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [gradeOptions, setGradeOptions] = React.useState(['1', '2.1', '2.2', 'Fail', 'First Class Honours', 'Pass']);
+  const sequence = React.useRef(0);
+  const [render, rerender] = React.useState(0);
+  const set = (key, value) => update(previous => ({ ...previous, [key]: value }));
+  React.useEffect(() => { window.fixtureState = state; }, [state]);
+  window.changeGradeOptions = () => setGradeOptions(['1', '2.2', 'Fail', 'First Class Honours', 'Pass']);
+  window.resetGradeOptions = () => setGradeOptions(['1', '2.1', '2.2', 'Fail', 'First Class Honours', 'Pass']);
+  function inputChanged(_event, value, reason) {
+    setQuery(value);
+    if (!value) { sequence.current++; setOptions([]); setLoading(false); return; }
+    if (reason !== 'input') return;
+    const current = ++sequence.current;
+    setLoading(true); setOptions([]);
+    fetch('/api/colleges?q=' + encodeURIComponent(value)).then(response => response.json()).then(found => {
+      if (current !== sequence.current) return;
+      setOptions(found); setLoading(false);
+    });
+  }
+  function choice(key, label, choices) {
+    return h(FormControl, { fullWidth: true, style: { marginBottom: 12 } },
+      h(InputLabel, { id: key + '-label' }, label),
+      h(Select, { id: key, name: key, labelId: key + '-label', label, value: state[key],
+        onChange: event => set(key, event.target.value) },
+        h(MenuItem, { value: '' }, '-- Select --'), ...choices.map(value => h(MenuItem, { key: value, value }, value))));
+  }
+  return h('form', { style: { width: 600, margin: 20 }, onSubmit: event => { event.preventDefault(); window.submissions++; } },
+    h('label', null, 'Profile photo', h('input', { name: 'photo', type: 'file', required: true })),
+    h(TextField, { label: 'Contact email', name: 'email', defaultValue: 'human@example.test', fullWidth: true }),
+    h(TextField, { label: 'Home phone', name: 'homePhone', defaultValue: '', fullWidth: true }),
+    h(TextField, { label: 'Existing password', type: 'password', defaultValue: 'NeverSendThisSynthetic!7', fullWidth: true }),
+    choice('country', 'Country', ['Ireland', 'France']),
+    choice('county', 'County', ['Cork', 'Dublin', 'Galway']),
+    choice('classification', 'Classification / Grade', gradeOptions),
+    h('label', null, 'Qualification level', h('select', { name: 'qualification_level', value: state.qualification_level,
+      onChange: event => set('qualification_level', event.target.value) }, h('option', { value: '' }, 'Choose'),
+      h('option', { value: 'level8' }, 'Level 8 Honours Bachelor Degree'), h('option', { value: 'level9' }, 'Level 9 Masters Degree'))),
+    h(Autocomplete, { id: 'institution', options, value: state.institution, inputValue: query,
+      isOptionEqualToValue: (a, b) => a.id === b.id, getOptionLabel: option => option.label,
+      loading, onInputChange: inputChanged, onChange: (_event, value) => set('institution', value),
+      renderInput: params => h(TextField, { ...params, label: 'Institution', placeholder: 'Type part of the college name',
+        inputProps: { ...params.inputProps, name: 'institution', 'aria-busy': loading ? 'true' : 'false' },
+        InputProps: { ...params.InputProps, endAdornment: h(React.Fragment, null,
+          loading ? h(CircularProgress, { size: 18 }) : null, params.InputProps.endAdornment) } }) }),
+    h('div', { id: 'retired-label' }, 'Retired?'),
+    h(RadioGroup, { name: 'retired', 'aria-labelledby': 'retired-label', value: state.retired, onChange: event => set('retired', event.target.value) },
+      h(FormControlLabel, { value: 'Yes', control: h(Radio), label: 'Yes' }), h(FormControlLabel, { value: 'No', control: h(Radio), label: 'No' })),
+    h('div', { id: 'disability-label' }, 'Disability pension?'),
+    h(RadioGroup, { name: 'disability', 'aria-labelledby': 'disability-label', value: state.disability, onChange: event => set('disability', event.target.value) },
+      h(FormControlLabel, { value: 'Yes', control: h(Radio), label: 'Yes' }), h(FormControlLabel, { value: 'No', control: h(Radio), label: 'No' })),
+    h(FormControlLabel, { label: 'No registration number', control: h(Checkbox, { name: 'noRegistration', checked: state.noRegistration,
+      onChange: event => set('noRegistration', event.target.checked) }) }),
+    h(TextField, { label: 'Registration number', name: 'registration', disabled: state.noRegistration, value: state.registration,
+      onChange: event => set('registration', event.target.value) }),
+    h(FormControlLabel, { label: 'I agree to the terms', control: h(Checkbox, { name: 'agreement' }) }),
+    h('button', { type: 'button', onClick: () => rerender(render + 1) }, 'Rerender'),
+    h('button', { type: 'submit' }, 'Save profile'), h('span', { id: 'render' }, render));
+}
+window.submissions = 0;
+ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+</script></body></html>

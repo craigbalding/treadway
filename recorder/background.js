@@ -318,11 +318,14 @@ for (const [event, how] of [[chrome.webNavigation.onHistoryStateUpdated, 'histor
 }
 
 async function classifyFields(fields) {
+  const { journey } = await chrome.storage.session.get('journey');
+  if (!journey || journey.contextStatus !== 'active') return {};
   const settings = await readSettings();
   if (!settings.jevKey) return {};
-  const stored = await chrome.storage.session.get('personaFieldTypes');
-  const choices = Object.assign({}, Fields.FIELD_TYPES);
-  for (const type of stored.personaFieldTypes || []) {
+  const stored = await chrome.storage.session.get(['personaFieldTypes', 'personaFieldSources']);
+  const choices = {};
+  for (const type of [...(stored.personaFieldTypes || Object.keys(Fields.FIELD_TYPES)), ...Fields.SECRET_TYPES]) {
+    if (stored.personaFieldSources?.[type]?.derivedFrom && stored.personaFieldTypes?.includes(stored.personaFieldSources[type].derivedFrom)) continue;
     choices[type] = Fields.FIELD_TYPES[type] || type.replace(/_/g, ' ');
   }
   return Jev.classifyWithJev({ apiKey: settings.jevKey, fields, choices, fetch });
@@ -359,7 +362,8 @@ async function fillActiveTab({ values, persona, assistanceId }) {
       throw new Error('Recording stopped before filling');
     }
   }
-  await chrome.storage.session.set({ personaFieldTypes: Object.keys(values) });
+  await chrome.storage.session.set({ personaFieldTypes: Object.keys(values), personaFieldSources:
+    Object.fromEntries(Object.entries(values).map(([type, entry]) => [type, { derivedFrom: entry.derivedFrom || null }])) });
   if (assistanceId) await checkAssistance(assistanceId);
   const answer = await chrome.tabs.sendMessage(tab.id, { kind: 'fill', values }, { frameId: 0 });
   if (!answer) throw new Error('The page did not answer; reload it so the recorder can attach');
@@ -397,7 +401,7 @@ function withSecretReference(journey, event) {
       }
       return result;
     });
-    return Object.assign({}, event, { filled: clean(event.filled), manual: clean(event.manual) });
+    return Object.assign({}, event, { filled: clean(event.filled), manual: clean(event.manual), skipped: clean(event.skipped) });
   }
   if (event.type !== 'field') return event;
   if (event.secret || event.redacted) {
@@ -477,6 +481,18 @@ const handlers = {
     });
   },
   classify: async (message) => ({ types: await classifyFields(message.fields) }),
+  decide: async (message) => {
+    const { journey } = await chrome.storage.session.get('journey');
+    if (!journey || journey.contextStatus !== 'active') return { decisions: {} };
+    const settings = await readSettings();
+    if (!settings.jevKey) return { decisions: {} };
+    return { decisions: await Jev.decideWithJev({ apiKey: settings.jevKey, jobs: message.jobs, fetch }) };
+  },
+  'fill-progress': (message) => {
+    const phases = { classify: 'Matching persona fields', inspect: 'Reading available choices',
+      decide: 'Matching choices with Jev', apply: 'Applying and checking values', done: 'Fill complete' };
+    if (phases[message.phase]) notifyPanel({ fillProgress: phases[message.phase], count: Number(message.count) || 0 });
+  },
   saved: (message) => updateJourneys((state) => {
     const finished = state.finished;
     if (!finished || message.run !== finished.contextFields.run) return { pendingRequests: 0 };

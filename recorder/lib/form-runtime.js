@@ -116,10 +116,12 @@ globalThis.TreadwayFormRuntime = (function formRuntime(command, args = {}) {
     }
     const listboxes = listNodes.map(e => ({
       ref: ref(e), id: e.id || null, disabled:choiceDisabled(e),
+      loading:e.getAttribute('aria-busy')==='true'||!!e.querySelector('[role="progressbar"]'),
       controllers:fields.flatMap(f => (f.controlledElements || []).filter(c => c.listboxRefs.includes(ref(e)))
         .map(c => ({fieldRef:f.ref,controlId:c.controlId,containerRef:c.containerRef}))),
       options: [...e.querySelectorAll('[role="option"]')].filter(o => o.closest('[role="listbox"]') === e)
-        .map(o => ({ ref: ref(o), label: label(o), visible:choiceVisible(o), disabled:choiceDisabled(o), selected: o.getAttribute('aria-selected') }))
+        .map(o => ({ ref: ref(o), label: label(o), value:o.getAttribute('data-value') ?? o.getAttribute('value'),
+          visible:choiceVisible(o), disabled:choiceDisabled(o), selected: o.getAttribute('aria-selected') }))
     }));
     return { actions, dialogs: dialogs(), listboxes, observed: true, documentId: state.documentId,
       observedAt: new Date().toISOString(), url: publicURL(location.href), locationId:state.locationId, scope: args.scope || 'body',

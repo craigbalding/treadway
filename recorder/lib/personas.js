@@ -153,7 +153,7 @@
     })) {
       if (values[type]) continue;
       const supplied = alternatives.find(key => values[key]);
-      if (supplied) values[type] = { ...values[supplied], source: 'derived' };
+      if (supplied) values[type] = { ...values[supplied], source: 'derived', derivedFrom: supplied };
     }
     if (!values.display_name && values.full_name) values.display_name = { ...values.full_name, source: 'derived' };
     if (!values.username && values.email) values.username = { ...values.email, source: 'derived' };
