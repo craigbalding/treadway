@@ -12,6 +12,23 @@ const { webcrypto } = require('node:crypto');
 
 const example = fs.readFileSync(path.join(__dirname, '..', 'examples', 'personas.json'), 'utf8');
 
+test('assistance watcher actually runs through a symlinked CLI entry point', () => {
+  const directory = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'recorder-assist-entry-'));
+  try {
+    const entry = path.join(directory, 'assist.mjs');
+    fs.symlinkSync(path.join(__dirname, '../assist.mjs'), entry);
+    const requestId = 'assist-11111111-2222-3333-4444-555555555555';
+    fs.writeFileSync(path.join(directory, requestId + '.json'), JSON.stringify({
+      schema: 'treadway.assistance/1', requestId, extensionId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      run: 'synthetic-run', target: { tabId: 1, documentInstanceId: 'synthetic-document' }, form: [],
+    }));
+    const output = require('node:child_process').execFileSync(process.execPath,
+      [entry, 'watch', directory, '1'], { encoding: 'utf8', timeout: 5000 });
+    assert.equal(JSON.parse(output).requestId, requestId);
+    assert.equal(JSON.parse(output).timeout, false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('packaged browser mechanics exactly match the existing library sources', () => {
   require('node:child_process').execFileSync(process.execPath, [path.join(__dirname, '../build-runtime.mjs'), '--check']);
 });

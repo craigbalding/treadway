@@ -3,7 +3,7 @@
 // Run `watch` as a harness-visible task; `complete` uses the normal panel fill.
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 export function readRequest(file) {
   const stat = fs.lstatSync(file);
@@ -79,7 +79,7 @@ export async function complete(requestFile, sessionFile, factsFile) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+if (process.argv[1] && fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(path.resolve(process.argv[1]))) {
   const [command, ...args] = process.argv.slice(2);
   try {
     let result;
