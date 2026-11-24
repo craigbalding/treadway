@@ -254,8 +254,22 @@
     });
   }
 
-  function stuck(element, expected) {
-    return element.isConnected && fieldValue(element) === expected && element.getAttribute('aria-invalid') !== 'true';
+  function retained(element, expected) {
+    return element.isConnected && fieldValue(element) === expected;
+  }
+  function validationState(element, secret = false) {
+    if (!element) return null;
+    const ariaInvalid = element.getAttribute('aria-invalid');
+    const native = element.willValidate && element.validity ? element.validity : null;
+    const nativeIssues = native ? ['badInput', 'customError', 'patternMismatch', 'rangeOverflow', 'rangeUnderflow',
+      'stepMismatch', 'tooLong', 'tooShort', 'typeMismatch', 'valueMissing'].filter(key => native[key]) : [];
+    const ids = attribute => (element.getAttribute(attribute) || '').trim().split(/\s+/).filter(Boolean).slice(0, 10);
+    const messageIds = ids('aria-errormessage'), descriptionIds = ids('aria-describedby');
+    const readText = references => secret ? [] : references.map(id => element.ownerDocument.getElementById(id)?.textContent?.trim()).filter(Boolean).map(value => text(value, 500));
+    return { invalid: (ariaInvalid !== null && ariaInvalid !== 'false' && ariaInvalid !== '') || native?.valid === false,
+      ariaInvalid, nativeValid: native ? native.valid : null, nativeIssues,
+      ...(native && !native.valid && !secret ? { nativeMessage: text(element.validationMessage, 500) } : {}),
+      messageIds, messages: readText(messageIds), descriptionIds, descriptions: readText(descriptionIds) };
   }
 
   function bindingFor(element) {
@@ -648,9 +662,14 @@
           } catch (error) { reason = error.message; }
           await abortable(waitForSettle(document), signal);
           const live = resolveField(document, resultBinding);
+          Object.assign(entry, { value, expectedValue: expected ?? null, observedValue: live ? fieldValue(live) : null,
+            retained: Boolean(live && retained(live, expected)), validation: validationState(live, Fields.SECRET_TYPES.has(plan.type)),
+            source: values[plan.type].source });
+          if (Fields.SECRET_TYPES.has(plan.type)) Object.assign(entry, { secret: true, secretReference: values[plan.type].secretReference });
           if (signal?.aborted) { report.interrupted = true; reason = 'recording stopped'; }
           else if (!reason && expected === null) reason = 'no matching option';
-          else if (!reason && (!live || !stuck(live, expected))) reason = 'did not stick';
+          else if (!reason && !entry.retained) reason = 'did not stick';
+          else if (!reason && entry.validation?.invalid) reason = 'validation error';
           if (!reason) {
             rememberType(live, plan.type);
             const filled = Object.assign(entry, { selectors: selectorsFor(live), field: describeField(live), binding: resultBinding, value,
@@ -671,10 +690,14 @@
     // A later field can reset an earlier one. Verify the final live form too.
     for (const item of completed) {
       const live = resolveField(document, item.binding);
-      if (!live || !stuck(live, item.expected)) {
+      const valueRetained = Boolean(live && retained(live, item.expected));
+      const validation = validationState(live, Fields.SECRET_TYPES.has(item.entry.type));
+      Object.assign(item.entry, { retained: valueRetained, validation, observedValue: live ? fieldValue(live) : null });
+      if (!valueRetained || validation?.invalid) {
+        const reason = valueRetained ? 'validation error' : 'did not stick';
         report.filled = report.filled.filter((entry) => entry !== item.entry);
-        if (live) markManual(live, 'did not stick');
-        report.manual.push(Object.assign({}, item.entry, { reason: 'did not stick', observedValue: live ? fieldValue(live) : null }));
+        if (live) markManual(live, reason);
+        report.manual.push(Object.assign({}, item.entry, { reason }));
       }
     }
     // Later React remounts can remove a previous manual highlight.

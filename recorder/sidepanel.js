@@ -15,6 +15,12 @@
   let renewing = false;
 
   function renderContextClock() {
+    const stream = status.liveStream;
+    const live = $('live-output-status');
+    if (stream?.state === 'error') live.textContent = 'Live output error: ' + stream.error;
+    else if (!stream) live.textContent = 'Live output waiting for agent';
+    else if (Date.now() - Date.parse(stream.lastReadAt) > 5000) live.textContent = 'Live output disconnected — ask the agent to re-arm it';
+    else live.textContent = 'Live output connected' + (stream.output ? ': ' + stream.output : '');
     const journey = status.journey;
     const clock = $('context-clock');
     clock.hidden = !journey;

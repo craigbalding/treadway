@@ -1,5 +1,5 @@
 // Owns the recording journal and passive request/flow-store references.
-importScripts('lib/fields.js', 'lib/jev.js', 'lib/test-context.js', 'lib/network.js', 'lib/personas.js', 'lib/credentials.js', 'lib/assistance.js');
+importScripts('lib/fields.js', 'lib/jev.js', 'lib/test-context.js', 'lib/network.js', 'lib/personas.js', 'lib/credentials.js', 'lib/assistance.js', 'lib/journal-stream.js');
 const Context = globalThis.TreadwayTestContext;
 const Jev = globalThis.TreadwayJev;
 const Fields = globalThis.TreadwayFields;
@@ -17,10 +17,25 @@ function transition(operation) {
 }
 function updateJourneys(change) {
   const next = journalQueue.then(async () => {
-    const stored = await chrome.storage.session.get(['journey', 'finished', 'requests']);
-    const state = { journey: stored.journey || null, finished: stored.finished || null, requests: stored.requests || {} };
+    const stored = await chrome.storage.session.get(['journey', 'finished', 'requests', 'journalArchive', 'journalEvictions']);
+    const state = { journey: stored.journey || null, finished: stored.finished || null, requests: stored.requests || {}, journalArchive: stored.journalArchive || [], journalEvictions: stored.journalEvictions || [] };
+    const previous = state.finished;
     const result = await change(state);
-    await chrome.storage.session.set(state);
+    if (previous && previous !== state.finished) {
+      const outcome = previous.lastSavedRevision === previous.revision ? 'saved' : 'discarded';
+      const retained = TreadwayJournalStream.retain(state.journalArchive, forExport(state, previous), outcome);
+      state.journalArchive = retained.archive;
+      state.journalEvictions = [...state.journalEvictions, ...retained.evicted].slice(-100);
+    }
+    try { await chrome.storage.session.set(state); }
+    catch (error) {
+      if (!state.journalArchive.length || !/quota|storage.*limit/i.test(error.message)) throw error;
+      // Optional catch-up retention must not prevent saving the main capture.
+      state.journalEvictions = [...state.journalEvictions, ...state.journalArchive.map(item => ({
+        run: item.record.contextFields.run, revision: item.record.revision, reason: 'archive_storage_quota' }))].slice(-100);
+      state.journalArchive = [];
+      await chrome.storage.session.set(state);
+    }
     return result;
   });
   journalQueue = next.catch(() => undefined);
@@ -412,7 +427,28 @@ function withSecretReference(journey, event) {
   }
   return event;
 }
+async function readJournalPage(options = {}) {
+  await journalQueue;
+  const stored = await chrome.storage.session.get(['journey', 'finished', 'requests', 'journalArchive', 'journalEvictions']);
+  const state = { ...stored, requests: stored.requests || {} };
+  state.journey = forExport(state, state.journey);
+  state.finished = forExport(state, state.finished);
+  const settings = await readSettings();
+  const page = TreadwayJournalStream.read(state, options, [settings.safeyoloKey, settings.jevKey]);
+  await chrome.storage.session.set({ liveStream: { state: 'connected', lastReadAt: new Date().toISOString(), output: String(options.output || '').slice(0, 200) } });
+  return page;
+}
+// Only an attached, owned extension worker can call this global through CDP.
+globalThis.treadwayReadJournal = readJournalPage;
+globalThis.treadwayJournalStreamError = async (error) => {
+  await chrome.storage.session.set({ liveStream: { state: 'error', lastReadAt: new Date().toISOString(), error: String(error).slice(0, 300) } });
+  notifyPanel({ refreshLiveStream: true });
+};
 const handlers = {
+  'journal-read': (message, sender) => {
+    if (sender.url !== 'chrome-extension://' + chrome.runtime.id + '/sidepanel.html') throw new Error('Journal reads require the recorder panel or owned worker');
+    return readJournalPage(message);
+  },
   'recording?': async () => {
     const journey = (await chrome.storage.session.get('journey')).journey;
     return { active: Boolean(journey && journey.contextStatus === 'active'), recordSecrets: journey ? journey.recordSecrets : false };
@@ -426,10 +462,10 @@ const handlers = {
   }),
   status: async () => {
     await journalQueue;
-    const state = await chrome.storage.session.get(['journey', 'finished', 'requests']);
+    const state = await chrome.storage.session.get(['journey', 'finished', 'requests', 'liveStream']);
     state.requests = state.requests || {};
     const journey = state.journey || state.finished;
-    return { journey: forExport(state, state.journey), finished: forExport(state, state.finished),
+    return { journey: forExport(state, state.journey), finished: forExport(state, state.finished), liveStream: state.liveStream || null,
       pendingRequests: journey ? pendingRequests(state, journey.contextFields.run).length : 0 };
   },
   start: (message) => startJourney(message),

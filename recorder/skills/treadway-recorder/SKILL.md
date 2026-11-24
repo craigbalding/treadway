@@ -101,6 +101,18 @@ observer is receiving current events before saying that you are monitoring. If
 live observation is unavailable, disclose that and arrange an accessible stream
 without restarting or interrupting the active capture.
 
+When the installed version provides `recorder/stream.mjs`, bootstrap it by default
+with the owned BrowserManager session, exact extension ID and a private shared
+JSONL destination. See the README's Live journal output instructions. Run it as
+a managed long-lived task in the browser-owning sandbox; verify its companion
+status file and panel connected state during setup, then a fresh journal event
+when recording starts before claiming to monitor activity. Other
+agents should read that file directly rather than asking the browser agent to
+inspect each event. Re-arm on expiry/failure; resume the same file only for its
+bound browser generation/extension. Preserve final Save and disclosed stream
+gaps. This observational exporter is separate from the assistance wake watcher
+and from Coord waiting.
+
 Let the human choose navigation, submissions and consequential application
 choices unless they delegate them. Provide active assistance with field values,
 Fill all, highlighted controls, verification and failures; do not interpret human
