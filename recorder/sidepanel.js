@@ -71,6 +71,10 @@
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message.kind === 'panel-notice') {
+      if (message.fillProgress) {
+        $('fill-progress').hidden = false;
+        $('fill-progress').textContent = message.fillProgress + (message.count ? ' (' + message.count + ')' : '');
+      }
       if (message.text) say(message.text, message.level);
       refresh().then(saveUpdatedSnapshot).catch((error) => say(error.message, 'error'));
     }
@@ -279,6 +283,9 @@
   }
 
   async function fill(assistanceId) {
+    // Agent assistance persists facts into the same profile. Always read that
+    // source before filling rather than relying on an older panel closure.
+    await loadPersonas();
     const persona = personas.find((candidate) => candidate.id === status.journey.persona.id);
     if (!persona) throw new Error('Persona ' + status.journey.persona.id + ' is no longer in personas.json');
     const report = await ask({ kind: 'fill', persona, assistanceId });
@@ -303,10 +310,12 @@
     }
     say('Filled ' + report.filled.length + ' field(s); ' + report.manual.length + ' highlighted for you to fill.');
     for (const entry of report.manual) {
-      const where = entry.selectors.role ? entry.selectors.role.name : entry.selectors.css;
+      const where = entry.field.inputType === 'radio' ? entry.field.groupLabel || entry.field.name :
+        entry.selectors.role ? entry.selectors.role.name : entry.selectors.css;
       say('Fill "' + where + '" by hand: ' + entry.reason + (entry.type ? ' (' + entry.type + ')' : ''), 'warning');
     }
     if (report.classifyError) say('Jev could not classify fields: ' + report.classifyError, 'warning');
+    if (report.decisionError) say('Jev could not resolve choices: ' + report.decisionError, 'warning');
     return report;
   }
   async function phoneFriend() {

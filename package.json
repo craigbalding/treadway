@@ -16,7 +16,7 @@
     "test:browserserve": "node --test tests/test_browserserve.js tests/test_browserless_reconnect.js tests/test_remote_transport.js",
     "test:browserserve:service": "node --test tests/test_browserserve_service.js",
     "test:recorder": "npm run test:recorder:logic && npm run test:recorder:browser",
-    "test:recorder:logic": "node --test recorder/tests/test_recorder_logic.js recorder/tests/test_recorder_contracts.js recorder/tests/test_recorder_exports.js",
+    "test:recorder:logic": "node --test recorder/tests/test_recorder_logic.js recorder/tests/test_recorder_contracts.js recorder/tests/test_recorder_exports.js recorder/tests/test_recorder_decisions.js",
     "test:recorder:browser": "node --test --test-concurrency=1 recorder/tests/test_recorder_browser.js"
   },
   "dependencies": {
@@ -24,6 +24,9 @@
     "ws": "8.22.1"
   },
   "devDependencies": {
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@mui/material": "5.18.0",
     "playwright": "1.65.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",

@@ -258,9 +258,21 @@ test('reference-mode journals redact automatic credential fill results including
   const h = createHarness({ settings: { recordSecrets: false } }); await h.start();
   const secret = { type: 'new_password', secret: true, value: 'SyntheticPassword!7',
     expectedValue: 'SyntheticPassword!7', observedValue: 'SyntheticPassword!7', secretReference: 'FIXTURE_NEW_PASSWORD' };
-  await h.command({ kind: 'page-event', event: { type: 'fill', filled: [secret], manual: [{ ...secret, reason: 'did not stick' }] } });
+  await h.command({ kind: 'page-event', event: { type: 'fill', filled: [secret], manual: [{ ...secret, reason: 'did not stick' }],
+    skipped: [{ ...secret, reason: 'control disabled after fill' }] } });
   const event = h.session.journey.events.at(-1);
   assert.equal(JSON.stringify(event).includes('SyntheticPassword!7'), false);
   assert.equal(event.filled[0].secretReference, 'FIXTURE_NEW_PASSWORD');
   assert.equal(event.manual[0].redacted, true);
+  assert.equal(event.skipped[0].redacted, true);
+});
+
+test('Jev decisions cannot dispatch after the recorder stops', async () => {
+  const h = createHarness({ settings: { jevKey: 'synthetic-provider-key' } });
+  await h.start(); await h.command({ kind: 'stop' });
+  const before = h.calls.length;
+  const result = await h.command({ kind: 'decide', jobs: [{ key: 'grade', type: 'classification',
+    field: { label: 'Grade' }, intent: 'Upper second', options: [{ label: '2.1' }] }] });
+  assert.deepEqual(result, { decisions: {} });
+  assert.equal(h.calls.length, before);
 });

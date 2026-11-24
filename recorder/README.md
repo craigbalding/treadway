@@ -128,10 +128,11 @@ check is a read-before-clear check, not a server-side compare-and-delete lock.
 ## Fill all
 
 Empty, visible, enabled controls are classified using autocomplete, input type,
-name/id/label/placeholder, then optional Jev. Jev receives field descriptions
-and option labels, never persona values or passwords. Jev is asked for the closest
-reasonable available match; confidence below **0.51** is ignored, as are invented
-candidate names. Ordinary Display Name controls have a deterministic mapping and
+name/id/label/placeholder, then optional Jev. Field classification sends field
+descriptions and available fact-type names. Each Choice is paired with an
+independent Noul asking whether a supplied candidate actually fits. Choice
+confidence below **0.51**, fit probability below **0.80**, missing fit answers,
+and invented candidates are rejected. Ordinary Display Name controls have a deterministic mapping and
 default to the persona's full name, with an explicit `display_name` taking priority.
 
 Supplied `credentials.password` and `credentials.new_password` values are filled
@@ -143,28 +144,65 @@ Downloads mode also adds the prepared credentials to that persona's local JSON;
 folder mode retains a private profile overlay without rewriting the source file.
 Existing input is preserved; a conflicting password is highlighted rather than
 overwritten. One-time codes still require a live value from the operator or agent.
+Every Fill all reloads the persisted persona first, so an agent's saved fact
+changes apply without a separate Reload personas click. Identity and saved
+credentials remain bound to the same journey.
 
 After a saved recording and an extension update, the `scripting` permission lets
 the recorder reattach its content scripts to existing app documents. This avoids
 reloading a partly completed application form. Only a known missing receiver
 triggers reattachment; an uncertain fill dispatch is never automatically retried.
 
-Fields are filled sequentially with native setters and input/change events.
+For selection controls, the recorder observes real options before asking Jev
+which option expresses the persona's intended fact. Exact values/labels need
+no model call. Independent semantic matches are batched in one request per
+observed state, with a separate Choice for select/wait/manual. For example, an
+intended degree classification can match a displayed abbreviation without
+rewriting the persona to copy the UI's wording. Selection uses only an observed
+option ID and the shared library's binding and hit-target checks. A changed
+option set, URL or wizard step rejects the stale decision.
+
+Semantic requests include the non-secret categorical intent and option labels.
+Passwords, OTPs, payment data, API credentials and supplied contact identifiers
+are excluded from these requests; those values stay in local filling paths.
+Jev selects from supplied facts/options; it does not generate missing free text.
+At most 255 observed options are considered per control; a larger result needs
+a narrower lookup rather than silently truncating the choice set.
+
+Autocomplete uses a sourced query and waits within the library's 15-second
+choice window. A still-loading widget can obtain one bounded wait decision and
+continue observing the same pending query. Newly appearing options then justify
+a second decision request. It does not repeatedly type while a lookup is pending.
+Option discovery closes its own popup and restores only its own uncommitted
+query. Applying the chosen option may reopen the widget and perform a second
+lookup; the option set must still match. A typed query alone is never success.
+
+Fields are applied sequentially with native setters and input/change events.
 The helper re-resolves a unique live control after framework remounts, waits for
 DOM settling (up to 1.5 seconds), reads its value back, and checks earlier fills
 again at the end. Up to three passes cover newly revealed fields. A successful
 fill means the live control held the value at readback; it does not prove that
 the application accepted or persisted it.
 
+Radio groups and checkboxes can use explicit persona facts such as `"retired":
+"No"` or `"has_registration_number": "No"`. Negated checkbox wording is matched
+against the fact's meaning rather than blindly copying a boolean. Existing radio
+choices and trusted human checkbox edits are preserved. Consent and attestation
+checkboxes remain operator decisions. File inputs and unsupported multi-selects
+are reported as gaps, rather than disappearing from the report. Controls disabled
+by an earlier fill are retained separately as observed skips.
+
 Manual reasons include `unclassified`, `secret` (no usable credential), `no persona value`,
 `no matching option`, `ambiguous option`, `did not stick`, `field changed`,
-`multiple selection requires human`, and `recording stopped`. Single-choice ARIA
+`option match not confirmed`, `options changed`, `options still loading`,
+`decision service unavailable`, `form context changed`, `operator decision`,
+`file requires operator`, `multiple selection requires human`, and
+`recording stopped`. Single-choice ARIA
 comboboxes select one exact matching option from their controlled listbox using
 the library's existing form runtime and choice-binding checks. The recorder
 ships generated copies of these modules; `node recorder/build-runtime.mjs --check`
 verifies they match the library source. Hidden backing inputs are excluded.
-Typing an autocomplete query alone is not a successful selection. Checkboxes,
-radio groups, files and multi-selects still need human action. File events
+File events
 record selected-file metadata and a fixture binding, not file contents or a
 reusable fake path. Human multi-select events include `selectedValues`.
 
@@ -204,6 +242,11 @@ include names, contact/address fields, dates of birth, username, PPSN, payment
 card fields, passwords and one-time codes; see [fields.js](lib/fields.js) for the
 complete list. Additional fact keys are offered to Jev as choices. The event log
 records whether each fill came from persona facts or a generator.
+
+The panel shows the active fill phase. Fill events include model decision
+provenance, fit/confidence, selected labels, batch sizes/timings, final readback,
+and observed skips. These describe assistance decisions, not extra business
+submissions. Stop cancels pending filling; late model replies cannot apply values.
 
 ## Phone a friend
 

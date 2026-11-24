@@ -1,9 +1,9 @@
 'use strict';
 const {requireActionReceipt,requireRecord}=require('./interactions.js');
-const {controlledBinding}=require('./choice-binding.js');
+const {controlledBinding,DEFAULT_WINDOW_MS}=require('./choice-binding.js');
 const controlledList=(snapshot,fieldRef)=>controlledBinding(snapshot,fieldRef).list;
 class ControlledChoice{
-  constructor(ui,{field,windowMs=15000}={}){
+  constructor(ui,{field,windowMs=DEFAULT_WINDOW_MS}={}){
     if(!(typeof field==='string'&&field.trim())&&!(field&&typeof field==='object'&&typeof field.ref==='string'&&field.ref&&Object.keys(field).length===1))throw new Error('explicit_choice_field_required');
     this.ui=ui;this.field=structuredClone(field);this.windowMs=windowMs;
   }

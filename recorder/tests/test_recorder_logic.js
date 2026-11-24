@@ -94,13 +94,14 @@ test('date of birth follows the field layout hint', () => {
   assert.equal(Fields.formatValue('email', 'a@example.test', {}), 'a@example.test');
 });
 
-test('Jev request asks one choice question per field and reads confident answers', async () => {
+test('Jev batches field choices with independent semantic-fit checks', async () => {
   const fields = [{ key: 'f0_0', label: 'Applicant PPS', name: 'x1', inputType: 'text' }, { key: 'f0_1', label: 'Notes' }];
   const request = Jev.buildJevRequest(fields, { ppsn: 'PPSN' });
   assert.equal(request.model, 'jev-latest');
   assert.deepEqual(request.state.fields.f0_0, { label: 'Applicant PPS', name: 'x1', inputType: 'text' });
   assert.equal(request.questions.f0_0.type, 'choice');
-  assert.deepEqual(Object.keys(request.questions.f0_0.criteria), ['ppsn', 'other']);
+  assert.deepEqual(Object.keys(request.questions.f0_0.criteria), ['ppsn']);
+  assert.equal(request.questions.f0_0__fits.type, 'noul');
   const calls = [];
   const fakeFetch = async (url, options) => {
     calls.push({ url, options });
@@ -109,12 +110,13 @@ test('Jev request asks one choice question per field and reads confident answers
       status: 200,
       text: async () => JSON.stringify({ answers: {
         f0_0: { type: 'choice', choice: 'ppsn', confidence: 0.92 },
+        f0_0__fits: { type: 'noul', noul: 0.99 },
         f0_1: { type: 'choice', choice: 'other', confidence: 0.99 },
       } }),
     };
   };
   const types = await Jev.classifyWithJev({ apiKey: 'k', fields, choices: { ppsn: 'PPSN' }, fetch: fakeFetch });
-  assert.deepEqual(types, { f0_0: { type: 'ppsn', confidence: 0.92 } });
+  assert.deepEqual(types, { f0_0: { type: 'ppsn', confidence: 0.92, fit: 0.99 } });
   assert.equal(calls[0].url, 'https://api.typesafe.ai/v1/systemone');
   assert.equal(calls[0].options.headers.Authorization, 'Bearer k');
   assert.deepEqual(Jev.readJevAnswers({ answers: { a: { type: 'choice', choice: 'email', confidence: 0.4 } } }, ['a']), {});

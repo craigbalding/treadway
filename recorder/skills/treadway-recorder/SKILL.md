@@ -101,11 +101,26 @@ tool, or ask for just the received code when mailbox access is unavailable.
 
 Fill all uses supplied password values, generates and saves a missing registration
 password, and defaults Display Name to full name. Jev chooses the closest
-reasonable field type with a 0.51 confidence floor; it receives descriptors and
-candidate types, not persona values. Help with an actually unresolved control or
+reasonable field type with a 0.51 Choice confidence floor and a separate
+0.80 semantic-fit probability gate. Classification receives descriptors/type
+names; semantic option decisions additionally receive non-secret categorical
+intent values and observed options. Credential and contact identifier values
+stay in local filling paths. Help with an actually unresolved control or
 live code; do not turn a helper limitation into a claim that the agent cannot
 assist, or make the human prepare fixture data. A secret reference is not a
 password value. Classification is not proof of a correct or persisted value.
+
+Use the native semantic matching before rewriting a persona just to match UI
+wording. Supplied degree/grade/institution facts can match equivalent displayed
+options. The recorder batches independent decisions, waits for async suggestions,
+and verifies a selected option against the shared Treadway widget binding.
+Prepare explicit radio/checkbox facts for the intended persona (string Yes/No
+values are supported), including negative statements where required. Missing
+facts are not permission to invent a personal status. Existing human choices,
+consent/attestations and file uploads remain operator-controlled. Observe the
+panel's active phase, final fill report and remaining gaps before claiming success.
+Fill all rereads saved personas, so agent fact updates require no timing-sensitive
+Reload personas click. Preserve the same identity and generated credential cache.
 
 For recorder versions with **Phone a friend**, arm `recorder/assist.mjs watch`
 against the profile's actual `Treadway/assistance` Downloads directory. Use the
