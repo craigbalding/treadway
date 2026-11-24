@@ -8,6 +8,7 @@
 <body>
   <header>
     <h1>Treadway Flow Recorder</h1>
+    <p id="extension-version" class="hint"></p>
     <p id="status" class="status idle">No journey running</p>
     <div id="context-clock" class="context-clock" hidden>
       <div class="row">
@@ -33,6 +34,7 @@
     </div>
     <div class="row" id="recording-actions">
       <button id="fill" disabled>Fill all</button>
+      <button id="phone-friend" disabled>Phone a friend</button>
       <button id="authenticated" disabled>Mark authenticated</button>
     </div>
     <label>Account you see (optional)
@@ -100,6 +102,7 @@
   <script src="lib/personas.js"></script>
   <script src="lib/test-context.js"></script>
   <script src="lib/download-export.js"></script>
+  <script src="lib/assistance.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

@@ -146,6 +146,15 @@
       }
     }
     for (const [type, value] of Object.entries(facts)) values[type] = { value, source: 'persona' };
+    // Naming aliases only; preserve explicit and distinct contact values.
+    for (const [type, alternatives] of Object.entries({
+      phone: ['mobile_phone', 'phone_number'], mobile_phone: ['phone'],
+      region: ['county', 'state', 'province'], postcode: ['eircode', 'postal_code', 'zip_code'],
+    })) {
+      if (values[type]) continue;
+      const supplied = alternatives.find(key => values[key]);
+      if (supplied) values[type] = { ...values[supplied], source: 'derived' };
+    }
     if (!values.display_name && values.full_name) values.display_name = { ...values.full_name, source: 'derived' };
     if (!values.username && values.email) values.username = { ...values.email, source: 'derived' };
     for (const type of ['password', 'new_password', 'one_time_code']) {

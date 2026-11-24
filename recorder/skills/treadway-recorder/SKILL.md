@@ -107,6 +107,23 @@ live code; do not turn a helper limitation into a claim that the agent cannot
 assist, or make the human prepare fixture data. A secret reference is not a
 password value. Classification is not proof of a correct or persisted value.
 
+For recorder versions with **Phone a friend**, arm `recorder/assist.mjs watch`
+against the profile's actual `Treadway/assistance` Downloads directory. Use the
+harness's task-completion wake mechanism (Claude Code background task), or a
+bounded foreground watch. A detached process is not a listener. This assistance
+inbox is separate from Coord waiting; consult the recorder README for commands
+and supported harnesses.
+
+Handle each request as one gap bundle in the existing agent turn. Prepare
+coherent missing facts, then use `assist.mjs complete` with the request, owned
+BrowserManager session and private facts JSON. That command updates the same
+persona and invokes the exact panel Fill all function. Do not type into the app
+through separate CDP/DOM filling, manually pick dropdowns, patch framework state
+or substitute another automation engine. Preserve email, credentials and human
+values/choices. If native filling cannot handle a control, report a recorder
+gap; do not mask it or count manual work as extension coverage. Report verified
+counts/remaining gaps and re-arm the watcher.
+
 Coordinate with other agents before recording: SafeYolo's declared context is
 agent-wide, not profile-local. A testing agent must not overwrite the recorder's
 declaration or mix independent target work into the demonstration. Maintain the

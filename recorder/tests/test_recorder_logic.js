@@ -12,6 +12,27 @@ const { webcrypto } = require('node:crypto');
 
 const example = fs.readFileSync(path.join(__dirname, '..', 'examples', 'personas.json'), 'utf8');
 
+test('assistance watcher actually runs through a symlinked CLI entry point', () => {
+  const directory = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'recorder-assist-entry-'));
+  try {
+    const entry = path.join(directory, 'assist.mjs');
+    fs.symlinkSync(path.join(__dirname, '../assist.mjs'), entry);
+    const requestId = 'assist-11111111-2222-3333-4444-555555555555';
+    fs.writeFileSync(path.join(directory, requestId + '.json'), JSON.stringify({
+      schema: 'treadway.assistance/1', requestId, extensionId: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      run: 'synthetic-run', target: { tabId: 1, documentInstanceId: 'synthetic-document' }, form: [],
+    }));
+    const output = require('node:child_process').execFileSync(process.execPath,
+      [entry, 'watch', directory, '1'], { encoding: 'utf8', timeout: 5000 });
+    assert.equal(JSON.parse(output).requestId, requestId);
+    assert.equal(JSON.parse(output).timeout, false);
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('packaged browser mechanics exactly match the existing library sources', () => {
+  require('node:child_process').execFileSync(process.execPath, [path.join(__dirname, '../build-runtime.mjs'), '--check']);
+});
+
 test('PPSN check character follows the published algorithm', () => {
   assert.equal(Personas.ppsnCheckCharacter('1234567', ''), 'T');
   assert.equal(Personas.ppsnCheckCharacter('1234567', 'A'), 'F');
@@ -175,4 +196,33 @@ test('an unknown existing-account password is not invented without a registratio
     read: async () => ({}), write: async () => { throw new Error('must stay passive'); }, crypto: webcrypto });
   assert.equal(prepared.generated, false);
   assert.equal(prepared.persona.credentials.password, undefined);
+});
+
+
+test('profile aliases preserve distinct phones and previous identifiers', () => {
+  const [persona] = Personas.parsePersonas(JSON.stringify({ personas: [{ id: 'p', role: 'r', facts: {
+    mobile_phone: '5550101', home_phone: '5550202', county: 'Example County', eircode: 'X00 X000',
+    family_name: 'Example', ppsn: '1234567FA',
+  } }] }));
+  const values = Personas.personaValues(persona);
+  assert.equal(values.phone.value, '5550101');
+  assert.equal(values.home_phone.value, '5550202');
+  assert.equal(values.region.value, 'Example County');
+  assert.equal(values.postcode.value, 'X00 X000');
+  assert.equal(Fields.ruleType({ name: 'previousSurname' }).type, 'previous_family_name');
+  assert.equal(Fields.ruleType({ name: 'previousPpsn' }).type, 'previous_ppsn');
+  assert.equal(Fields.ruleType({ name: 'homePhoneNumber' }).type, 'home_phone');
+  assert.equal(values.previous_ppsn, undefined);
+});
+
+test('assistance merges persona facts without permitting identity or secret changes', () => {
+  const Assistance = require('../lib/assistance.js');
+  const persona = Personas.parsePersonas(example)[0];
+  const updated = Assistance.mergeFacts(persona, { institution: 'Example College' });
+  assert.equal(updated.facts.institution, 'Example College');
+  assert.equal(updated.facts.email, persona.facts.email);
+  assert.deepEqual(updated.credentials, persona.credentials);
+  for (const facts of [{ email: 'different@example.test' }, { password: 'Synthetic!7' }, { institution: '' }]) {
+    assert.throws(() => Assistance.mergeFacts(persona, facts));
+  }
 });

@@ -2,6 +2,8 @@
   // Injected in one explicit document. No React internals, DOM attribute writes, or
   // passive validation triggers. References expire when their node is replaced.
   const KEY = '__treadwayFormV3';
+  const randomId = () => typeof crypto.randomUUID === 'function' ? crypto.randomUUID() :
+    Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
   const clean = x => String(x || '').replace(/\s+/g, ' ').trim();
   const visible = e => {
     const r = e.getBoundingClientRect(), s = getComputedStyle(e);
@@ -18,8 +20,8 @@
     (['submit', 'button', 'reset'].includes(e.type) ? e.value : '') || e.title || '';
   const signature = e => [e.tagName, e.id, e.getAttribute('name'), e.getAttribute('role'), e.type, label(e)];
   let state = window[KEY];
-  if (!state) state = window[KEY] = { documentId: crypto.randomUUID(), next: 0, nodes: new Map(), ids: new WeakMap(), events: [] };
-  if (state.url !== location.href) { state.url=location.href; state.locationId=crypto.randomUUID(); }
+  if (!state) state = window[KEY] = { documentId: randomId(), next: 0, nodes: new Map(), ids: new WeakMap(), events: [] };
+  if (state.url !== location.href) { state.url=location.href; state.locationId=randomId(); }
   const publicURL = x => { try { const u=new URL(x,location.href); return u.origin+u.pathname; } catch { return null; } };
   const ref = e => {
     const previous=state.nodes.get(state.ids.get(e));
@@ -59,6 +61,18 @@
       disabled:container ? choiceDisabled(container) : null,
       listboxRefs:container ? lists.filter(e => e === container || container.contains(e)).map(ref) : []};
   });
+  // Modal listboxes (for example MUI Select) hide the controller's background
+  // wrapper from assistive technology while leaving its owned popup visible.
+  // Accept only that expanded, uniquely bound controller; hidden options and
+  // an explicitly hidden controller remain unusable.
+  const controllerVisible = (field, lists) => {
+    if (!visible(field) || field.getAttribute('aria-hidden') === 'true') return false;
+    if (!field.closest('[aria-hidden="true"]')) return true;
+    if (field.getAttribute('aria-expanded') !== 'true' || field.getAttribute('aria-haspopup') !== 'listbox') return false;
+    const targets = controlTargets(field, lists);
+    return targets.length > 0 && targets.every(target => target.matchCount === 1 && !target.disabled) &&
+      targets.flatMap(target => target.listboxRefs).length === 1;
+  };
 
   if (command === 'inspect') {
     for (const [id,entry] of state.nodes) if(!entry.node.isConnected) state.nodes.delete(id);
@@ -97,7 +111,7 @@
     for (const field of fields) if (field.role === 'combobox') {
       const node = resolve(field.ref);
       field.controlledElements = controlTargets(node,listNodes);
-      field.choiceUsable = choiceVisible(node) && !choiceDisabled(node) && !field.readonly;
+      field.choiceUsable = controllerVisible(node, listNodes) && !choiceDisabled(node) && !field.readonly;
     }
     const listboxes = listNodes.map(e => ({
       ref: ref(e), id: e.id || null, disabled:choiceDisabled(e),
@@ -166,7 +180,7 @@
           relations[0].containerRef!==c.containerRef || relations[0].controlId!==c.controlId ||
           relations[0].listboxRef!==c.listboxRef || e.closest('[role="listbox"]')!==list)
         throw new Error('choice_association_changed_inspect_again');
-      if (field.getAttribute('role')!=='combobox' || !choiceVisible(field) || choiceDisabled(field) ||
+      if (field.getAttribute('role')!=='combobox' || !controllerVisible(field, lists) || choiceDisabled(field) ||
           field.readOnly || field.getAttribute('aria-readonly')==='true' || relations[0].disabled ||
           choiceDisabled(list) || !choiceVisible(e) || choiceDisabled(e)) throw new Error('choice_not_usable');
     }

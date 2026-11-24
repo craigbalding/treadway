@@ -72,6 +72,27 @@ test('controlled wrapper listbox relationships',{skip:!process.env.CHROME_BIN,ti
       assert.equal(field.controlledElements.length,1);
       assert.equal((await choose(form,s)).actionDispatch,'dispatched');
     });
+    await t.test('expanded modal controller can own a visible portal outside its ARIA-hidden wrapper',async()=>{
+      const form=await reset();
+      await evaluate(`const query=document.querySelector('#query'),wrapper=document.createElement('div');
+        query.before(wrapper);wrapper.append(query);wrapper.setAttribute('aria-hidden','true');
+        query.setAttribute('aria-haspopup','listbox');`);
+      const snapshot=await form.inspect();
+      assert.equal(selection(snapshot).field.choiceUsable,true);
+      assert.equal((await choose(form,snapshot)).actionDispatch,'dispatched');
+      assert.deepEqual(await evaluate('window.picks'),[{value:'chosen',trusted:true}]);
+    });
+    for(const [name,mutation] of [
+      ['closed background controller', `document.querySelector('#query').setAttribute('aria-expanded','false')`],
+      ['explicitly hidden controller', `document.querySelector('#query').setAttribute('aria-hidden','true')`],
+    ]) await t.test(name+' cannot use modal-controller visibility',async()=>{
+      const form=await reset();
+      await evaluate(`const query=document.querySelector('#query'),wrapper=document.createElement('div');
+        query.before(wrapper);wrapper.append(query);wrapper.setAttribute('aria-hidden','true');
+        query.setAttribute('aria-haspopup','listbox');${mutation}`);
+      await assert.rejects(choose(form,await form.inspect()),/field_not_usable/);
+      assert.deepEqual(await evaluate('window.picks'),[]);
+    });
     await t.test('explicit query retains focus and its open choices when blur clears the search input',async()=>{
       const form=await reset();
       await evaluate(`window.queryBlurs=0;const query=document.querySelector('#query'),panel=document.querySelector('#panel');

@@ -8,6 +8,44 @@ const base = { requestId: 'chrome-1', tabId: 7, frameId: 0, documentId: 'doc-a',
   url: 'https://app.example.test/claims', method: 'POST', type: 'xmlhttprequest', timeStamp: 1000 };
 const headers = (id) => [{ name: 'X-SafeYolo-Request-Id', value: id }];
 
+test('a missing read receiver reattaches content scripts, but an uncertain message does not retry', async () => {
+  let attached = false; let injections = 0;
+  const h = createHarness({
+    executeScript: async () => { attached = true; injections++; },
+    frameMessage: async () => {
+      if (!attached) throw new Error('Could not establish connection. Receiving end does not exist.');
+      return { flushed: true, failures: [] };
+    },
+  });
+  await h.start();
+  assert.ok(injections > 0);
+  let retries = 0;
+  const uncertain = createHarness({
+    executeScript: async () => { retries++; }, frameMessage: async () => { throw new Error('Message port closed'); },
+  });
+  await uncertain.start();
+  assert.equal(retries, 0);
+});
+
+test('assistance binds one pending request to its actual run and document, then rejects stale completion', async () => {
+  let documentId = 'doc-instance-a';
+  const h = createHarness({ frameMessage: message => message.kind === 'inspect-assistance' ?
+    { url: 'https://app.example.test/form', documentInstanceId: documentId, fields: [] } : {} });
+  await h.start();
+  const persona = { ...h.persona, facts: { email: 'casey@example.test', password: 'PrivateSynthetic!7' }, credentials: { password: 'PrivateSynthetic!7' } };
+  const first = await h.command({ kind: 'assistance-request', persona });
+  assert.equal(first.schema, 'treadway.assistance/1');
+  assert.equal(JSON.stringify(first).includes('PrivateSynthetic!7'), false);
+  assert.equal(first.target.tabId, 7);
+  assert.equal((await h.command({ kind: 'assistance-request', persona })).requestId, first.requestId);
+  documentId = 'doc-instance-b';
+  assert.match((await h.command({ kind: 'assistance-check', requestId: first.requestId })).error, /form changed/);
+  const replacement = await h.command({ kind: 'assistance-request', persona });
+  assert.notEqual(replacement.requestId, first.requestId);
+  await h.command({ kind: 'stop' });
+  assert.match((await h.command({ kind: 'assistance-check', requestId: replacement.requestId })).error, /no longer active/);
+});
+
 test('concurrent Starts declare only the accepted journey', async () => {
   const h = createHarness();
   const answers = await Promise.all([h.start('First journey'), h.start('Second journey')]);

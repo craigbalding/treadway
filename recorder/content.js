@@ -81,6 +81,23 @@
   }, true);
   document.addEventListener('change', fieldChanged, true);
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
+    if (message.kind === 'inspect-assistance' && window === window.top) {
+      reply({ url: location.href, documentInstanceId,
+        fields: [...document.querySelectorAll('input,textarea,select,[role="combobox"],[role="radiogroup"]')]
+          .filter(element => element.getBoundingClientRect().width && element.getBoundingClientRect().height &&
+            element.getAttribute('aria-hidden') !== 'true' && element.type !== 'hidden')
+          .map(element => {
+            const field = PageFill.describeField(element);
+            const secret = element.type === 'password' || Fields.SECRET_TYPES.has(Fields.ruleType(field)?.type);
+            return { field, selectors: PageFill.selectorsFor(element), role: element.getAttribute('role'),
+              required: element.required || element.getAttribute('aria-required') === 'true',
+              disabled: element.disabled || element.getAttribute('aria-disabled') === 'true',
+              hasValue: Boolean(element.value),
+              ...(secret ? { secret: true } : { value: element.value ?? element.textContent?.trim(),
+                ...(['radio', 'checkbox'].includes(element.type) ? { checked: element.checked } : {}) }) };
+          }) });
+      return false;
+    }
     if (message.kind === 'inspect-fill' && window === window.top) {
       reply(PageFill.credentialNeeds(document));
       return false;

@@ -28,7 +28,7 @@
       state.fields[field.key] = describe(field);
       questions[field.key] = {
         type: 'choice',
-        instructions: 'Choose the closest matching persona field type for "' + field.key + '". Make your best guess even if its label differs. Use other only when no candidate reasonably fits or the control is not a data field. Do not abstain merely because confidence is low.',
+        instructions: 'Choose the closest matching persona field type for "' + field.key + '". Make your best guess about equivalent labels. Match the same fact, not just a related subject: an institution is not a qualification, a previous identifier is not a current identifier, and home and mobile phone numbers differ. Use other when no candidate reasonably fits or the control is not a data field.',
         criteria,
       };
     }

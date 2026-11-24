@@ -32,12 +32,14 @@ function createHarness(options = {}) {
     },
     chrome: {
       sidePanel: { setPanelBehavior: async () => {} }, webRequest, webNavigation,
+      scripting: { executeScript: async options_ => { if (options.executeScript) return options.executeScript(options_); } },
       tabs: { query: async () => [{ id: 7, url: 'https://app.example.test/form' }],
         sendMessage: async (_id, message) => {
           if (options.frameMessage) return options.frameMessage(message);
           return { flushed: true, failures: [] };
         } },
-      runtime: { sendMessage: async (message) => { notices.push(message); }, onMessage: { addListener(fn) { listener = fn; } } },
+      runtime: { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', getManifest: () => ({ version: '0.1.5' }),
+        sendMessage: async (message) => { notices.push(message); }, onMessage: { addListener(fn) { listener = fn; } } },
       storage: {
         local: { get: async () => ({ settings: { safeyoloKey: 'fixture-key', ttlMinutes: 20, ...options.settings } }) },
         session: {

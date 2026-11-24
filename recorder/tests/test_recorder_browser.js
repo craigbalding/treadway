@@ -19,6 +19,35 @@ try {
 const extensionRoot = path.join(__dirname, '..');
 const repositoryRoot = path.join(extensionRoot, '..');
 const AGENT = 'browser-agent';
+const assistanceProfile = `<!doctype html><html><body><form onsubmit="event.preventDefault();window.submissions++">
+<label>Email<input name="email" value="human@example.test"></label>
+<label>Mobile Phone Number<input name="mobilePhoneNumber"></label>
+<label>Previous Surname<input name="previousSurname"></label>
+<label>Previous PPSN<input name="previousPpsn"></label>
+<label id="county-label">County</label><div><div tabindex="0" role="combobox" id="county"
+ aria-labelledby="county-label county" aria-haspopup="listbox" aria-expanded="false" style="width:200px;height:30px">-- Select --</div>
+<input aria-hidden="true" tabindex="-1" name="county" value="" style="width:200px;height:30px;opacity:0"></div>
+<label>Institution<input id="institution" name="institution" role="combobox" autocomplete="off"></label>
+<label>Year Obtained<input name="yearObtained"></label>
+<label>Existing password<input type="password" value="NeverSendThisPassword!7"></label><button>Save</button></form>
+<script>
+window.submissions=0;
+const county=document.getElementById('county');
+county.addEventListener('mousedown',()=>{
+ const list=document.createElement('ul');list.id='county-list';list.setAttribute('role','listbox');
+ const option=document.createElement('li');option.setAttribute('role','option');option.textContent='Dublin';
+ option.onclick=()=>{county.textContent='Dublin';county.nextElementSibling.value='D';county.setAttribute('aria-expanded','false');county.parentElement.removeAttribute('aria-hidden');list.remove()};
+ list.append(option);document.body.append(list);county.parentElement.setAttribute('aria-hidden','true');county.setAttribute('aria-expanded','true');county.setAttribute('aria-controls',list.id);
+});
+const institution=document.getElementById('institution');
+institution.addEventListener('input',()=>{
+ document.getElementById('college-list')?.remove();
+ const list=document.createElement('ul');list.id='college-list';list.setAttribute('role','listbox');
+ const option=document.createElement('li');option.setAttribute('role','option');option.textContent='Example College';
+ option.onclick=()=>{institution.value='Example College';institution.dataset.committed='yes';institution.setAttribute('aria-expanded','false');list.remove()};
+ list.append(option);document.body.append(list);institution.setAttribute('aria-controls',list.id);institution.setAttribute('aria-expanded','true');
+});
+</script></body></html>`;
 
 const formPage = `<!doctype html><html><head><meta charset="utf-8"><title>Claim form</title></head><body>
 <div id="root"></div>
@@ -116,6 +145,10 @@ function fakeSafeyolo() {
           return response.end();
         }
         if (url.pathname === '/api/claims') return json(201, { id: 'claim-1' });
+        if (url.pathname === '/assistance-profile') {
+          response.writeHead(200, { 'Content-Type': 'text/html' });
+          return response.end(assistanceProfile);
+        }
         if (url.pathname === '/add-details') {
           response.writeHead(200, { 'Content-Type': 'text/html' });
           return response.end('<form id="details" onsubmit="event.preventDefault()">' +
@@ -147,7 +180,7 @@ const missing = !playwright ? 'playwright is not installed' :
 if (missing && process.env.RECORDER_REQUIRE_BROWSER === '1') throw new Error(missing);
 
 for (const mode of ['stable', 'remount']) {
-test('records ' + mode + ' React controls, exact flows, frames and secret policy', { skip: missing, timeout: 60000 }, async (t) => {
+test('records ' + mode + ' React controls, exact flows, frames and secret policy', { skip: missing, timeout: 120000 }, async (t) => {
   const proxy = await fakeSafeyolo();
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-recorder-'));
   const downloadRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-recorder-downloads-'));
@@ -171,7 +204,8 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
     chromiumSandbox: true,
     ...(process.env.RECORDER_CHROMIUM_BIN ? { executablePath: process.env.RECORDER_CHROMIUM_BIN } : {}),
     proxy: { server: 'http://127.0.0.1:' + proxy.port, bypass: '<-loopback>' },
-    args: ['--disable-extensions-except=' + extensionRoot, '--load-extension=' + extensionRoot],
+    args: ['--disable-extensions-except=' + extensionRoot, '--load-extension=' + extensionRoot,
+      '--remote-debugging-port=0', '--enable-unsafe-extension-debugging'],
   });
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const extensionId = new URL(worker.url()).host;
@@ -398,6 +432,49 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   assert.equal(await details.getByLabel('New password', { exact: true }).inputValue(), 'HumanChosenPassword!8');
   assert.equal(await details.getByLabel('Confirm password', { exact: true }).inputValue(), '');
 
+  if (mode === 'remount') {
+    const { watch, complete } = await import('../assist.mjs');
+    const profilePage = await context.newPage();
+    await profilePage.goto('http://app.example.test/assistance-profile');
+    await profilePage.bringToFront();
+    await panel.getByRole('button', { name: 'Phone a friend', exact: true }).click();
+    await panel.locator('#messages').getByText('Help requested.', { exact: false }).first().waitFor();
+    const inbox = path.join(downloadRoot, 'Treadway', 'assistance');
+    const pending = await watch(inbox, { timeout: 1, interval: 0.02 });
+    assert.equal(pending.timeout, false);
+    const bundle = fs.readFileSync(pending.requestFile, 'utf8');
+    assert.equal(bundle.includes('NeverSendThisPassword!7'), false);
+    assert.equal(bundle.includes(generatedPassword), false);
+    assert.equal(bundle.includes('agent-key'), false);
+    const facts = path.join(profile, 'assistance-facts.json');
+    fs.writeFileSync(facts, JSON.stringify({ institution: 'Example College', year_obtained: '2010' }));
+    const [port, browser_path] = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').trim().split('\n');
+    const session = path.join(profile, 'owned-session.json');
+    fs.writeFileSync(session, JSON.stringify({ session: { port: Number(port), browser_path, generation: 'fixture-owned-generation' } }));
+    const result = await complete(pending.requestFile, session, facts);
+    assert.equal(result.filled, 4, JSON.stringify(result));
+    assert.equal(await profilePage.locator('#county').textContent(), 'Dublin');
+    assert.equal(await profilePage.locator('input[aria-hidden=true]').inputValue(), 'D');
+    assert.equal(await profilePage.locator('#institution').getAttribute('data-committed'), 'yes', 'autocomplete selected its linked option');
+    assert.equal(await profilePage.getByLabel('Year Obtained').inputValue(), '2010');
+    assert.equal(await profilePage.getByLabel('Email').inputValue(), 'human@example.test');
+    assert.equal(await profilePage.getByLabel('Previous Surname').inputValue(), '');
+    assert.equal(await profilePage.getByLabel('Previous PPSN').inputValue(), '');
+    assert.equal(await profilePage.evaluate(() => window.submissions), 0);
+    assert.equal(await panel.evaluate(async () => JSON.parse((await chrome.storage.local.get('personaText')).personaText).personas[0].facts.institution), 'Example College');
+    assert.equal((await watch(inbox, { timeout: 0.05, interval: 0.01 })).timeout, true);
+    await assert.rejects(complete(pending.requestFile, session, facts), /no longer active/);
+    await panel.getByRole('button', { name: 'Phone a friend', exact: true }).click();
+    await profilePage.goto('http://app.example.test/assistance-profile?new-document=1');
+    const active = await worker.evaluate(async () => (await chrome.storage.session.get('pendingAssistance')).pendingAssistance);
+    const rejected = await panel.evaluate(async requestId => {
+      try { await treadwayCompleteAssistance({ requestId, facts: { institution: 'Different College' } }); return false; }
+      catch (error) { return error.message; }
+    }, active.requestId);
+    assert.match(rejected, /form changed/);
+    assert.equal(await profilePage.locator('#institution').inputValue(), '');
+  }
+
   await app.evaluate(() => { window.delayed = fetch('/api/delayed'); });
   await waitFor(() => Boolean(proxy.state.releaseResponse), 'pending request reaches fixture');
   await panel.locator('#stop').click();
@@ -477,6 +554,36 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
     assert.equal(await panel.evaluate(() => window.pickerCalls), 0);
     assert.equal(fs.readdirSync(path.join(downloadRoot, 'Treadway', 'journeys')).length, 1,
       'late outcomes replace the same saved recording');
+    // After saving, extension reload must preserve the app's current document.
+    const retained = context.pages().find(page => page.url().includes('/assistance-profile?new-document=1'));
+    await retained.getByLabel('Email').fill('retained-human@example.test');
+    const [debugPort, debugPath] = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').trim().split('\n');
+    const control = new WebSocket('ws://127.0.0.1:' + debugPort + debugPath);
+    await new Promise((resolve, reject) => { control.addEventListener('open', resolve, { once: true }); control.addEventListener('error', reject, { once: true }); });
+    try {
+      const loaded = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Unpacked extension reload timed out')), 10000);
+        control.addEventListener('message', ({ data }) => {
+          const response = JSON.parse(String(data));
+          if (response.id === 1) { clearTimeout(timer); response.error ? reject(new Error(response.error.message)) : resolve(response.result); }
+        });
+      });
+      control.send(JSON.stringify({ id: 1, method: 'Extensions.loadUnpacked', params: { path: extensionRoot } }));
+      assert.equal((await loaded).id, extensionId);
+    } finally { control.close(); }
+    const resumedPanel = await context.newPage();
+    await resumedPanel.goto('chrome-extension://' + extensionId + '/sidepanel.html');
+    await resumedPanel.locator('#persona option').first().waitFor({ state: 'attached' });
+    await resumedPanel.locator('#journey-name').fill('Resume existing profile');
+    await retained.bringToFront();
+    await resumedPanel.locator('#start').click();
+    await waitFor(async () => (await resumedPanel.locator('#fill').isEnabled()), 'new capture ready after extension reload');
+    await resumedPanel.locator('#fill').click();
+    await waitFor(async () => (await retained.locator('#institution').getAttribute('data-committed')) === 'yes', 'existing document reattached and autocomplete selected');
+    assert.equal(await retained.getByLabel('Email').inputValue(), 'retained-human@example.test');
+    assert.equal(retained.url().endsWith('?new-document=1'), true, 'application document was not reloaded');
+    await resumedPanel.locator('#stop').click();
+    await resumedPanel.locator('#messages').getByText(/Saved \d+ events/).first().waitFor();
   }
 
   if (mode === 'stable') {

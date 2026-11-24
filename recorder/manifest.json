@@ -1,18 +1,18 @@
 {
   "manifest_version": 3,
   "name": "Treadway Flow Recorder",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Record labelled web journeys under a SafeYOLO test context so an agent can build Treadway flows.",
   "minimum_chrome_version": "116",
   "action": { "default_title": "Open Treadway Flow Recorder" },
   "side_panel": { "default_path": "sidepanel.html" },
   "background": { "service_worker": "background.js" },
-  "permissions": ["sidePanel", "storage", "tabs", "webRequest", "webNavigation", "downloads"],
+  "permissions": ["sidePanel", "storage", "tabs", "webRequest", "webNavigation", "downloads", "scripting"],
   "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["lib/fields.js", "lib/page-fill.js", "content.js"],
+      "js": ["lib/fields.js", "lib/form-runtime.js", "lib/choice-binding.js", "lib/page-fill.js", "content.js"],
       "all_frames": true,
       "run_at": "document_idle"
     }
