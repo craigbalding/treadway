@@ -1,225 +1,81 @@
 'use strict';
-// Real unpacked-extension UI and agent completion against an owned local
-// Chromium fixture. No target application or external provider is contacted.
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const http = require('node:http');
-const os = require('node:os');
-const path = require('node:path');
-const { pathToFileURL } = require('node:url');
-let playwright;
-try { playwright = require(process.env.RECORDER_PLAYWRIGHT || 'playwright'); } catch (_) {}
-if (!playwright && process.env.RECORDER_REQUIRE_BROWSER === '1') throw new Error('playwright is required for persona manager browser checks');
-const extension = path.join(__dirname, '..');
-const fixture = { personas: [
-  { id: 'alpha', role: 'applicant', label: 'Alex Example', referenceDate: '2026-11-24',
-    facts: { given_name: 'Alex', family_name: 'Example', email: 'alex@example.test', city: 'Original Town' },
-    credentials: { password: 'NeverChangeFixture!7' },
-    description: 'Alex is currently employed at Example Academy and seeks occasional assessment work while retaining a regular teaching role.',
-    preferences: { minimum_remote_days: 2 }, histories: { education: [{ id: 'degree-a', institution: 'Example Academy', qualification: 'Honours bachelor', awardDate: '2005-06-30' }] } },
-  { id: 'beta', role: 'reviewer', label: 'Sam Sample', facts: { given_name: 'Sam', email: 'sam@example.test' },
-    description: 'Sam reviews synthetic applications for a fictional service and is available for a mixture of home and office work.' },
-] };
-
-async function proxyFixture() {
-  let context = null;
-  const server = http.createServer((request, response) => {
-    const url = new URL(request.url, 'http://' + request.headers.host); let body = '';
-    request.on('data', part => body += part);
-    request.on('end', () => {
-      const json = (status, value) => { response.writeHead(status, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(value)); };
-      if (url.hostname === '_safeyolo.proxy.internal') {
-        if (request.method === 'GET') return json(200, { agent: 'browser-agent', context });
-        if (request.method === 'DELETE') { context = null; return json(200, { status: 'cleared' }); }
-        const declaration = JSON.parse(body); context = Object.fromEntries(declaration.context.split(';').map(part => part.split('=')));
-        return json(200, { agent: 'browser-agent', context, expires_in: declaration.ttl });
-      }
-      if (url.hostname === 'app.example.test') {
-        response.writeHead(200, { 'Content-Type': 'text/html' });
-        return response.end('<!doctype html><label>Given name<input name="givenName" autocomplete="given-name"></label><button onclick="window.submissions=(window.submissions||0)+1">Save</button>');
-      }
-      response.writeHead(404); response.end();
-    });
-  });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  return { server, port: server.address().port };
-}
-async function until(check, message, timeout = 10000) {
-  const deadline = Date.now() + timeout;
-  do { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 100)); } while (Date.now() < deadline);
-  throw new Error(message);
-}
-
-for (const mode of ['downloads', 'folder']) {
-test('persona manager creates, edits, enriches and fills through the extension in ' + mode + ' mode', { skip: !playwright, timeout: 90000 }, async t => {
-  const local = await proxyFixture();
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-persona-ui-'));
-  const downloads = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-persona-downloads-'));
-  fs.mkdirSync(path.join(profile, 'Default'));
-  fs.writeFileSync(path.join(profile, 'Default', 'Preferences'), JSON.stringify({ download: { default_directory: downloads, prompt_for_download: false, directory_upgrade: true } }));
-  let browser, panel, complete = false;
-  t.after(async () => {
-    if (!complete && panel) t.diagnostic(await panel.evaluate(() => ({ messages: document.querySelector('#messages')?.textContent,
-      work: document.querySelector('#persona-work-status')?.textContent, editor: document.querySelector('#persona-editor-state')?.textContent })).catch(e => ({ error: e.message })));
-    await browser?.close(); local.server.closeAllConnections(); local.server.close(); fs.rmSync(profile, { recursive: true, force: true }); fs.rmSync(downloads, { recursive: true, force: true });
-  });
-  browser = await playwright.chromium.launchPersistentContext(profile, { headless: true, channel: 'chromium', chromiumSandbox: true,
-    ...(process.env.RECORDER_CHROMIUM_BIN ? { executablePath: process.env.RECORDER_CHROMIUM_BIN } : {}),
-    proxy: { server: 'http://127.0.0.1:' + local.port, bypass: '<-loopback>' },
-    args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension, '--remote-debugging-port=0', '--enable-unsafe-extension-debugging'] });
-  const worker = browser.serviceWorkers()[0] || await browser.waitForEvent('serviceworker');
-  const id = new URL(worker.url()).host;
-  await worker.evaluate(async ({ text, mode }) => chrome.storage.local.set({ personaText: text, captureStorage: mode,
-    settings: { safeyoloKey: 'fixture-agent-key', jevKey: '', ttlMinutes: 20, recordSecrets: false } }), { text: JSON.stringify(fixture), mode });
-  const browserCDP = await browser.browser().newBrowserCDPSession();
-  await browserCDP.send('Browser.setDownloadBehavior', { behavior: 'default' }); await browserCDP.detach();
-  panel = await browser.newPage(); const errors = []; panel.on('pageerror', e => errors.push(e.message));
-  await panel.goto('chrome-extension://' + id + '/sidepanel.html');
-  if (mode === 'folder') {
-    await panel.evaluate(async text => {
-      const dir = await navigator.storage.getDirectory();
-      const out = await (await dir.getFileHandle('personas.json', { create: true })).createWritable(); await out.write(text); await out.close();
-      const db = await new Promise((resolve, reject) => { const r = indexedDB.open('treadway-recorder', 1); r.onupgradeneeded = () => r.result.createObjectStore('handles'); r.onsuccess = () => resolve(r.result); r.onerror = reject; });
-      await new Promise((resolve, reject) => { const tx = db.transaction('handles', 'readwrite'); tx.objectStore('handles').put(dir, 'folder'); tx.oncomplete = resolve; tx.onerror = reject; }); db.close();
-    }, JSON.stringify(fixture)); await panel.reload();
-  }
-  const read = () => panel.evaluate(async mode => {
-    if (mode === 'downloads') return JSON.parse((await chrome.storage.local.get('personaText')).personaText);
-    const dir = await navigator.storage.getDirectory(); return JSON.parse(await (await (await dir.getFileHandle('personas.json')).getFile()).text());
-  }, mode);
-  const requestPath = async requestId => {
-    let file;
-    await until(async () => {
-      const items = await worker.evaluate(id => chrome.downloads.search({ filenameRegex: id }), requestId);
-      file = items.find(item => item.state === 'complete')?.filename; return file && fs.existsSync(file);
-    }, 'persona request was not exported');
-    return file;
-  };
-  await panel.locator('[data-inspect-persona="alpha"]').waitFor({ state: 'attached' });
-  await panel.locator('#persona-manager summary').first().click();
-  await panel.locator('[data-inspect-persona="alpha"]').click();
-  await panel.locator('[data-persona-field="/facts/city"]').fill('Operator Town');
-  await panel.locator('#persona-edit-description').fill(fixture.personas[0].description + ' Alex requires at least two working days at home each week.');
-  await panel.locator('#persona-save').click();
-  await until(async () => (await panel.locator('#persona-editor-state').textContent()).includes('Revision 2'), 'manual correction save not acknowledged');
-  await until(async () => (await read()).personas[0].facts.city === 'Operator Town', 'manual correction not persisted');
-  let alpha = (await read()).personas[0];
-  assert.equal(alpha.revision, 2); assert.equal(alpha.credentials.password, 'NeverChangeFixture!7');
-  assert(alpha.overrides.includes('/facts/city'));
-
-  await panel.locator('[data-persona-id="alpha"]').check();
-  await panel.locator('[data-persona-id="beta"]').check();
-  await panel.locator('#persona-brief').fill('A fictional recruitment service accepts applicants and reviewers.');
-  await panel.locator('#persona-instructions').fill('Add concrete education and availability context while preserving my corrections.');
-  await panel.locator('#persona-enrich').click();
-  await until(async () => (await panel.locator('#persona-work-status').textContent()).includes('Waiting for your agent'), 'work not queued');
-  const pending = await panel.evaluate(async () => (await chrome.runtime.sendMessage({ kind: 'persona-work-status' })).request);
-  assert.equal(pending.operation, 'enrich'); assert.deepEqual(pending.personaIds.sort(), ['alpha', 'beta']);
-  await panel.evaluate(requestId => globalThis.treadwayAcknowledgePersonaWork({ requestId }), pending.requestId);
-  await until(async () => (await panel.locator('#persona-work-status').textContent()).includes('Agent acknowledged'), 'acknowledgement not shown');
-  const current = (await read()).personas;
-  const candidates = current.map(p => ({ ...p, facts: { ...p.facts, ...(p.id === 'alpha' ? { city: 'Agent Town', qualification_level: 'Honours bachelor' } : { availability: 'Three days per week' }) } }));
-  // Use the same owned-session completion CLI the paired agent uses.
-  const [port, browserPath] = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').trim().split('\n');
-  const sessionFile = path.join(profile, 'owned-session.json');
-  fs.writeFileSync(sessionFile, JSON.stringify({ session: { generation: 'persona-manager-fixture', port: Number(port), browser_path: browserPath } }));
-  const payload = path.join(profile, 'candidates.json'); fs.writeFileSync(payload, JSON.stringify({ personas: candidates }));
-  const requestFile = await requestPath(pending.requestId);
-  assert.equal(fs.readFileSync(requestFile, 'utf8').includes('NeverChangeFixture!7'), false, 'request must not export credentials');
-  const bridge = await import(pathToFileURL(path.join(extension, 'assist.mjs')).href);
-  const watched = await bridge.watch(path.dirname(requestFile), { timeout: 0.2, interval: 0.01 });
-  assert.equal(watched.requestId, pending.requestId, 'normal harness watcher must discover the exported persona request');
-  const completed = await bridge.complete(requestFile, sessionFile, payload);
-  assert.equal(completed.requestId, pending.requestId);
-  await panel.locator('#persona-apply-reviewed').waitFor();
-  const cityChange = panel.locator('[data-proposal-path="/facts/city"]');
-  assert.equal(await cityChange.isChecked(), false, 'operator correction must not be preselected for replacement');
-  await panel.locator('#persona-apply-reviewed').click();
-  await until(async () => (await panel.locator('#persona-work-status').textContent()).includes('Persona work complete'), 'enrichment save not acknowledged');
-  await until(async () => (await read()).personas[0].facts.qualification_level === 'Honours bachelor', 'accepted additions missing');
-  alpha = (await read()).personas[0];
-  assert.equal(alpha.facts.city, 'Operator Town'); assert.equal(alpha.credentials.password, 'NeverChangeFixture!7');
-  assert.equal((await read()).personas[1].facts.availability, 'Three days per week');
-
-  // A queued request can be cancelled, and a late completion cannot write.
-  await panel.locator('#persona-enrich').click();
-  await until(async () => (await panel.locator('#persona-work-status').textContent()).includes('Waiting for your agent'), 'second request missing');
-  const cancelled = await panel.evaluate(async () => (await chrome.runtime.sendMessage({ kind: 'persona-work-status' })).request);
-  await panel.locator('#persona-cancel-work').click();
-  const beforeCancel = JSON.stringify(await read());
-  const late = await panel.evaluate(async ({ requestId, personas }) => {
-    try { await globalThis.treadwayCompletePersonaWork({ requestId, personas }); return null; } catch (e) { return e.message; }
-  }, { requestId: cancelled.requestId, personas: (await read()).personas });
-  assert(late); assert.equal(JSON.stringify(await read()), beforeCancel);
-  const cancelledReceipt = await bridge.complete(await requestPath(cancelled.requestId), sessionFile, payload);
-  assert.equal(cancelledReceipt.status, 'cancelled'); assert.equal(JSON.stringify(await read()), beforeCancel);
-
-  // Agent-backed creation is a real work request, review and persistence path.
-  await panel.locator('#persona-actor').fill('part time applicant');
-  await panel.locator('#persona-new').click();
-  await panel.locator('#persona-edit-id').fill('agent-created');
-  let facts = panel.locator('[data-path="/facts"]');
-  await facts.locator('input[aria-label="New field in /facts"]').fill('email');
-  await facts.getByRole('button', { name: 'Add field', exact: true }).click();
-  await panel.locator('[data-persona-field="/facts/email"]').fill('riley.new@example.test');
-  await panel.locator('#persona-create-agent').click();
-  await until(async () => (await panel.locator('#persona-work-status').textContent()).includes('Waiting for your agent'), 'create request missing');
-  const creation = await panel.evaluate(async () => (await chrome.runtime.sendMessage({ kind: 'persona-work-status' })).request);
-  assert.equal(creation.operation, 'create');
-  assert.equal(creation.actor, 'part time applicant'); assert.equal(creation.personas[0].role, 'participant');
-  const createFile = await requestPath(creation.requestId);
-  assert.equal((await bridge.watch(path.dirname(createFile), { timeout: 0.2, interval: 0.01 })).requestId, creation.requestId);
-  await bridge.acknowledge(createFile, sessionFile);
-  const created = { ...creation.personas[0], label: 'Riley Generated',
-    description: 'Riley currently teaches at Example Academy and seeks additional assessment work. Riley needs at least two days working from home each week.',
-    facts: { ...creation.personas[0].facts, given_name: 'Riley', family_name: 'Generated' },
-    preferences: { minimum_remote_days: 2 },
-    credentials: { password: 'GeneratedFixture!9', new_password: 'GeneratedFixture!9' },
-    secrets: { password: 'RILEY_TEST_PASSWORD', new_password: 'RILEY_TEST_PASSWORD' } };
-  fs.writeFileSync(payload, JSON.stringify({ personas: [created] }));
-  await bridge.complete(createFile, sessionFile, payload);
-  await panel.locator('#persona-apply-reviewed').click();
-  await until(async () => (await panel.locator('#persona-work-status').textContent()).includes('Persona work complete'), 'creation save not acknowledged');
-  await until(async () => (await read()).personas.some(p => p.id === 'agent-created'), 'agent-created persona not saved');
-  const savedNew = (await read()).personas.find(p => p.id === 'agent-created');
-  assert.equal(savedNew.label, 'Riley Generated'); assert.equal(savedNew.facts.email, 'riley.new@example.test');
-  assert.equal(savedNew.credentials.password, 'GeneratedFixture!9'); assert.equal(savedNew.preferences.minimum_remote_days, 2);
-
-  // Editable creation is available without asking an agent or pasting JSON.
-  await panel.locator('#persona-new').click();
-  await panel.locator('#persona-edit-id').fill('manual-persona');
-  await panel.locator('#persona-edit-role').fill('operator-test');
-  await panel.locator('#persona-edit-label').fill('Morgan Manual');
-  facts = panel.locator('[data-path="/facts"]');
-  await facts.locator('input[aria-label="New field in /facts"]').fill('given_name');
-  await facts.getByRole('button', { name: 'Add field', exact: true }).click();
-  await panel.locator('[data-persona-field="/facts/given_name"]').fill('Morgan');
-  await panel.locator('#persona-save').click();
-  await until(async () => (await panel.locator('#persona-editor-state').textContent()).includes('Revision 1'), 'draft save not acknowledged');
-  await until(async () => (await read()).personas.some(p => p.id === 'manual-persona'), 'manual persona not saved');
-  await panel.evaluate(async () => chrome.storage.local.set({ personaCredentials: {
-    [JSON.stringify(['manual-persona', 'operator-test', '', ''])]: { password: 'RetainedCacheFixture!1', reference: 'MANUAL_TEST_PASSWORD' } } }));
-  facts = panel.locator('[data-path="/facts"]');
-  await facts.locator('input[aria-label="New field in /facts"]').fill('email');
-  await facts.getByRole('button', { name: 'Add field', exact: true }).click();
-  await panel.locator('[data-persona-field="/facts/email"]').fill('morgan.manual@example.test');
-  await panel.locator('#persona-save').click();
-  await until(async () => (await panel.locator('#persona-editor-state').textContent()).includes('Revision 2'), 'missing contact addition not acknowledged');
-  const bound = (await read()).personas.find(p => p.id === 'manual-persona');
-  assert.equal(bound.role, 'operator-test');
-  assert.equal(bound.facts.email, 'morgan.manual@example.test'); assert.equal(bound.credentials.password, 'RetainedCacheFixture!1');
-  assert.equal(bound.secrets.password, 'MANUAL_TEST_PASSWORD');
-  await panel.locator('#persona').selectOption('manual-persona');
-  await panel.locator('#journey-name').fill('Populate synthetic profile'); await panel.locator('#start').click();
-  await until(async () => !(await panel.locator('#fill').isDisabled()), 'journey not active');
-  const app = await browser.newPage(); await app.goto('http://app.example.test/profile'); await app.bringToFront();
-  await panel.locator('#fill').click();
-  await until(async () => await app.locator('input').inputValue() === 'Morgan', 'normal Fill all did not use created persona');
-  await until(async () => (await panel.locator('#messages').textContent()).includes('Filled 1 field(s)'), 'Fill all report not acknowledged');
-  assert.equal((await read()).personas.find(p => p.id === 'manual-persona').credentials.password, 'RetainedCacheFixture!1');
-  assert.equal(await app.evaluate(() => window.submissions || 0), 0);
-  assert.deepEqual(errors, []);
-  complete = true;
+// Actual panel/persona UI with the real recorder backend and owned app fixture.
+// New inference/completion hooks use deterministic fixture replies, no provider.
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),http=require('node:http'),os=require('node:os'),path=require('node:path');
+let playwright;try{playwright=require(process.env.RECORDER_PLAYWRIGHT||'playwright')}catch(_){}
+if(!playwright&&process.env.RECORDER_REQUIRE_BROWSER==='1')throw Error('Playwright required');
+const source=path.join(__dirname,'..');
+const fixture={personas:[{id:'alpha',role:'participant',label:'Alex Example',referenceDate:'2026-11-25',facts:{given_name:'Alex',family_name:'Example',email:'operator@example.test',city:'Original Town'},credentials:{password:'StablePrivateFixture!7'},description:'Alex works at Example Academy and seeks additional project work.',histories:{education:[{id:'degree-a',institution:'Original Academy',awardDate:'2008-06-30'}]}},{id:'beta',role:'reviewer',label:'Sam Sample',facts:{given_name:'Sam',email:'sam@example.test'},description:'Sam reviews synthetic applications.'}]};
+const inferenceStub=`globalThis.TreadwayInference={providers:()=>[{id:'fixture',label:'Fixture provider',baseURL:'http://provider.example.test/v1'}],availableModels:provider=>provider==='fixture'?[{id:'fixture-model',label:'Fixture model'}]:[],checkConfiguration:settings=>{if(settings.llmProvider!=='fixture'||settings.llmModel!=='fixture-model'||!settings.llmKey)throw Error('Choose the fixture provider/model/key');return{ready:true}}};`;
+const adapter=`
+globalThis.fixture={mode:'normal',calls:[],fillCalls:[],highlights:[],completion:'skip'};
+async function persistedDocument(){const local=await chrome.storage.local.get(['captureStorage','personaText']);if(local.captureStorage!=='folder')return JSON.parse(local.personaText);const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('treadway-recorder',1);r.onsuccess=()=>resolve(r.result);r.onerror=reject});const handle=await new Promise((resolve,reject)=>{const r=db.transaction('handles').objectStore('handles').get('folder');r.onsuccess=()=>resolve(r.result);r.onerror=reject});db.close();return JSON.parse(await(await(await handle.getFileHandle('personas.json')).getFile()).text())}
+function candidateReply(message){if(message.purpose==='journey-name')return{data:{name:'Demonstrate project application'}};const input=JSON.parse(message.messages.at(-1).content);return{data:{personas:input.personas.map(p=>({id:p.id,role:p.role,label:p.label==='New persona'?'Taylor Example':p.label,referenceDate:'2026-11-25',description:'A coherent synthetic professional seeking supplementary project work, available on weekday evenings.',facts:[{key:'given_name',value:p.context.facts?.given_name||'Taylor'},{key:'family_name',value:'Example'},{key:'city',value:'Generated Town'}],domainsJson:JSON.stringify({work:{skills:['Planning','Writing']}}),preferencesJson:JSON.stringify({minimum_remote_days:2}),circumstancesJson:JSON.stringify({currently_employed:true}),historiesJson:JSON.stringify({employment:[{id:'job-a',employer:'Example Academy',startDate:'2014-01-01'}]})}))}}}
+const register=chrome.runtime.onMessage.addListener.bind(chrome.runtime.onMessage);
+chrome.runtime.onMessage.addListener=handler=>register((message,sender,respond)=>{
+ if(message.kind==='inference-settings-check'){chrome.storage.local.get('settings').then(({settings:s={}})=>respond({ready:Boolean(s.llmKey),provider:s.llmProvider,model:s.llmModel,models:[{id:'fixture-model',label:'Fixture model'}],...(!s.llmKey?{reason:'Configure inference first'}:{})}));return true}
+ if(message.kind==='inference-request'){fixture.calls.push(message);if(fixture.mode==='defer'){fixture.pending=message.requestId;fixture.release=()=>respond(candidateReply(message))}else if(fixture.mode==='malformed')respond({data:{personas:[]}});else respond(candidateReply(message));return true}
+ if(message.kind==='inference-cancel'){fixture.cancelled=message.requestId;respond({cancelled:true});return false}
+ if(message.kind==='cancel-fill'){respond({cancelled:true});return false}
+ if(message.kind==='highlight-field'){fixture.highlights.push(message);respond({highlighted:true});return false}
+ if(message.kind==='fill-complete'){fixture.calls.push(message);if(message.report.interrupted||message.report.manual.some(entry=>!['no persona value','unclassified','profile lookup needs a sourced query','option match not confirmed'].includes(entry.reason)&&(entry.required||entry.expectedValue!==undefined))){respond({skipped:true});return false}(async()=>{const [tab]=await chrome.tabs.query({active:true,lastFocusedWindow:true});const snapshot=await chrome.tabs.sendMessage(tab.id,{kind:'inspect-assistance'});fixture.expectedDocumentInstanceId=snapshot.documentInstanceId;fixture.expectedUrl=snapshot.url;fixture.expectedFormContext=snapshot.formContext;const field=message.report.manual.find(item=>item.field?.name)?.field.name||'availability_notes';const key=fixture.completion==='no-progress'?'unrelated_fixture_value':field;const result=()=>({persona:{...message.persona,facts:{...message.persona.facts,[key]:key==='availability_notes'?'Weekday evenings':'Follow-up explanation'}},boundValues:[],expectedDocumentInstanceId:snapshot.documentInstanceId,expectedUrl:snapshot.url,expectedFormContext:snapshot.formContext});if(fixture.completion==='defer'){fixture.pending=message.requestId;fixture.release=()=>respond(result())}else{if(fixture.completion==='pause-write')fixture.pauseNextEdit=true;respond(['add','no-progress','pause-write'].includes(fixture.completion)?result():{skipped:true})}})().catch(error=>respond({error:error.message}));return true}
+ if(message.kind==='persona-edit-begin'&&fixture.pauseNextEdit){fixture.pauseNextEdit=false;fixture.editWaiting=true;fixture.releaseEdit=()=>handler(message,sender,respond);return true}
+ if(message.kind==='fill'){persistedDocument().then(doc=>{const saved=doc.personas.find(p=>p.id===message.persona.id);fixture.fillCalls.push({facts:message.persona.facts,persistedFacts:saved.facts,expectedDocumentInstanceId:message.expectedDocumentInstanceId,expectedUrl:message.expectedUrl,expectedFormContext:message.expectedFormContext,previousReport:Boolean(message.previousReport)});handler(message,sender,respond)}).catch(error=>respond({error:error.message}));return true}
+ return handler(message,sender,answer=>{if(message.kind==='status')answer.runtime={version:chrome.runtime.getManifest().version,build:'fixture-build',ready:true};respond(answer)})
 });
-}
+`;
+async function until(check,message,timeout=15000){const end=Date.now()+timeout;do{try{if(await check())return}catch(error){if(!String(error.message).includes('NotReadableError'))throw error}await new Promise(r=>setTimeout(r,100))}while(Date.now()<end);throw Error(message)}
+for(const mode of ['downloads','folder'])test('direct persona inference, reviewed edits and one-button completion in '+mode,{skip:!playwright,timeout:120000},async t=>{
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'treadway-direct-personas-')),extension=path.join(directory,'extension'),profile=path.join(directory,'profile');
+ fs.cpSync(source,extension,{recursive:true,filter:p=>!p.includes(path.sep+'tools')&&!p.includes(path.sep+'tests')});
+ fs.writeFileSync(path.join(extension,'lib/inference.js'),inferenceStub);
+ fs.writeFileSync(path.join(extension,'background.js'),adapter+fs.readFileSync(path.join(extension,'background.js'),'utf8'));
+ let declared=null;const server=http.createServer((request,response)=>{const url=new URL(request.url,'http://'+request.headers.host);let body='';request.on('data',b=>body+=b);request.on('end',()=>{const json=value=>{response.setHeader('Content-Type','application/json');response.end(JSON.stringify(value))};if(url.hostname==='_safeyolo.proxy.internal'){if(request.method==='GET')return json({agent:'browser-agent',context:declared});if(request.method==='DELETE'){declared=null;return json({status:'cleared'})}const data=JSON.parse(body);declared=Object.fromEntries(data.context.split(';').map(part=>part.split('=')));return json({agent:'browser-agent',context:declared,expires_in:data.ttl})}response.setHeader('Content-Type','text/html');response.end(url.pathname==='/invalidate'?`<style>label{display:block;margin:12px 0}</style><label>Given name<input name="givenName" autocomplete="given-name"></label><label>Counter notes<textarea name="counter_notes" required oninput="if(this.value&&!document.querySelector('[name=counter_additional]')){const label=document.createElement('label');label.textContent='Counter additional';const input=document.createElement('textarea');input.name='counter_additional';input.required=true;input.oninput=()=>document.querySelector('[name=givenName]').value='Changed by later input';label.append(input);this.parentElement.after(label)}"></textarea></label>`:url.pathname==='/no-progress'?'<label>Unmapped item<input name="unmapped_item" required></label>':`<!doctype html><label>Given name<input name="givenName" autocomplete="given-name"></label><label>Availability notes<textarea name="availability_notes" required oninput="if(this.value&&!document.querySelector('[name=additional_notes]')){const label=document.createElement('label');label.textContent='Additional notes';const input=document.createElement('textarea');input.name='additional_notes';input.required=true;label.append(input);this.parentElement.after(label)}"></textarea></label><button onclick="window.submissions=(window.submissions||0)+1">Save</button>`)})});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));let context,panel,complete=false;const errors=[];
+ t.after(async()=>{if(!complete&&panel)t.diagnostic(JSON.stringify(await panel.evaluate(()=>({messages:document.querySelector('#messages')?.textContent,work:document.querySelector('#persona-work-status')?.textContent})).catch(e=>e.message)));await context?.close();server.closeAllConnections();await new Promise(r=>server.close(r));fs.rmSync(directory,{recursive:true,force:true})});
+ context=await playwright.chromium.launchPersistentContext(profile,{headless:true,channel:'chromium',chromiumSandbox:true,...(process.env.RECORDER_CHROMIUM_BIN?{executablePath:process.env.RECORDER_CHROMIUM_BIN}:{}),proxy:{server:'http://127.0.0.1:'+server.address().port,bypass:'<-loopback>'},args:['--disable-extensions-except='+extension,'--load-extension='+extension]});
+ const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker'),id=new URL(worker.url()).host;
+ await worker.evaluate(async({fixture,mode})=>chrome.storage.local.set({personaText:JSON.stringify(fixture),captureStorage:mode,settings:{safeyoloKey:'fixture-api-key',jevKey:'',ttlMinutes:20,recordSecrets:false,llmProvider:'fixture',llmModel:'fixture-model',llmKey:'fixture-provider-key',llmBaseURL:'http://provider.example.test/v1',llmTimeoutMs:60000}}),{fixture,mode});
+ panel=await context.newPage();panel.on('pageerror',e=>errors.push(e.message));await panel.goto('chrome-extension://'+id+'/sidepanel.html');
+ if(mode==='folder'){await panel.evaluate(async fixture=>{const dir=await navigator.storage.getDirectory(),writer=await(await dir.getFileHandle('personas.json',{create:true})).createWritable();await writer.write(JSON.stringify(fixture));await writer.close();const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('treadway-recorder',1);r.onupgradeneeded=()=>r.result.createObjectStore('handles');r.onsuccess=()=>resolve(r.result);r.onerror=reject});await new Promise((resolve,reject)=>{const tx=db.transaction('handles','readwrite');tx.objectStore('handles').put(dir,'folder');tx.oncomplete=resolve;tx.onerror=reject});db.close()},fixture);await panel.reload()}
+ await until(async()=>await panel.locator('#persona option').count()===2,'personas not loaded');
+ const read=()=>panel.evaluate(async()=>{const {captureStorage,personaText}=await chrome.storage.local.get(['captureStorage','personaText']);if(captureStorage!=='folder')return JSON.parse(personaText).personas;const db=await new Promise(resolve=>{const r=indexedDB.open('treadway-recorder',1);r.onsuccess=()=>resolve(r.result)});const dir=await new Promise(resolve=>{const r=db.transaction('handles').objectStore('handles').get('folder');r.onsuccess=()=>resolve(r.result)});db.close();return JSON.parse(await(await(await dir.getFileHandle('personas.json')).getFile()).text()).personas});
+ assert.equal(await panel.locator('#phone-friend').count(),0);assert.equal(await panel.locator('#context-countdown').count(),0);assert((await panel.locator('#runtime-readiness').textContent()).includes('fixture-build'));
+ await panel.locator('#persona-manager').evaluate(node=>node.open=true);await panel.locator('[data-inspect-persona="alpha"]').click();
+ await panel.locator('[data-persona-field="/facts/city"]').fill('Operator Town');await panel.locator('#persona-save').click();
+ await until(async()=>(await panel.locator('#persona-editor-state').textContent()).startsWith('Revision'),'manual save not acknowledged');
+ await until(async()=>(await read()).find(p=>p.id==='alpha').facts.city==='Operator Town','manual edit not persisted');
+ await panel.locator('[data-persona-id="alpha"]').check();await panel.locator('[data-persona-id="beta"]').check();await panel.locator('#persona-brief').fill('A fictional project-work application.');await panel.locator('#persona-enrich').click();
+ await until(async()=>(await panel.locator('#persona-work-status').textContent()).includes('ready to review'),'direct enrichment did not reach review');
+ assert.equal(await panel.locator('[data-proposal-path="/facts/city"]').first().isChecked(),false);
+ await panel.locator('#persona-apply-reviewed').click();await until(async()=>(await panel.locator('#persona-work-status').textContent()).includes('saved'),'review not saved');
+ let personas=await read(),alpha=personas.find(p=>p.id==='alpha');assert.equal(alpha.facts.city,'Operator Town');assert.equal(alpha.credentials.password,'StablePrivateFixture!7');assert.equal(alpha.histories.education[0].institution,'Original Academy');assert.equal(alpha.histories.employment[0].employer,'Example Academy');
+ const requests=await worker.evaluate(()=>fixture.calls.filter(c=>c.kind==='inference-request'));for(const secret of ['StablePrivateFixture!7','operator@example.test','fixture-provider-key','fixture-api-key'])assert(!JSON.stringify(requests).includes(secret));
+ await worker.evaluate(()=>fixture.mode='defer');await panel.locator('#persona-enrich').click();await until(()=>worker.evaluate(()=>Boolean(fixture.pending)),'deferred generation did not start');await panel.locator('#persona-cancel-work').click();await worker.evaluate(()=>fixture.release());await new Promise(r=>setTimeout(r,200));assert.equal(await panel.locator('#persona-apply-reviewed').count(),0);assert((await panel.locator('#persona-work-status').textContent()).includes('cancelled'));
+ await worker.evaluate(()=>fixture.mode='normal');await panel.locator('#persona-actor').fill('part time applicant');await panel.locator('#persona-contact-email').fill('new-operator@example.test');await panel.locator('#persona-create-ai').click();await until(async()=>(await panel.locator('#persona-work-status').textContent()).includes('ready to review'),'create did not reach review');await panel.locator('#persona-apply-reviewed').click();await until(async()=>(await read()).length===3,'new persona not created');
+ const created=(await read()).find(p=>!['alpha','beta'].includes(p.id));assert.equal(created.label,'Taylor Example');assert.equal(created.role,'participant');assert.equal(created.facts.email,'new-operator@example.test');assert(created.credentials.password.length>=16);assert(created.portrait.src.startsWith('data:image/svg+xml;base64,'));
+ await panel.locator('#settings-section').evaluate(node=>node.open=true);assert.equal(await panel.locator('#llm-model').inputValue(),'fixture-model');await panel.locator('#llm-timeout-seconds').fill('90');await panel.locator('#save-settings').click();await until(()=>worker.evaluate(async()=>(await chrome.storage.local.get('settings')).settings.llmTimeoutMs===90000),'provider settings not saved');assert.equal(await worker.evaluate(async()=>(await chrome.storage.local.get('settings')).settings.ttlMinutes),20);
+ await worker.evaluate(()=>{fixture.mode='defer';fixture.pending=null});await panel.locator('#suggest-journey').click();await until(()=>worker.evaluate(()=>Boolean(fixture.pending)),'name suggestion not pending');await panel.locator('#journey-name').fill('Operator name wins');await worker.evaluate(()=>fixture.release());await until(async()=>!(await panel.locator('#suggest-journey').isDisabled()),'name suggestion not completed');assert.equal(await panel.locator('#journey-name').inputValue(),'Operator name wins');await worker.evaluate(()=>fixture.mode='normal');
+ await panel.locator('#journey-name').fill('Synthetic application');await panel.locator('#start').click();await until(async()=>(await panel.locator('#status').textContent()).includes('Recording'),'journey not started');
+ const app=await context.newPage();await app.goto('http://app.example.test/');await app.waitForSelector('input[name=givenName]');await app.bringToFront();
+ await worker.evaluate(()=>fixture.completion='defer');await panel.locator('#fill').click();await until(()=>worker.evaluate(()=>fixture.calls.some(c=>c.kind==='fill-complete')),'completion phase not reached');
+ await until(async()=>await panel.locator('#remaining-list button').count()>0,'remaining fields not shown');await panel.locator('#remaining-list button').first().click();assert.equal((await worker.evaluate(()=>fixture.highlights)).length,1);
+ await panel.locator('#cancel-fill').click();await worker.evaluate(()=>fixture.release());await until(async()=>!(await panel.locator('#fill').isDisabled()),'cancel did not finish');assert.equal(await app.locator('[name=availability_notes]').inputValue(),'');assert.equal((await read()).find(p=>p.id==='alpha').facts.availability_notes,undefined);
+ await worker.evaluate(()=>{fixture.completion='defer';fixture.pending=null});await panel.locator('#fill').click();await until(()=>worker.evaluate(()=>Boolean(fixture.pending)),'second deferred completion not reached');
+ await panel.evaluate(async()=>{const local=await chrome.storage.local.get(['captureStorage','personaText']);let dir,text=local.personaText;if(local.captureStorage==='folder'){const db=await new Promise(resolve=>{const r=indexedDB.open('treadway-recorder',1);r.onsuccess=()=>resolve(r.result)});dir=await new Promise(resolve=>{const r=db.transaction('handles').objectStore('handles').get('folder');r.onsuccess=()=>resolve(r.result)});db.close();text=await(await(await dir.getFileHandle('personas.json')).getFile()).text()}const data=JSON.parse(text),index=data.personas.findIndex(p=>p.id==='alpha'),current=TreadwayPersonas.parsePersonas(JSON.stringify({personas:[data.personas[index]]}))[0];data.personas[index]=TreadwayPersonaManager.editPersona(current,{facts:{...current.facts,city:'Concurrent correction'}},{expectedRevision:current.revision});if(dir){const writer=await(await dir.getFileHandle('personas.json')).createWritable();await writer.write(JSON.stringify(data));await writer.close()}else await chrome.storage.local.set({personaText:JSON.stringify(data)})});
+ await worker.evaluate(()=>fixture.release());await until(async()=>!(await panel.locator('#fill').isDisabled()),'stale completion did not finish');assert.equal((await read()).find(p=>p.id==='alpha').facts.city,'Concurrent correction');assert.equal((await read()).find(p=>p.id==='alpha').facts.availability_notes,undefined,'stale inference cannot persist over an operator revision');assert.equal(await app.locator('[name=availability_notes]').inputValue(),'');
+ // Stop after the response is accepted, while the actual persona write is queued.
+ await worker.evaluate(()=>{fixture.completion='pause-write';fixture.editWaiting=false});await panel.locator('#fill').click();await until(()=>worker.evaluate(()=>fixture.editWaiting),'inferred persistence was not queued');const beforeQueuedStop=await read();await panel.locator('#stop').click();await until(()=>worker.evaluate(async()=>!(await chrome.storage.session.get('journey')).journey),'Stop did not clear queued-persistence run');await worker.evaluate(()=>fixture.releaseEdit());await until(async()=>!(await panel.locator('#cancel-fill').isVisible()),'queued persistence did not unwind');assert.deepEqual(await read(),beforeQueuedStop,'queued additions cannot save after Stop');assert.equal(await app.locator('[name=availability_notes]').inputValue(),'');
+ async function restart(name){await until(async()=>!(await panel.locator('#start').isDisabled()),'stopped capture did not finish saving');await panel.locator('#journey-name').fill(name);await panel.locator('#start').click();await until(()=>worker.evaluate(async()=>Boolean((await chrome.storage.session.get('journey')).journey)),'replacement journey did not start');await app.bringToFront()}
+ await restart('After queued cancellation');
+ if(mode==='folder'){
+  // A staged file write must be aborted if Stop wins before atomic close.
+  await panel.evaluate(()=>{const prototype=FileSystemWritableFileStream.prototype,write=prototype.write,abort=prototype.abort;globalThis.personaWriterPaused=false;globalThis.personaWriterAborted=0;let armed=true;prototype.write=async function(data){const result=await write.call(this,data);if(armed&&typeof data==='string'&&data.includes('"availability_notes"')){armed=false;globalThis.personaWriterPaused=true;await new Promise(resolve=>globalThis.releasePersonaWriter=resolve)}return result};prototype.abort=function(...args){globalThis.personaWriterAborted++;return abort.apply(this,args)}});
+  await worker.evaluate(()=>fixture.completion='add');await panel.locator('#fill').click();await until(()=>panel.evaluate(()=>personaWriterPaused),'folder persona write was not staged');await panel.locator('#stop').click();await until(()=>worker.evaluate(async()=>!(await chrome.storage.session.get('journey')).journey),'Stop did not clear staged-write run');await panel.evaluate(()=>releasePersonaWriter());await until(async()=>!(await panel.locator('#cancel-fill').isVisible()),'staged folder write did not unwind');assert.equal(await panel.evaluate(()=>personaWriterAborted),1,'stopped staged writer must abort before close');assert.equal((await read()).find(p=>p.id==='alpha').facts.availability_notes,undefined);assert.equal((await read()).find(p=>p.id==='alpha').credentials.password,'StablePrivateFixture!7');await restart('After staged cancellation');
+ }
+ await worker.evaluate(()=>fixture.completion='add');await panel.locator('#fill').click();await until(async()=>(await app.locator('[name=availability_notes]').inputValue())==='Weekday evenings','one-click completion did not fill gap');await until(async()=>!(await panel.locator('#fill').isDisabled()),'fill did not finish');
+ const fills=await worker.evaluate(()=>fixture.fillCalls);const second=fills.find(c=>c.facts.availability_notes);assert.equal(second.persistedFacts.availability_notes,'Weekday evenings','source persisted before second fill');assert.equal(second.expectedDocumentInstanceId,await worker.evaluate(()=>fixture.expectedDocumentInstanceId));assert.equal(second.expectedUrl,app.url());assert.equal(second.expectedFormContext,await worker.evaluate(()=>fixture.expectedFormContext));assert.equal(second.previousReport,true);assert.equal(await app.locator('[name=additional_notes]').inputValue(),'Follow-up explanation');assert(fills.some(call=>call.facts.additional_notes&&call.persistedFacts.additional_notes==='Follow-up explanation'),'later required gaps completed within the same click');assert.equal(await app.evaluate(()=>window.submissions||0),0);
+ const completionsBefore=await worker.evaluate(()=>fixture.calls.filter(c=>c.kind==='fill-complete').length);await app.goto('http://app.example.test/no-progress');await app.waitForSelector('[name=unmapped_item]');await app.bringToFront();await worker.evaluate(()=>fixture.completion='no-progress');await panel.locator('#fill').click();await until(async()=>!(await panel.locator('#fill').isDisabled()),'no-progress completion did not stop');assert.equal(await worker.evaluate(()=>fixture.calls.filter(c=>c.kind==='fill-complete').length),completionsBefore+1,'no retained progress must stop the loop');assert.equal(await app.locator('[name=unmapped_item]').inputValue(),'');
+ await app.goto('http://app.example.test/invalidate');await app.waitForSelector('[name=counter_notes]');await app.evaluate(()=>{const input=document.querySelector('[name=givenName]');input.autocomplete='off';input.value=''});assert.equal(await app.locator('[name=givenName]').inputValue(),'','count fixture starts with a genuinely empty earlier control');await app.bringToFront();await worker.evaluate(()=>fixture.completion='add');await panel.locator('#fill').click();await until(async()=>!(await panel.locator('#fill').isDisabled()),'invalidation fill did not finish');assert.equal(await app.locator('[name=givenName]').inputValue(),'Changed by later input');const finalFill=await worker.evaluate(async()=>[...(await chrome.storage.session.get('journey')).journey.events].reverse().find(event=>event.type==='fill'));assert.deepEqual(finalFill.filled.map(entry=>entry.binding.name).sort(),['counter_additional','counter_notes']);const counterRounds=await worker.evaluate(()=>fixture.calls.filter(call=>call.kind==='fill-complete'&&call.report.url?.endsWith('/invalidate')).map(call=>call.report));assert(counterRounds[0].filled.some(entry=>entry.binding.name==='givenName'),'earlier control must have succeeded in this Fill before later invalidation');if(!finalFill.manual.length)t.diagnostic(JSON.stringify(await worker.evaluate(()=>fixture.calls.filter(call=>call.kind==='fill-complete').slice(-4).map(call=>({filled:call.report.filled.map(entry=>({name:entry.binding.name,expected:entry.expectedValue})),manual:call.report.manual.map(entry=>({name:entry.binding.name,reason:entry.reason})),url:call.report.url})))));assert(finalFill.manual.some(entry=>entry.binding.name==='givenName'&&entry.reason==='did not stick'),'later changed earlier success remains an unresolved outcome');assert.match(await panel.locator('#messages li').first().textContent(),/Filled 2 field\(s\); 1 need attention/,'summary must count unique final retained entries, not historical successes');
+ assert.deepEqual(errors,[]);complete=true;
+});

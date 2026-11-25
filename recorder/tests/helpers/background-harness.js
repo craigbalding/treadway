@@ -9,10 +9,12 @@ function event() {
   return { addListener(fn) { callbacks.push(fn); }, emit(details) { for (const fn of callbacks) fn(details); } };
 }
 function createHarness(options = {}) {
-  const session = {};
+  const session = structuredClone(options.session || {});
   const notices = [];
   const calls = [];
   const external = { context: null };
+  const scheduled = new Map();
+  const alarmEvent = event();
   const local = { settings: { safeyoloKey: 'fixture-key', ttlMinutes: 20, ...options.settings }, ...options.local };
   const apiContext = () => typeof external.context === 'string' ? Object.fromEntries(
     external.context.split(';').map(part => part.split('='))) : external.context;
@@ -21,7 +23,7 @@ function createHarness(options = {}) {
   webNavigation.getAllFrames = async () => [{ frameId: 0, documentId: 'doc-a' }, { frameId: 2, documentId: 'doc-child' }];
   let listener;
   const context = vm.createContext({
-    console, Date, URL, Promise, AbortSignal, setTimeout, clearTimeout, crypto: webcrypto,
+    console, Date, URL, Promise, AbortSignal, AbortController, setTimeout: options.setTimeout || setTimeout, clearTimeout, crypto: webcrypto,
     fetch: async (url, request) => {
       calls.push({ method: request.method, ...(request.body ? { body: JSON.parse(request.body) } : {}) });
       if (options.fetchHook) await options.fetchHook(url, request);
@@ -29,9 +31,10 @@ function createHarness(options = {}) {
       if (request.method === 'GET') value = { agent: 'fixture-agent', context: apiContext() };
       else if (request.method === 'DELETE') { external.context = null; value = { status: 'cleared' }; }
       else { external.context = JSON.parse(request.body).context; value = { context: apiContext(), expires_in: 1200 }; }
-      return { status: 200, text: async () => JSON.stringify(value) };
+      return { status: 200, text: async () => { if (options.textHook) await options.textHook(value); return JSON.stringify(value); } };
     },
     chrome: {
+      alarms: { create: async (name, value) => { scheduled.set(name, value); }, clear: async name => scheduled.delete(name), onAlarm: alarmEvent },
       sidePanel: { setPanelBehavior: async () => {} }, webRequest, webNavigation,
       scripting: { executeScript: async options_ => { if (options.executeScript) return options.executeScript(options_); } },
       tabs: { query: async () => [{ id: 7, url: 'https://app.example.test/form' }],
@@ -40,6 +43,7 @@ function createHarness(options = {}) {
           return { flushed: true, failures: [] };
         } },
       runtime: { id: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', getManifest: () => ({ version: '0.1.5' }),
+        ...(options.nativeMessage ? { sendNativeMessage: options.nativeMessage } : {}),
         sendMessage: async (message) => { notices.push(message); }, onMessage: { addListener(fn) { listener = fn; } } },
       storage: {
         local: {
@@ -56,6 +60,7 @@ function createHarness(options = {}) {
   });
   context.importScripts = (...files) => files.forEach((file) => vm.runInContext(fs.readFileSync(path.join(recorder, file), 'utf8'), context, { filename: file }));
   vm.runInContext(fs.readFileSync(path.join(recorder, 'background.js'), 'utf8'), context, { filename: 'background.js' });
+  if (options.infer) context.TreadwayInference.infer = options.infer;
   const sender = { tab: { id: 7 }, frameId: 0, documentId: 'doc-a' };
   function command(message, from = sender) {
     return new Promise((resolve) => listener(message, from, (answer) => resolve(structuredClone(answer))));
@@ -67,7 +72,8 @@ function createHarness(options = {}) {
   }
   async function emit(group, name, details) { ({ webRequest, webNavigation })[group][name].emit(details); await idle(); }
   const persona = { id: 'fixture-persona', role: 'submitter', label: 'Fixture person', secrets: { one_time_code: 'FIXTURE_OTP', password: 'FIXTURE_PASSWORD' } };
-  return { session, local, external, notices, calls, command, emit, idle, persona,
+  return { session, local, external, notices, calls, command, emit, idle, persona, scheduled,
+    alarm: async name => { scheduled.delete(name); alarmEvent.emit({ name }); await idle(); },
     start: (journeyName = 'Submit fixture') => command({ kind: 'start', persona, journeyName }) };
 }
 module.exports = { createHarness };

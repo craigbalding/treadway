@@ -48,13 +48,6 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .row > input { flex: 1; min-width: 0; }
 .status { margin: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); overflow-wrap: anywhere; }
 .status.recording { border-color: var(--ok); }
-.context-clock { margin-top: 8px; padding: 8px; border: 2px solid var(--ok); border-radius: 6px; }
-.context-clock .row { justify-content: space-between; margin: 0; }
-.context-clock p { margin: 6px 0; }
-#context-countdown { font-size: 18px; font-variant-numeric: tabular-nums; font-weight: 700; }
-.context-clock[data-state="warning"] { border-color: var(--warning); color: var(--warning); }
-.context-clock[data-state="expired"], .context-clock[data-state="error"], .context-clock[data-state="unknown"] { border-color: var(--error); color: var(--error); }
-.context-clock[data-state="renewing"] { border-color: var(--accent); }
 .hint { color: var(--muted); margin: 4px 0; }
 #messages { margin: 0; padding-left: 20px; max-height: 40vh; overflow-y: auto; }
 #messages li { margin: 4px 0; overflow-wrap: anywhere; }
@@ -62,3 +55,15 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 #messages li.error { color: var(--error); }
 details { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 8px; }
 summary { cursor: pointer; font-weight: 600; }
+
+fieldset { margin: 14px 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
+legend { padding: 0 4px; font-weight: 600; }
+#remaining-fields { margin-top: 12px; padding: 10px; border: 1px solid var(--warning); border-radius: 6px; }
+#remaining-title { margin: 0; font-size: 14px; }
+#remaining-list { padding-left: 20px; margin: 8px 0 0; }
+#remaining-list li { margin: 7px 0; }
+.field-locate { display: block; width: 100%; text-align: left; color: var(--accent); }
+.field-reason { display: block; margin: 3px 0; color: var(--muted); }
+.field-located { border-color: var(--ok); }
+#runtime-readiness[data-state="error"], #inference-readiness[data-state="error"] { color: var(--warning); }
+#runtime-readiness[data-state="ready"], #inference-readiness[data-state="ready"] { color: var(--ok); }

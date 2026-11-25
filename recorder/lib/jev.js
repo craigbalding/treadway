@@ -187,8 +187,9 @@
       body: JSON.stringify(request), signal: AbortSignal.timeout(20000),
     });
     const text = await response.text();
-    if (!response.ok) throw new Error('Jev returned HTTP ' + response.status + ': ' + text.slice(0, 300));
-    return JSON.parse(text);
+    if (!response.ok) throw new Error('Jev returned HTTP ' + response.status);
+    try { return JSON.parse(text); }
+    catch (_) { throw new Error('Jev returned an invalid JSON response'); }
   }
 
   async function classifyWithJev({ apiKey, fields, choices, fetch: fetchFunction }) {

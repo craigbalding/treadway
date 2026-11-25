@@ -81,11 +81,13 @@ function App() {
     h('label', null, 'Country', h('select', { name: 'country', ...bind('country') },
       h('option', { value: '' }, 'Choose'), h('option', { value: 'IE' }, 'Ireland'), h('option', { value: 'FR' }, 'France'))),
     form.country === 'IE' ? h(Field, { label: 'Eircode', name: 'eircode', ...bind('eircode') }) : null,
-    // Rejects every edit, so the recorder must hand it back to the person.
-    h(Field, { label: 'Phone', name: 'phone', value: form.phone, onChange: () => setForm({ ...form }) }),
     h(Field, { label: 'Reason for claim', name: 'reason', ...bind('reason') }),
     h(Field, { label: 'Password', name: 'password', type: 'password', ...bind('password') }),
     h(Field, { label: 'Code', name: 'opaque', ...bind('opaque') }),
+    // Keep the deliberately rejected optional mutation last so this journal/
+    // secret-policy fixture observes the earlier gaps before traversal stops.
+    // test_sequential_fill_browser separately proves no downstream mutation.
+    h(Field, { label: 'Phone', name: 'phone', value: form.phone, onChange: () => setForm({ ...form }) }),
     h('button', { type: 'submit' }, 'Submit claim'),
     saved === null ? null : h('p', { id: 'saved' }, 'Saved ' + saved));
 }
@@ -198,6 +200,14 @@ if (missing && process.env.RECORDER_REQUIRE_BROWSER === '1') throw new Error(mis
 
 for (const mode of ['stable', 'remount']) {
 test('records ' + mode + ' React controls, exact flows, frames and secret policy', { skip: missing, timeout: 120000 }, async (t) => {
+  const fixturePersonas = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8'));
+  if (mode === 'remount') {
+    // The reattachment check needs a usable education record up front; the
+    // retired local-agent transport no longer adds these facts as a side effect.
+    Object.assign(fixturePersonas.personas[0].facts, { institution: 'Example College', year_obtained: '2010' });
+    fixturePersonas.personas[0].histories.education[0].institution = 'Example College';
+  }
+  const fixturePersonaText = JSON.stringify(fixturePersonas);
   const proxy = await fakeSafeyolo();
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-recorder-'));
   const downloadRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'treadway-recorder-downloads-'));
@@ -256,10 +266,10 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
       transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error);
     });
     db.close();
-  }, fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8'));
+  }, fixturePersonaText);
   else await panel.evaluate(async (text) => {
     await chrome.storage.local.set({ captureStorage: 'downloads', personaText: text });
-  }, fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8'));
+  }, fixturePersonaText);
   await panel.reload();
   await panel.locator('#persona option').first().waitFor({ state: 'attached' });
   if (mode === 'remount') {
@@ -269,7 +279,7 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
     });
     assert.equal(await panel.locator('#folder-settings').isHidden(), true);
     await panel.locator('#settings-section summary').click();
-    const pasted = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8'));
+    const pasted = JSON.parse(fixturePersonaText);
     pasted.personas[0].label = 'Pasted fixture persona';
     await panel.locator('#personas-json').fill(JSON.stringify(pasted));
     await panel.locator('#save-settings').click();
@@ -279,7 +289,7 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   }
   const ask = (message) => panel.evaluate((value) => chrome.runtime.sendMessage(value), message);
 
-  const persona = (await panel.evaluate((text) => TreadwayPersonas.parsePersonas(text), fs.readFileSync(path.join(extensionRoot, 'examples/personas.json'), 'utf8')))[0];
+  const persona = (await panel.evaluate((text) => TreadwayPersonas.parsePersonas(text), fixturePersonaText))[0];
   persona.secrets.one_time_code = 'FIXTURE_CODE';
   const started = await ask({ kind: 'start', persona, journeyName: 'Submit expense claim' });
   assert.equal(started.error, undefined, started.error);
@@ -288,32 +298,16 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   assert.deepEqual(proxy.state.calls.map((call) => call.method), ['GET', 'POST']);
   assert.equal(proxy.state.calls[1].body.ttl, 1200);
 
-  await waitFor(async () => (await panel.locator('#context-clock').getAttribute('data-state')) === 'active', 'context clock starts active');
-  const displayExpiry = async (milliseconds) => {
-    await worker.evaluate(async (milliseconds) => {
-      const { journey } = await chrome.storage.session.get('journey');
-      journey.expiresAt = new Date(Date.now() + milliseconds).toISOString();
-      await chrome.storage.session.set({ journey });
-      await chrome.runtime.sendMessage({ kind: 'panel-notice' }).catch(() => undefined);
-    }, milliseconds);
-  };
-  await displayExpiry(65000);
-  await waitFor(async () => (await panel.locator('#context-clock').getAttribute('data-state')) === 'warning', 'context expiry warning visible');
-  const apiCallsBeforeTick = proxy.state.calls.length;
-  const firstTick = await panel.locator('#context-countdown').textContent();
-  await waitFor(async () => (await panel.locator('#context-countdown').textContent()) !== firstTick, 'countdown ticks without API calls');
-  assert.equal(proxy.state.calls.length, apiCallsBeforeTick);
-  await displayExpiry(-1000);
-  proxy.state.declared = null;
-  await waitFor(async () => (await panel.locator('#context-clock').getAttribute('data-state')) === 'expired', 'expired context is red and explicit');
-  assert.match(await panel.locator('#context-notice').textContent(), /expired/);
-  assert.equal(await panel.locator('#context-countdown').textContent(), '0:00');
-  await panel.getByRole('button', { name: 'Renew context', exact: true }).click();
-  await waitFor(async () => (await panel.locator('#context-clock').getAttribute('data-state')) === 'active', 'manual renewal resets the timer');
+  assert.equal(await panel.locator('#context-clock').count(), 0, 'automatic renewal needs no countdown');
+  await worker.evaluate(async () => {
+    await chrome.alarms.create('treadway-context-renew', { when: Date.now() + 100 });
+  });
+  await waitFor(async () => (await ask({ kind: 'status' })).journey.events.some(event =>
+    event.type === 'context_renewed' && event.source === 'automatic'), 'recording lease renews without operator action');
   const renewed = (await ask({ kind: 'status' })).journey;
   assert.equal(renewed.context, started.context);
   assert.equal(renewed.startedAt, started.startedAt);
-  assert.equal(renewed.events.at(-1).source, 'operator');
+  assert.equal(renewed.events.at(-1).source, 'automatic');
   assert.equal(proxy.state.appRequests.length, 0, 'renewal never dispatches an application request');
 
   const app = await context.newPage();
@@ -451,49 +445,13 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   assert.equal(await details.getByLabel('Confirm password', { exact: true }).inputValue(), '');
 
   if (mode === 'remount') {
-    const { watch, complete } = await import('../assist.mjs');
+    assert.equal(await panel.getByRole('button', { name: 'Phone a friend', exact: true }).count(), 0);
     const profilePage = await context.newPage();
-    await profilePage.goto('http://app.example.test/assistance-profile');
-    await profilePage.bringToFront();
-    await panel.getByRole('button', { name: 'Phone a friend', exact: true }).click();
-    await panel.locator('#messages').getByText('Help requested.', { exact: false }).first().waitFor();
-    const inbox = path.join(downloadRoot, 'Treadway', 'assistance');
-    const pending = await watch(inbox, { timeout: 1, interval: 0.02 });
-    assert.equal(pending.timeout, false);
-    const bundle = fs.readFileSync(pending.requestFile, 'utf8');
-    assert.equal(bundle.includes('NeverSendThisPassword!7'), false);
-    assert.equal(bundle.includes(generatedPassword), false);
-    assert.equal(bundle.includes('agent-key'), false);
-    const facts = path.join(profile, 'assistance-facts.json');
-    fs.writeFileSync(facts, JSON.stringify({ institution: 'Example College', year_obtained: '2010' }));
-    const [port, browser_path] = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').trim().split('\n');
-    const session = path.join(profile, 'owned-session.json');
-    fs.writeFileSync(session, JSON.stringify({ session: { port: Number(port), browser_path, generation: 'fixture-owned-generation' } }));
-    const result = await complete(pending.requestFile, session, facts);
-    assert.equal(result.filled, 4, JSON.stringify(result));
-    assert.equal(await profilePage.locator('#county').textContent(), 'Dublin');
-    assert.equal(await profilePage.locator('input[aria-hidden=true]').inputValue(), 'D');
-    assert.equal(await profilePage.locator('#institution').getAttribute('data-committed'), 'yes', 'autocomplete selected its linked option');
-    assert.equal(await profilePage.getByLabel('Year Obtained').inputValue(), '2010');
-    assert.equal(await profilePage.getByLabel('Email').inputValue(), 'human@example.test');
-    assert.equal(await profilePage.getByLabel('Previous Surname').inputValue(), '');
-    assert.equal(await profilePage.getByLabel('Previous PPSN').inputValue(), '');
-    assert.equal(await profilePage.evaluate(() => window.submissions), 0);
-    assert.equal(await panel.evaluate(async () => JSON.parse((await chrome.storage.local.get('personaText')).personaText).personas[0].facts.institution), 'Example College');
-    assert.equal((await watch(inbox, { timeout: 0.05, interval: 0.01 })).timeout, true);
-    await assert.rejects(complete(pending.requestFile, session, facts), /no longer active/);
-    await panel.getByRole('button', { name: 'Phone a friend', exact: true }).click();
-    await waitFor(async () => {
-      const current = await worker.evaluate(async () => (await chrome.storage.session.get('pendingAssistance')).pendingAssistance);
-      return current && !current.completed && current.requestId !== result.requestId;
-    }, 'new assistance request is active before changing its document');
-    const active = await worker.evaluate(async () => (await chrome.storage.session.get('pendingAssistance')).pendingAssistance);
     await profilePage.goto('http://app.example.test/assistance-profile?new-document=1');
-    const rejected = await panel.evaluate(async requestId => {
-      try { await treadwayCompleteAssistance({ requestId, facts: { institution: 'Different College' } }); return false; }
-      catch (error) { return error.message; }
-    }, active.requestId);
-    assert.match(rejected, /form changed/);
+    await profilePage.bringToFront();
+    const retired = await ask({ kind: 'assistance-request', persona });
+    assert.match(retired.error, /retired/);
+    assert.equal(await profilePage.getByLabel('Email').inputValue(), 'human@example.test');
     assert.equal(await profilePage.locator('#institution').inputValue(), '');
   }
 
@@ -557,7 +515,7 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
   const click = finished.events.find((event) => event.type === 'click' && event.selectors.role?.name === 'Submit claim');
   assert.deepEqual(click.selectors.role, { role: 'button', name: 'Submit claim' });
   assert.equal(finished.events.find((event) => event.type === 'context_renewed' && event.source === 'proxy_block').after.status, 428);
-  assert.equal(await panel.locator('#context-clock').isHidden(), true, 'no active timer remains after Stop');
+  assert.equal(await panel.locator('#context-clock').count(), 0, 'no countdown UI is shipped');
   const responses = finished.events.filter((event) => event.type === 'network_response');
   assert.ok(responses.some(e => e.url.includes('identity.example.test/register') && e.status === 200 && e.safeyoloRequestId));
   assert.ok(finished.events.some(e => e.type === 'network_redirect' && e.redirectUrl.includes('identity.example.test/register')));
@@ -579,6 +537,12 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
     // After saving, extension reload must preserve the app's current document.
     const retained = context.pages().find(page => page.url().includes('/assistance-profile?new-document=1'));
     await retained.getByLabel('Email').fill('retained-human@example.test');
+    const originalAttachment = await worker.evaluate(async url => {
+      const tab = (await chrome.tabs.query({})).find(tab => tab.url === url);
+      const frame = (await chrome.webNavigation.getAllFrames({ tabId: tab.id })).find(frame => frame.frameId === 0);
+      const content = await chrome.tabs.sendMessage(tab.id, { kind: 'inspect-assistance' });
+      return { documentId: frame.documentId, documentInstanceId: content.documentInstanceId, version: chrome.runtime.getManifest().version };
+    }, retained.url());
     const [debugPort, debugPath] = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').trim().split('\n');
     const control = new WebSocket('ws://127.0.0.1:' + debugPort + debugPath);
     await new Promise((resolve, reject) => { control.addEventListener('open', resolve, { once: true }); control.addEventListener('error', reject, { once: true }); });
@@ -602,6 +566,18 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
     await waitFor(async () => (await resumedPanel.locator('#fill').isEnabled()), 'new capture ready after extension reload');
     await resumedPanel.locator('#fill').click();
     await waitFor(async () => (await retained.locator('#institution').getAttribute('data-committed')) === 'yes', 'existing document reattached and autocomplete selected');
+    let reattachedFill;
+    await waitFor(async () => {
+      const status = await resumedPanel.evaluate(() => chrome.runtime.sendMessage({ kind: 'status' }));
+      reattachedFill = status.journey.events.find(event => event.type === 'fill' && event.filled.some(entry => entry.type === 'year_obtained' && entry.retained));
+      return reattachedFill;
+    }, 'reattached document completes the following year field');
+    assert.equal(await resumedPanel.evaluate(() => chrome.runtime.getManifest().version), originalAttachment.version,
+      'same-version reload still requires a fresh valid attachment');
+    assert.equal(reattachedFill.documentId, originalAttachment.documentId, 'extension reload preserves the application document');
+    assert.notEqual(reattachedFill.documentInstanceId, originalAttachment.documentInstanceId, 'invalidated extension context is reattached');
+    assert.equal(await retained.locator('#institution').inputValue(), 'Example College');
+    assert.equal(await retained.getByLabel('Year Obtained').inputValue(), '2010');
     assert.equal(await retained.getByLabel('Email').inputValue(), 'retained-human@example.test');
     assert.equal(retained.url().endsWith('?new-document=1'), true, 'application document was not reloaded');
     await resumedPanel.locator('#stop').click();
@@ -655,7 +631,7 @@ test('records ' + mode + ' React controls, exact flows, frames and secret policy
 });
 }
 
-test('real MUI profile batches semantic decisions, waits for async options, and preserves operator choices',
+test('real MUI profile respects required prerequisites, waits for async options, and preserves operator choices',
   { skip: missing, timeout: 180000 }, async t => {
   const proxy = await fakeSafeyolo();
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'recorder-real-mui-'));
@@ -706,8 +682,10 @@ test('real MUI profile batches semantic decisions, waits for async options, and 
         answers[key + '__action'] = { type: 'choice', choice: widget.readiness.loading ? 'wait' : 'select', confidence: 0.99 };
       }
       const response = new Response(JSON.stringify({ answers }), { status: 200 });
-      if (request.state.widgets && globalThis.fixtureDeferDecisions) {
+      if (request.state.widgets && globalThis.fixtureDeferDecisions && (!globalThis.fixtureDeferType ||
+        Object.values(request.state.widgets).some(widget => widget.factType === globalThis.fixtureDeferType))) {
         globalThis.fixtureDeferDecisions = false;
+        globalThis.fixtureDeferredRequest = request;
         return new Promise(resolve => { globalThis.fixtureReleaseDecision = () => resolve(response); });
       }
       return response;
@@ -733,8 +711,17 @@ test('real MUI profile batches semantic decisions, waits for async options, and 
   await app.getByLabel('Institution', { exact: true }).waitFor();
   await app.bringToFront();
   await panel.locator('#fill').click();
+  let prerequisiteFill;
+  await waitFor(async () => { prerequisiteFill = (await ask({ kind: 'status' })).journey.events.find(event => event.type === 'fill'); return prerequisiteFill; }, 'required upload gap', 45000);
+  assert.equal(prerequisiteFill.filled.length, 0, 'required operator-owned upload blocks downstream interactions');
+  assert(prerequisiteFill.manual.some(entry => entry.reason === 'file requires operator' && entry.required));
+  // The operator supplies the required file before Fill all can advance. The
+  // extension itself never creates or selects an upload on the operator's behalf.
+  await app.locator('input[type=file]').setInputFiles({ name: 'synthetic-portrait.svg', mimeType: 'image/svg+xml',
+    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="10" fill="orange"/></svg>') });
+  await panel.locator('#fill').click();
   let fill;
-  await waitFor(async () => { fill = (await ask({ kind: 'status' })).journey.events.find(event => event.type === 'fill'); return fill; }, 'real MUI fill result', 45000);
+  await waitFor(async () => { fill = [...(await ask({ kind: 'status' })).journey.events].reverse().find(event => event.type === 'fill'); return fill && fill.eventId !== prerequisiteFill.eventId; }, 'real MUI fill result', 45000);
   const state = await app.evaluate(() => window.fixtureState);
   if (state.classification !== '2.1') t.diagnostic(JSON.stringify(await app.evaluate(() => ({
     scroll: window.scrollY, active: document.activeElement?.tagName,
@@ -758,12 +745,12 @@ test('real MUI profile batches semantic decisions, waits for async options, and 
   assert.equal(await app.getByLabel('I agree to the terms').isChecked(), false);
   assert.equal(await app.evaluate(() => window.submissions), 0);
   assert.equal(proxy.state.collegeQueries, 2, 'one discovery and one application query, no retyping during a pending lookup');
-  assert.equal(fill.batches.filter(batch => batch.phase === 'decide').length, 1, 'independent semantic matches are batched');
-  assert.equal(fill.batches.find(batch => batch.phase === 'decide').count, 5);
-  assert.equal(fill.manual.some(entry => entry.reason === 'file requires operator'), true);
+  assert.equal(fill.batches.filter(batch => batch.phase === 'decide').length, 5, 'widget reasoning occurs only when its control is reached');
+  assert(fill.batches.filter(batch => batch.phase === 'decide').every(batch => batch.count === 1));
   assert.equal(fill.manual.some(entry => entry.reason === 'operator decision'), true);
   assert.equal(fill.manual.some(entry => entry.type === 'home_phone' && entry.reason === 'no persona value'), true);
-  assert.equal(fill.skipped.some(entry => entry.reason === 'control disabled after fill'), true);
+  assert.equal(await app.getByLabel('Registration number', { exact: true }).isDisabled(), true);
+  assert.equal(fill.manual.some(entry => entry.field.name === 'registration'), false, 'the disabled dependent control is never processed from a stale plan');
   const requests = await worker.evaluate(() => globalThis.fixtureJevRequests);
   assert.equal(JSON.stringify(requests).includes('NeverSendThisSynthetic!7'), false);
   assert.equal(JSON.stringify(requests).includes('casey@example.test'), false);
@@ -784,11 +771,28 @@ test('real MUI profile batches semantic decisions, waits for async options, and 
   // that set. Reopening must reject the stale choice before pointer dispatch.
   await app.goto('http://app.example.test/mui-profile?changed=1');
   await app.getByLabel('Institution', { exact: true }).waitFor();
+  await app.locator('input[type=file]').setInputFiles({ name: 'synthetic-portrait.svg', mimeType: 'image/svg+xml',
+    buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="10" fill="orange"/></svg>') });
   await app.bringToFront();
-  await worker.evaluate(() => { globalThis.fixtureDeferDecisions = true; });
+  await worker.evaluate(() => { globalThis.fixtureDeferDecisions = true; globalThis.fixtureDeferType = 'classification'; });
   const previous = fill.eventId;
   await panel.locator('#fill').click();
-  await waitFor(() => worker.evaluate(() => typeof globalThis.fixtureReleaseDecision === 'function'), 'semantic request pending', 30000);
+  try {
+    await waitFor(() => worker.evaluate(() => typeof globalThis.fixtureReleaseDecision === 'function'), 'semantic request pending', 30000);
+  } catch (error) {
+    t.diagnostic(JSON.stringify({
+      provider: await worker.evaluate(() => ({ armed: fixtureDeferDecisions, type: fixtureDeferType,
+        widgets: fixtureJevRequests.filter(request => request.state.widgets).slice(-8).map(request => Object.values(request.state.widgets).map(widget => ({ type: widget.factType, mode: widget.mode, options: widget.options }))) })),
+      latestFill: (await ask({ kind: 'status' })).journey.events.filter(event => event.type === 'fill').at(-1),
+      app: await app.evaluate(() => ({ state: fixtureState, uploadCount: document.querySelector('input[type=file]').files.length })),
+      panel: await panel.locator('#messages').textContent(),
+    }));
+    throw error;
+  }
+  const deferredWidgets = await worker.evaluate(() => Object.values(fixtureDeferredRequest.state.widgets));
+  assert(deferredWidgets.some(widget => widget.factType === 'classification' && Object.values(widget.options).includes('2.1')),
+    'the deferred request must observe the original classification option before it changes');
+  assert.equal(await app.locator('input[type=file]').evaluate(input => input.files.length), 1);
   await app.evaluate(() => window.changeGradeOptions());
   await worker.evaluate(() => { globalThis.fixtureReleaseDecision(); delete globalThis.fixtureReleaseDecision; });
   await waitFor(async () => { fill = (await ask({ kind: 'status' })).journey.events.filter(event => event.type === 'fill').at(-1); return fill.eventId !== previous; }, 'changed-options result', 45000);

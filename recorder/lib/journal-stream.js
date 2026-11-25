@@ -32,7 +32,7 @@
       return value;
     }
     if (Array.isArray(value)) return value.map(item => scrub(item, forbidden));
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, scrub(item, forbidden)]));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [scrub(key, forbidden), scrub(item, forbidden)]));
     return value;
   }
   function read(state, { cursors = {}, limit = 200 } = {}, forbidden = []) {
@@ -74,7 +74,7 @@
     }
     return scrub(result, forbidden);
   }
-  const api = { read, retain, eventRevision, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_RUNS };
+  const api = { read, retain, scrub, eventRevision, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_RUNS };
   root.TreadwayJournalStream = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

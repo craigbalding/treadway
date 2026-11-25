@@ -1,10 +1,10 @@
-// Editable persona management. Storage and agent transport are supplied by the
+// Editable persona management. Storage and structured inference are supplied by the
 // side panel so folder and Downloads modes share one implementation.
 (function (root) {
   'use strict';
   const clone = value => JSON.parse(JSON.stringify(value));
   const pointer = key => String(key).replace(/~/g, '~0').replace(/\//g, '~1');
-  const REVIEWS = 'personaWorkReview';
+  const REVIEWS = 'personaInferenceReview', WORK = 'personaInferenceWork';
   const EDITABLE = ['label', 'referenceDate', 'description', 'portrait', 'facts', 'domains', 'preferences', 'circumstances', 'histories'];
   const IDENTITY_FACTS = new Set(['email', 'username', 'password', 'new_password', 'one_time_code']);
 
@@ -35,8 +35,9 @@
   }
   function safePortrait(src) { return typeof src === 'string' && (/^data:image\/(png|jpeg|webp|svg\+xml);/i.test(src) || /^(examples\/|assets\/)/.test(src)); }
 
-  function mount({ container, getPersonas, refreshPersonas, persist, ask, exportRequest, say }) {
-    const M = root.TreadwayPersonaManager;
+  function mount({ container, getPersonas, refreshPersonas, persist, ask, say }) {
+    const M = root.TreadwayPersonaManager, AI = root.TreadwayPersonaInference;
+    const owner = root.crypto.randomUUID();
     if (!M) throw new Error('Persona management library is unavailable');
     let selected = new Set();
     let inspecting = null, original = null, draft = null, dirty = false;
@@ -44,6 +45,7 @@
     let requestDraft = null;
     let reviewKey = '';
     let validationTimer = null;
+    let workQueue = Promise.resolve();
     const list = element('div', { id: 'persona-manager-list' });
     const editor = element('div', { id: 'persona-editor' });
     const reviewBox = element('div', { id: 'persona-review' });
@@ -51,15 +53,16 @@
     const brief = element('textarea', { id: 'persona-brief', rows: 2, placeholder: 'What the application does; a sentence or two is enough.' });
     const market = element('input', { id: 'persona-market', placeholder: 'Client market or audience (optional)' });
     const actor = element('input', { id: 'persona-actor', placeholder: 'Intended user role (optional)' });
+    const contact = element('input', { id: 'persona-contact-email', type: 'email', placeholder: 'An address you can receive (kept local)' });
     const instructions = element('textarea', { id: 'persona-instructions', rows: 2, placeholder: 'New context, preferences or corrections to consider (optional)' });
     const requestCard = element('div', { class: 'persona-card' });
-    requestCard.append(element('h3', {}, 'Application context'), label('Application brief', brief), label('Market', market), label('Role', actor), label('Additional context', instructions));
+    requestCard.append(element('h3', {}, 'Application context'), label('Application brief', brief), label('Market', market), label('Role', actor), label('Verification email for a new persona (optional)', contact), label('Additional context', instructions));
     const createButton = button('New persona', () => run(newDraft), { id: 'persona-new' });
-    const createAgent = button('Create with agent', () => run(() => requestWork('create')), { id: 'persona-create-agent' });
-    const enrich = button('Enrich selected', () => run(() => requestWork('enrich')), { id: 'persona-enrich' });
-    const cancel = button('Cancel request', () => run(cancelWork), { id: 'persona-cancel-work', hidden: true });
+    const createAgent = button('Create with AI', () => requestWork('create'), { id: 'persona-create-ai' });
+    const enrich = button('Enrich selected', () => requestWork('enrich'), { id: 'persona-enrich' });
+    const cancel = button('Cancel request', () => cancelWork(), { id: 'persona-cancel-work', hidden: true });
     const toolbar = element('div', { class: 'persona-toolbar' }); toolbar.append(createButton, createAgent, enrich, cancel);
-    container.append(element('p', { class: 'persona-help' }, 'Inspect and edit a persona, or select several to enrich from new application context. Your corrections are preserved and agent changes are reviewed before saving.'), toolbar, list, requestCard, workLine, reviewBox, editor);
+    container.append(element('p', { class: 'persona-help' }, 'Inspect and edit a persona, or select several to enrich from new application context. Your corrections are preserved and generated changes are reviewed before saving.'), toolbar, list, requestCard, workLine, reviewBox, editor);
 
     async function run(action) {
       if (busy) return;
@@ -71,11 +74,11 @@
     // Event handlers must report failures without leaving rejected promises.
     const caught = action => () => { run(action).catch(() => {}); };
     function syncControls() {
-      const pending = work && !['completed', 'cancelled', 'failed'].includes(work.status);
+      const pending = work && ['running', 'review'].includes(work.status);
       createButton.disabled = busy || currentStatus.fillBusy;
       createAgent.disabled = busy || pending || currentStatus.fillBusy;
       enrich.disabled = busy || pending || currentStatus.fillBusy || !selected.size;
-      cancel.hidden = !pending; cancel.disabled = busy;
+      cancel.hidden = !pending; cancel.disabled = false;
       for (const node of editor.querySelectorAll('[data-mutation]')) node.disabled = busy || Boolean(currentStatus.fillBusy);
       const apply = reviewBox.querySelector('#persona-apply-reviewed'); if (apply) apply.disabled = busy || Boolean(currentStatus.fillBusy);
     }
@@ -89,7 +92,7 @@
         line.append(checkbox, button(persona.label + ' · ' + persona.role + ' · r' + M.revisionOf(persona), caught(() => inspect(persona.id)), { class: 'persona-inspect', 'data-inspect-persona': persona.id }));
         return line;
       }));
-      if (!personas.length) list.append(element('p', { class: 'persona-muted' }, 'No personas yet. Create a draft or ask your agent to prepare one.'));
+      if (!personas.length) list.append(element('p', { class: 'persona-muted' }, 'No personas yet. Create a draft or generate one from your application context.'));
       syncControls();
     }
     function touch() {
@@ -144,7 +147,7 @@
       const deductions = Object.values(draft.deductions || {});
       if (deductions.length) {
         const derived = element('details', { class: 'persona-tree', id: 'persona-derived-answers' });
-        derived.append(element('summary', {}, 'Jev’s saved answers (' + deductions.length + ')'), element('p', { class: 'persona-muted' }, 'These are answers to specific controls, including their wording. Edit the facts or profile context to correct them; saving those changes invalidates earlier deductions.'));
+        derived.append(element('summary', {}, 'Saved inferred answers (' + deductions.length + ')'), element('p', { class: 'persona-muted' }, 'These are answers to specific controls, including their wording. Edit the facts or profile context to correct them; saving those changes invalidates earlier deductions.'));
         const usable = M.usableDeductions(draft);
         for (const answer of deductions.slice(0, 100)) {
           const item = element('div', { class: 'persona-proposal' });
@@ -156,10 +159,10 @@
         }
         card.append(derived);
       }
-      card.append(element('p', { class: 'persona-muted' }, original ? 'Existing identity and verification contact bindings are preserved. Persona edits do not change an application account.' : 'A draft can be saved and edited now. Ask the agent to add coherent histories and context before using an incomplete draft.'));
+      card.append(element('p', { class: 'persona-muted' }, original ? 'Existing identity and verification contact bindings are preserved. Persona edits do not change an application account.' : 'A draft can be saved and edited now. Use Create with AI to add coherent histories and context before using an incomplete draft.'));
       const actions = element('div', { class: 'persona-toolbar persona-actions' });
       actions.append(button(original ? 'Save changes' : 'Create draft', caught(saveDraft), { id: 'persona-save', 'data-mutation': 'true' }),
-        button('Validate with Jev', caught(validateDraft), { id: 'persona-validate' }),
+        button('Check consistency', caught(validateDraft), { id: 'persona-validate' }),
         button('Discard edits', caught(() => { draft = null; dirty = false; original = null; editor.replaceChildren(); }), { id: 'persona-discard-edits' }));
       card.append(actions, checks(localChecks(M, draft))); editor.append(card); syncControls();
     }
@@ -223,138 +226,145 @@
       const result = await ask({ kind: 'persona-preflight', persona: draft });
       editor.querySelector('#persona-checks')?.replaceWith(checks(result.checks));
     }
+    function saveWork(next, expectedStatus) {
+      const result = workQueue.then(async () => {
+        const latest = (await chrome.storage.local.get(WORK))[WORK];
+        if (expectedStatus && (latest?.requestId !== next.requestId || latest.status !== expectedStatus)) return false;
+        work = next; await chrome.storage.local.set({ [WORK]: next }); renderWork(); return true;
+      });
+      workQueue = result.catch(() => undefined); return result;
+    }
+    function renderWork() {
+      workLine.textContent = !work ? 'No persona generation pending' : ({ running: 'Generating persona proposals…', review: 'Generated changes are ready to review', completed: 'Persona changes saved', cancelled: 'Persona request cancelled', failed: 'Persona generation failed' }[work.status] || work.status) + (work.error ? ' · ' + work.error : '');
+      renderReview(); syncControls();
+    }
     async function requestWork(operation) {
-      let targets;
-      if (operation === 'create') {
-        if (!draft || original) newDraft();
-        requestDraft = M.createPersona(draft); targets = [requestDraft];
-      } else {
-        targets = getPersonas().filter(p => selected.has(p.id));
-        if (!targets.length) throw new Error('Select one or more personas to enrich');
-        if (dirty) throw new Error('Save or discard the open persona edits before requesting enrichment');
-      }
-      const result = await ask({ kind: 'persona-work-request', operation, personaIds: targets.map(p => p.id), personas: targets,
-        brief: brief.value.trim(), market: market.value.trim(), actor: actor.value.trim(), instructions: instructions.value.trim() });
-      work = result.request || result;
-      if (operation === 'create') await chrome.storage.local.set({ personaWorkPrivateDraft: { requestId: work.requestId, persona: requestDraft } });
+      if (busy || ['running', 'review'].includes(work?.status)) return;
+      let targets, current;
+      busy = true; syncControls();
       try {
-        if (new TextEncoder().encode(JSON.stringify(work, null, 2)).length > 2 * 1024 * 1024) throw new Error('This persona bundle is too large for the agent inbox. Select fewer personas or use smaller portraits.');
-        await exportRequest(work);
-      }
-      catch (error) { await ask({ kind: 'persona-work-cancel', requestId: work.requestId }).catch(() => {}); throw error; }
-      await syncWork(); say('Persona request sent to your agent. You can continue your current journey.');
+        if (!AI) throw new Error('Persona inference is unavailable. Reload the recorder.');
+        const readiness = await ask({ kind: 'inference-settings-check' });
+        if (!readiness.ready) throw new Error(readiness.reason || readiness.error || 'Configure inference in Settings before generating a persona.');
+        if (operation === 'create') {
+          if (!draft || original) newDraft();
+          if (contact.value.trim()) {
+            if (!contact.checkValidity()) throw new Error('Use a valid verification email address.');
+            if (draft.facts.email && draft.facts.email !== contact.value.trim()) throw new Error('Edit the draft to change its existing contact before generating.');
+            draft.facts.email = contact.value.trim();
+          }
+          requestDraft = AI.prepareDraft(draft); draft = clone(requestDraft); targets = [requestDraft]; renderEditor();
+        } else {
+          targets = getPersonas().filter(p => selected.has(p.id));
+          if (!targets.length) throw new Error('Select one or more personas to enrich');
+          if (dirty) throw new Error('Save or discard persona edits before requesting enrichment');
+        }
+        const context = { brief: brief.value.trim(), market: market.value.trim(), actor: actor.value.trim(), instructions: instructions.value.trim() };
+        const request = AI.buildRequest({ operation, personas: targets, context });
+        current = { requestId: 'persona-' + root.crypto.randomUUID(), operation, owner, status: 'running',
+          createdAt: new Date().toISOString(), bases: clone(targets) };
+        await saveWork(current);
+        // Keep cancellation available while the background owns the provider call.
+        busy = false; syncControls();
+        const { data } = await ask({ kind: 'inference-request', requestId: current.requestId, purpose: 'persona-' + operation,
+          schema: request.schema, messages: request.messages });
+        const latest = (await chrome.storage.local.get(WORK))[WORK];
+        if (latest?.requestId !== current.requestId || latest.status !== 'running') return;
+        if (refreshPersonas) await refreshPersonas();
+        const candidates = AI.readCandidates(data, { personas: current.bases, operation });
+        const entries = [];
+        for (const candidate of candidates) {
+          let base = current.bases.find(p => p.id === candidate.id);
+          if (operation === 'create') {
+            if (getPersonas().some(p => p.id === candidate.id)) throw new Error('The new persona ID is already in use');
+            if (!draft || draft.id !== base.id || M.inputSignature(draft) !== M.inputSignature(base)) throw new Error('The draft changed during generation. Request a fresh proposal.');
+          } else {
+            const saved = getPersonas().find(p => p.id === base.id);
+            if (!saved || M.revisionOf(saved) !== M.revisionOf(base) || M.inputSignature(saved) !== M.inputSignature(base)) throw new Error('Persona changed during generation. Request fresh enrichment.');
+            base = saved;
+          }
+          entries.push({ isNew: operation === 'create', base: clone(base), candidate,
+            proposal: M.proposeEnrichment(base, candidate, { expectedRevision: M.revisionOf(base) }) });
+        }
+        review = { requestId: current.requestId, entries, createdAt: new Date().toISOString() };
+        await chrome.storage.local.set({ [REVIEWS]: review });
+        if (!await saveWork({ ...current, status: 'review' }, 'running')) { review = null; await chrome.storage.local.remove(REVIEWS); return; }
+        say('Generated persona changes are ready to inspect and review.');
+      } catch (error) {
+        const latest = (await chrome.storage.local.get(WORK))[WORK];
+        if (current && latest?.requestId === current.requestId && latest.status !== 'cancelled') await saveWork({ ...current, status: 'failed', error: error.message });
+        if (!current || latest?.status !== 'cancelled') say(error.message, 'error');
+      } finally { busy = false; syncControls(); }
     }
     async function cancelWork() {
-      if (!work) return;
-      await ask({ kind: 'persona-work-cancel', requestId: work.requestId });
-      review = null; await chrome.storage.local.remove([REVIEWS, 'personaWorkPrivateDraft']); await syncWork(); renderReview();
+      if (!work || !['running', 'review'].includes(work.status)) return;
+      const previous = work;
+      review = null; await chrome.storage.local.remove(REVIEWS);
+      await saveWork({ ...previous, status: 'cancelled' });
+      if (previous.status === 'running') await ask({ kind: 'inference-cancel', requestId: previous.requestId }).catch(() => {});
+      say('Persona request cancelled. No proposed changes were saved.');
     }
     async function syncWork() {
-      const response = await ask({ kind: 'persona-work-status' }); work = response.request || null;
-      if (!review) review = (await chrome.storage.local.get(REVIEWS))[REVIEWS] || null;
-      workLine.textContent = !work ? 'No persona work pending' : ({ queued: 'Waiting for your agent', accepted: 'Agent acknowledged; preparing persona changes', proposed: 'Agent changes are ready to review', completed: 'Persona work complete', cancelled: 'Persona request cancelled', failed: 'Persona request failed' }[work.status] || work.status) + ' · ' + work.operation + (work.error ? ' · ' + String(work.error).slice(0, 500) : '');
-      if (review && (!work || review.requestId !== work.requestId || ['cancelled', 'failed', 'completed'].includes(work.status))) review = null;
-      renderReview(); syncControls();
+      const saved = await chrome.storage.local.get([WORK, REVIEWS]); work = saved[WORK] || null;
+      review = saved[REVIEWS] || null;
+      if (work?.status === 'running' && work.owner !== owner) {
+        const requestId = work.requestId;
+        await saveWork({ ...work, status: 'cancelled', error: 'The panel closed before completion. Start a new request when ready.' });
+        await ask({ kind: 'inference-cancel', requestId }).catch(() => {});
+      }
+      if (review && (work?.requestId !== review.requestId || work.status !== 'review')) review = null;
+      renderWork();
     }
     function renderReview() {
       const nextKey = review ? JSON.stringify(review) : '';
       if (nextKey === reviewKey) { syncControls(); return; } reviewKey = nextKey;
       reviewBox.replaceChildren(); if (!review) return;
       const chosen = new Map();
-      reviewBox.append(element('h3', {}, 'Review agent changes'));
+      reviewBox.append(element('h3', {}, 'Review generated changes'));
       for (const entry of review.entries) {
         const card = element('div', { class: 'persona-card' }); card.append(element('h4', {}, entry.candidate.label));
-        if (entry.isNew) {
-          card.append(element('p', {}, 'New persona candidate: review additions and any changes to your draft.'), checks(localChecks(M, entry.candidate)));
+        if (safePortrait(entry.candidate.portrait?.src)) card.append(element('img', { src: entry.candidate.portrait.src, alt: entry.candidate.portrait.alt || entry.candidate.label, class: 'persona-portrait' }));
+        const paths = new Set(entry.proposal.additions); chosen.set(entry.candidate.id, paths);
+        if (entry.isNew && entry.base.label === 'New persona') {
+          for (const change of entry.proposal.changes) if (change.path === '/label' || change.path === '/portrait/alt') paths.add(change.path);
         }
-        {
-          const paths = new Set(entry.proposal.additions); chosen.set(entry.candidate.id, paths);
-          if (entry.isNew && entry.base.label === 'New persona' && entry.proposal.changes.some(change => change.path === '/label')) paths.add('/label');
-          for (const change of entry.proposal.changes) {
-            const line = element('div', { class: 'persona-proposal' });
-            const choose = element('input', { type: 'checkbox', checked: paths.has(change.path), 'data-proposal-path': change.path });
-            choose.addEventListener('change', () => choose.checked ? paths.add(change.path) : paths.delete(change.path));
-            line.append(label((change.operatorOverride ? 'Your correction · ' : '') + change.kind + ': ' + displayPath(change.path), choose),
-              element('pre', {}, 'Current: ' + format(change.previous) + '\nProposed: ' + format(change.value))); card.append(line);
-          }
-          if (!entry.proposal.changes.length) card.append(element('p', {}, 'No changes proposed.'));
+        card.append(checks(localChecks(M, entry.candidate)));
+        for (const change of entry.proposal.changes) {
+          const line = element('div', { class: 'persona-proposal' });
+          const choose = element('input', { type: 'checkbox', checked: paths.has(change.path), 'data-proposal-path': change.path });
+          choose.addEventListener('change', () => choose.checked ? paths.add(change.path) : paths.delete(change.path));
+          line.append(label((change.operatorOverride ? 'Your correction · ' : '') + change.kind + ': ' + displayPath(change.path), choose),
+            element('pre', {}, change.path === '/portrait/src' ? 'Portrait preview shown above.' : 'Current: ' + format(change.previous) + '\nProposed: ' + format(change.value))); card.append(line);
         }
+        if (!entry.proposal.changes.length) card.append(element('p', {}, 'No changes proposed.'));
         reviewBox.append(card);
       }
       reviewBox.append(button('Apply reviewed changes', caught(async () => {
-        const current = getPersonas(); const output = [], expected = [];
+        const saved = (await chrome.storage.local.get(WORK))[WORK];
+        if (saved?.requestId !== review.requestId || saved.status !== 'review') throw new Error('This proposal is no longer current');
+        const current = getPersonas(), output = [], expected = [];
         for (const entry of review.entries) {
-          if (entry.isNew) output.push(M.applyEnrichment(entry.base, entry.proposal, { accept: [...chosen.get(entry.candidate.id)], expectedRevision: entry.proposal.baseRevision }));
-          else {
-            const persona = current.find(p => p.id === entry.candidate.id); if (!persona) throw new Error('Persona no longer exists');
-            output.push(M.applyEnrichment(persona, entry.proposal, { accept: [...chosen.get(persona.id)], expectedRevision: entry.proposal.baseRevision })); expected.push(entry.base);
+          let base = entry.base;
+          if (!entry.isNew) {
+            base = current.find(p => p.id === base.id); if (!base) throw new Error('Persona no longer exists'); expected.push(entry.base);
           }
+          output.push(M.applyEnrichment(base, entry.proposal, { accept: [...chosen.get(entry.candidate.id)], expectedRevision: entry.proposal.baseRevision }));
         }
-        await ask({ kind: 'persona-work-check', requestId: review.requestId });
         await persist(output, expected);
-        await ask({ kind: 'persona-work-finished', requestId: review.requestId, result: { personaIds: output.map(p => p.id), revisions: output.map(p => M.revisionOf(p)) } });
-        await chrome.storage.local.remove([REVIEWS, 'personaWorkPrivateDraft']); review = null; dirty = false; draft = null; original = null; editor.replaceChildren(); renderList(); await syncWork(); say('Reviewed persona changes saved.');
+        await saveWork({ ...saved, status: 'completed', revisions: output.map(p => ({ id: p.id, revision: M.revisionOf(p) })) });
+        await chrome.storage.local.remove(REVIEWS); review = null; dirty = false; draft = null; original = null;
+        editor.replaceChildren(); renderList(); renderWork(); say('Reviewed persona changes saved.');
       }), { id: 'persona-apply-reviewed', disabled: busy || currentStatus.fillBusy }));
     }
-    async function complete({ requestId, personas: candidates, candidates: alias }) {
-      if (refreshPersonas) await refreshPersonas();
-      const { request } = await ask({ kind: 'persona-work-check', requestId });
-      candidates ||= alias;
-      if (!Array.isArray(candidates) || !candidates.length) throw new Error('Agent completion requires persona candidates');
-      const requested = request.personas || []; const entries = [];
-      const privateDraft = (await chrome.storage.local.get('personaWorkPrivateDraft')).personaWorkPrivateDraft;
-      const ids = new Set();
-      for (const candidate of candidates) {
-        if (!candidate?.id || ids.has(candidate.id) || !request.personaIds.includes(candidate.id)) throw new Error('Unexpected or duplicate persona candidate'); ids.add(candidate.id);
-        if (request.operation === 'create') {
-          const binding = requested.find(p => p.id === candidate.id);
-          if (binding && (candidate.role !== binding.role || ['email', 'username'].some(key => binding.facts?.[key] && candidate.facts?.[key] !== binding.facts[key]))) throw new Error('Candidate changed a supplied identity binding');
-          if (getPersonas().some(p => p.id === candidate.id)) throw new Error('New persona ID is already in use');
-          const supplied = privateDraft?.requestId === requestId && privateDraft.persona?.id === candidate.id ? privateDraft.persona : binding;
-          const base = M.createPersona({ ...(supplied || { id: candidate.id, role: candidate.role, facts: {} }),
-            credentials: { ...(candidate.credentials || {}), ...(supplied?.credentials || {}) },
-            secrets: { ...(candidate.secrets || {}), ...(supplied?.secrets || {}) } });
-          const parsedCandidate = M.createPersona(candidate, { source: 'agent' });
-          const proposal = M.proposeEnrichment(base, parsedCandidate, { expectedRevision: M.revisionOf(base) });
-          entries.push({ isNew: true, base, proposal, candidate: parsedCandidate });
-        } else {
-          const base = getPersonas().find(p => p.id === candidate.id);
-          const requestedBase = requested.find(p => p.id === candidate.id);
-          const binding = request.personaBindings?.[candidate.id];
-          if (!base || !requestedBase || M.revisionOf(base) !== M.revisionOf(requestedBase) ||
-            (binding && (M.revisionOf(base) !== binding.revision || M.inputSignature(base) !== binding.inputSignature))) throw new Error('Persona changed while the agent was working; request fresh enrichment');
-          const proposal = M.proposeEnrichment(base, candidate, { expectedRevision: M.revisionOf(requestedBase) });
-          entries.push({ isNew: false, base: clone(base), proposal, candidate });
-        }
+    root.addEventListener('pagehide', () => {
+      if (work?.status === 'running' && work.owner === owner) {
+        chrome.storage.local.set({ [WORK]: { ...work, status: 'cancelled' } });
+        ask({ kind: 'inference-cancel', requestId: work.requestId }).catch(() => {});
       }
-      if (ids.size !== request.personaIds.length) throw new Error('Return a candidate for every requested persona');
-      review = { requestId, entries, createdAt: new Date().toISOString() };
-      await chrome.storage.local.set({ [REVIEWS]: review });
-      await ask({ kind: 'persona-work-proposed', requestId, proposal: { personas: candidates } });
-      await syncWork(); say('Agent persona changes are ready to inspect and approve.');
-      return { requestId, status: 'proposed', personaIds: [...ids] };
-    }
-    root.treadwayCompletePersonaWork = async input => {
-      try { return await complete(input); }
-      catch (error) {
-        say('Agent persona changes were not applied: ' + error.message, 'error');
-        workLine.textContent = 'Agent persona changes were not applied: ' + error.message;
-        await ask({ kind: 'persona-work-failed', requestId: input.requestId, error: error.message }).catch(() => {});
-        await syncWork().catch(() => {});
-        throw error;
-      }
-    };
-    root.treadwayAcknowledgePersonaWork = async ({ requestId }) => { const result = await ask({ kind: 'persona-work-ack', requestId }); await syncWork(); return { requestId, status: result.request?.status || 'accepted' }; };
-    root.treadwayPersonaWorkStatus = async ({ requestId }) => {
-      const response = await ask({ kind: 'persona-work-status' });
-      const request = response.request;
-      if (!request || request.requestId !== requestId) return { requestId, status: 'unknown' };
-      const names = { queued: 'pending', accepted: 'acknowledged', proposed: 'review', completed: 'completed', cancelled: 'cancelled', failed: 'failed' };
-      return { requestId, status: names[request.status] || 'unknown', result: request.result, error: request.error };
-    };
+    });
     function update(status) { currentStatus = status || {}; renderList(); }
     renderList(); syncWork().catch(error => say(error.message, 'error'));
-    return { update, reload: renderList, syncWork, complete };
+    return { update, reload: renderList, syncWork };
   }
   root.TreadwayPersonaUI = { mount };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
