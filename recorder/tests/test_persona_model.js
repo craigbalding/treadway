@@ -19,6 +19,22 @@ test('legacy and rich personas roundtrip with distinct arbitrary histories', () 
   assert.equal(Personas.personaValues(roundtrip).institution, undefined, 'ambiguous multiple institutions are never flattened');
 });
 
+test('date-related ages and durations are quantities while genuine date fields still receive calendar checks', () => {
+  const p = base();
+  p.facts.age_on_reference_date = '42';
+  p.domains.status = { days_since_issue_date: '120', hasExpiryDate: 'Yes', expiry_date_known: 'Yes' };
+  p.histories.education[0].yearsSinceAwardDate = '20';
+  let result = Manager.preflight(p);
+  assert.equal(result.ready, true, JSON.stringify(result.checks.filter(check => check.status === 'fail')));
+  assert.ok(result.checks.some(check => check.id === 'identity.age:age_on_reference_date' && check.status === 'pass'));
+  p.facts.age_on_reference_date = '43';
+  result = Manager.preflight(p);
+  assert.ok(result.checks.some(check => check.id === 'identity.age:age_on_reference_date' && check.status === 'fail'));
+  p.facts.age_on_reference_date = '42';
+  p.domains.status.expiryDate = 'not a date';
+  assert.ok(Manager.preflight(p).checks.some(check => check.path.endsWith('/expiryDate') && check.status === 'fail'));
+});
+
 test('parser rejects duplicate record IDs, unsafe keys, malformed dates and external portrait fetches', () => {
   const p = base();
   const parse = value => Personas.parsePersonas(JSON.stringify({ personas: [value] }));

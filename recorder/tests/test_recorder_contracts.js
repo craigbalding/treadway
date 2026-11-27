@@ -27,23 +27,15 @@ test('a missing read receiver reattaches content scripts, but an uncertain messa
   assert.equal(retries, 0);
 });
 
-test('assistance binds one pending request to its actual run and document, then rejects stale completion', async () => {
-  let documentId = 'doc-instance-a';
-  const h = createHarness({ frameMessage: message => message.kind === 'inspect-assistance' ?
-    { url: 'https://app.example.test/form', documentInstanceId: documentId, fields: [] } : {} });
+test('retired local-agent requests cannot queue, apply or complete work', async () => {
+  const h = createHarness();
   await h.start();
-  const persona = { ...h.persona, facts: { email: 'casey@example.test', password: 'PrivateSynthetic!7' }, credentials: { password: 'PrivateSynthetic!7' } };
-  const first = await h.command({ kind: 'assistance-request', persona });
-  assert.equal(first.schema, 'treadway.assistance/1');
-  assert.equal(JSON.stringify(first).includes('PrivateSynthetic!7'), false);
-  assert.equal(first.target.tabId, 7);
-  assert.equal((await h.command({ kind: 'assistance-request', persona })).requestId, first.requestId);
-  documentId = 'doc-instance-b';
-  assert.match((await h.command({ kind: 'assistance-check', requestId: first.requestId })).error, /form changed/);
-  const replacement = await h.command({ kind: 'assistance-request', persona });
-  assert.notEqual(replacement.requestId, first.requestId);
-  await h.command({ kind: 'stop' });
-  assert.match((await h.command({ kind: 'assistance-check', requestId: replacement.requestId })).error, /no longer active/);
+  const before = JSON.stringify(h.session);
+  for (const kind of ['assistance-request', 'assistance-check', 'assistance-finished', 'persona-work-request', 'persona-work-ack', 'persona-work-proposed']) {
+    assert.match((await h.command({ kind, persona: h.persona })).error, /retired/);
+  }
+  assert.equal(JSON.stringify(h.session), before);
+  assert.equal(h.local.pendingPersonaWork, undefined);
 });
 
 test('concurrent Starts declare only the accepted journey', async () => {
@@ -56,7 +48,7 @@ test('concurrent Starts declare only the accepted journey', async () => {
 
 test('Start retains an uncertain declaration so Stop can reconcile it', async () => {
   const h = createHarness({ fetchHook: async (_url, options) => { if (options.method === 'POST') throw new Error('lost reply'); } });
-  assert.match((await h.start()).error, /lost reply/);
+  assert.match((await h.start()).error, /Cannot reach the SafeYolo Agent API/);
   assert.equal(h.session.journey.contextStatus, 'declaration_unconfirmed');
   assert.match((await h.start('Again')).error, /Stop/);
   await h.command({ kind: 'stop' });
@@ -246,7 +238,7 @@ test('a lost renewal response stays unconfirmed and is never automatically retri
     if (fail && options.method === 'POST') throw new Error('lost renewal reply');
   } });
   await h.start(); fail = true;
-  assert.match((await h.command({ kind: 'renew-context' })).error, /lost renewal reply/);
+  assert.match((await h.command({ kind: 'renew-context' })).error, /Cannot reach the SafeYolo Agent API/);
   await h.idle();
   assert.equal(h.calls.filter(c => c.method === 'POST').length, 2);
   assert.equal(h.session.journey.contextRenewalStatus, 'unconfirmed');

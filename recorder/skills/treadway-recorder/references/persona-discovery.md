@@ -121,15 +121,21 @@ stored account. Reconcile that separately; do not silently mutate the account or
 rewrite earlier captures. Apply persona changes at an appropriate boundary rather
 than changing facts underneath an active fill.
 
-In 0.1.8 the panel's persona manager exposes New persona, Create with agent,
-inspection/editing and Enrich selected. Agent creation/enrichment uses the same
-assistance inbox and owned-panel completion transport as Phone a friend. Arm the
-current watcher, acknowledge the request promptly, return every requested
-persona through `assist.mjs complete`, and let the operator review proposed
-additions/conflicts. The request contains its original revision/signature;
-late, cancelled or stale replies cannot overwrite later edits. A completed
-proposal does not run Fill all, navigate or submit. Ordinary current-form
-assistance still completes through the extension's shared Fill all path.
+In 0.2 the persona manager exposes New persona, Create with AI, editable
+inspection and Enrich selected. Creation/enrichment calls the configured structured
+provider directly. Give the brief, market and actor; no form inventory or local
+agent inbox is required. Local cryptographic credentials and distinct embedded
+portraits complement model-generated histories, preferences and narrative.
+Candidates are validated and reviewed before applying; original revision/signature
+bindings reject late, cancelled or stale replies. Existing contacts, credentials,
+manual overrides and stable history IDs remain authoritative. Enrichment does not
+navigate, submit or alter an application account.
+
+The single Fill all action uses local facts and Jev, then structured inference for
+missing required content. Additions are compare-and-swap persisted before the
+same native filler uses them. Its ordered executor stops on unresolved required
+prerequisites and uncertain effects. Repeated histories use explicit record
+bindings, exposed in the remaining-fields list, rather than ordinal guesses.
 
 Use the local and optional named Jev checks before presenting a candidate as
 ready. Expose failures and uncertainties individually and repair contradictions

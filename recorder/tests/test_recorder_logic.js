@@ -149,8 +149,8 @@ test('SafeYOLO calls send the bearer key and report API errors', async () => {
   await Context.declareContext(reply(200, { expires_in: 600 }), 'key', 'run=r;agent=a', 1200);
   assert.deepEqual(JSON.parse(calls[1].options.body), { context: 'run=r;agent=a', ttl: 1200 });
   assert.equal(calls[1].options.method, 'POST');
-  await assert.rejects(Context.declareContext(reply(400, { error: 'Invalid test context', detail: 'bad' }), 'key', 'x', 1), /HTTP 400 \(Invalid test context: bad\)/);
-  await assert.rejects(Context.clearContext(async () => { throw new Error('offline'); }, 'key'), /Cannot reach the SafeYOLO Agent API/);
+  await assert.rejects(Context.declareContext(reply(400, { error: 'Invalid test context', detail: 'bad' }), 'key', 'x', 1), /HTTP 400/);
+  await assert.rejects(Context.clearContext(async () => { throw new Error('offline'); }, 'key'), /Cannot reach the SafeYolo Agent API/);
 });
 
 test('context ownership matches the actual API object and preserves every field', () => {

@@ -8,41 +8,13 @@ const persona = { id: 'example-person', role: 'participant', label: 'Casey Examp
   preferences: { remote_days: 2 }, histories: { education: [{ id: 'degree-a', institution: 'Example Academy', awardDate: '2005-06-30' }] } };
 const workMessage = (operation = 'enrich') => ({ kind: 'persona-work-request', operation, personas: [persona], personaIds: [persona.id], brief: 'A fictional service accepts applications.', actor: 'participant' });
 
-test('persona packets preserve source bindings and rich context while excluding credentials', async () => {
-  const h = createHarness(); const { request } = await h.command(workMessage());
-  assert.equal(request.schema, 'treadway.persona-work/1'); assert.equal(request.status, 'queued');
-  assert.equal(request.personas[0].description, persona.description);
-  assert.equal(request.personas[0].histories.education[0].institution, 'Example Academy');
-  assert.equal(request.personas[0].facts.email, 'casey@example.test', 'agent needs existing private contact binding');
-  assert.equal(request.personaBindings[persona.id].revision, 3);
-  assert.match(request.personaBindings[persona.id].inputSignature, /^profile-/);
-  assert(!JSON.stringify(request).includes('PrivateFixture!7'));
-  assert.equal(request.personas[0].credentials, undefined);
-  assert((await h.command(workMessage())).error.includes('cancel'));
-});
-
-test('acknowledgement, proposal, review completion and cancellation have explicit terminal state', async () => {
-  const h = createHarness(); const { request } = await h.command(workMessage());
-  const input = { requestId: request.requestId };
-  assert((await h.command({ kind: 'persona-work-finished', ...input })).error.includes('transition'));
-  assert.equal((await h.command({ kind: 'persona-work-ack', ...input })).request.status, 'accepted');
-  assert.equal((await h.command({ kind: 'persona-work-proposed', ...input, proposal: { personas: [persona] } })).request.status, 'proposed');
-  assert((await h.command({ kind: 'persona-work-ack', ...input })).error.includes('transition'));
-  assert.equal((await h.command({ kind: 'persona-work-finished', ...input, result: { personaIds: [persona.id] } })).request.status, 'completed');
-  assert((await h.command({ kind: 'persona-work-check', ...input })).error.includes('no longer current'));
-  const next = (await h.command(workMessage())).request;
-  await h.command({ kind: 'persona-work-cancel', requestId: next.requestId });
-  assert((await h.command({ kind: 'persona-work-proposed', requestId: next.requestId })).error);
-  assert.equal((await h.command({ kind: 'persona-work-status' })).request.status, 'cancelled');
-});
-
-test('configured API keys are rejected from agent packets and semantic model context', async () => {
-  const h = createHarness(); const bad = workMessage(); bad.brief += ' fixture-key';
-  assert((await h.command(bad)).error.includes('API credential'));
-  assert.equal((await h.command({ kind: 'persona-work-status' })).request, null);
-  const answer = await h.command({ kind: 'persona-preflight', persona: { ...persona, description: persona.description + ' fixture-key' } });
-  assert(!h.calls.length, 'no provider configured; local preflight needs no network');
-  assert(answer.checks.some(check => check.id === 'semantic.not_checked'));
+test('legacy persona-work transport is retired without changing retained pending artifacts', async () => {
+  const pending = { requestId: 'old-fixture', status: 'queued' };
+  const h = createHarness({ local: { pendingPersonaWork: pending } });
+  for (const kind of ['persona-work-request', 'persona-work-check', 'persona-work-cancel', 'persona-work-finished']) {
+    assert.match((await h.command({ kind, persona })).error, /retired/);
+  }
+  assert.deepEqual(h.local.pendingPersonaWork, pending);
 });
 
 test('persona saves and Fill all exclude each other and infer only within the current fill token', async () => {

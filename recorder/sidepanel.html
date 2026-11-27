@@ -10,16 +10,10 @@
   <header>
     <h1>Treadway Flow Recorder</h1>
     <p id="extension-version" class="hint"></p>
-    <p id="live-output-status" class="hint" role="status">Live output waiting for agent</p>
+    <p id="live-output-status" class="hint" role="status">Live journal output not connected</p>
     <p id="status" class="status idle">No journey running</p>
-    <div id="context-clock" class="context-clock" hidden>
-      <div class="row">
-        <strong>Context remaining</strong>
-        <span id="context-countdown" aria-live="off"></span>
-      </div>
-      <p id="context-notice" role="status" aria-live="polite"></p>
-      <button id="renew-context" disabled>Renew context</button>
-    </div>
+    <p id="runtime-readiness" class="hint" role="status">Checking recorder readiness…</p>
+    <button id="renew-context" hidden disabled>Renew context</button>
   </header>
 
   <section id="journey-section">
@@ -28,18 +22,24 @@
       <select id="persona"></select>
     </label>
     <label>Journey name
-      <input id="journey-name" placeholder="submit expense claim" autocomplete="off">
+      <input id="journey-name" placeholder="Describe the journey" autocomplete="off">
     </label>
+    <button id="suggest-journey" type="button">Suggest a journey name</button>
     <div class="row">
       <button id="start" class="primary">Start</button>
       <button id="stop" disabled>Stop and save</button>
     </div>
     <div class="row" id="recording-actions">
       <button id="fill" disabled>Fill all</button>
-      <button id="phone-friend" disabled>Phone a friend</button>
+      <button id="cancel-fill" hidden>Cancel fill</button>
       <button id="authenticated" disabled>Mark authenticated</button>
     </div>
     <p id="fill-progress" class="hint" role="status" aria-live="polite" hidden></p>
+    <section id="remaining-fields" hidden aria-labelledby="remaining-title">
+      <h3 id="remaining-title">Fields needing attention</h3>
+      <p class="hint">Select a field to locate it on the page.</p>
+      <ol id="remaining-list"></ol>
+    </section>
     <label>Account you see (optional)
       <input id="observed-account" placeholder="visible account name or test identity" autocomplete="off">
     </label>
@@ -97,22 +97,32 @@
     <label>SafeYOLO agent API key
       <input id="safeyolo-key" type="password" autocomplete="off">
     </label>
-    <label>Test context timer (minutes)
-      <input id="ttl-minutes" type="number" min="1" max="120" value="20">
-    </label>
     <label>TypeSafe AI API key for Jev (optional)
       <input id="jev-key" type="password" autocomplete="off">
     </label>
+    <fieldset id="inference-settings">
+      <legend>AI inference</legend>
+      <p class="hint">Used to prepare personas and complete missing form data. Keys stay in this extension profile.</p>
+      <label>Provider<select id="llm-provider"></select></label>
+      <label>Model<select id="llm-model"></select></label>
+      <label>API key<input id="llm-key" type="password" autocomplete="off"></label>
+      <label>API endpoint<input id="llm-base-url" type="url" autocomplete="off"></label>
+      <label>Request timeout (seconds)<input id="llm-timeout-seconds" type="number" min="1" max="120" value="60"></label>
+      <p id="inference-readiness" class="hint" role="status">Inference is not configured.</p>
+    </fieldset>
     <label><input id="record-secrets" type="checkbox" checked> Record typed test passwords and one-time codes</label>
     <button id="save-settings" class="primary">Save settings</button>
   </details>
 
   <script src="lib/personas.js"></script>
   <script src="lib/persona-manager.js"></script>
+  <script src="lib/credentials.js"></script>
+  <script src="lib/persona-portrait.js"></script>
+  <script src="lib/persona-inference.js"></script>
   <script src="lib/persona-ui.js"></script>
+  <script src="lib/inference.js"></script>
   <script src="lib/test-context.js"></script>
   <script src="lib/download-export.js"></script>
-  <script src="lib/assistance.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

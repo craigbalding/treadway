@@ -34,14 +34,13 @@ preparing new personas or revisiting them as an engagement develops. It covers
 lightweight operator questions, public and SPA evidence, rich histories,
 consistency checks and preserving manual corrections during enrichment.
 
-For version 0.1.8, use the panel persona manager to inspect or manually correct
-facts, histories, narrative and portrait. Create with agent and Enrich selected
-use the paired assistance watcher, acknowledge/complete transport and operator
-proposal review. Return complete candidates for every selected identity; retain
-stable bindings and manual overrides. Restart the assistance watcher with the
-updated CLI after an extension update, and re-arm the native journal stream for
-the current browser/worker generation. Validate visible states before claiming
-readiness. See the installed README for exact commands.
+For recorder 0.2, use the panel persona manager to inspect/edit facts, histories,
+narrative and portrait. Create and Enrich use the configured structured-inference
+provider directly, with local candidate validation and operator proposal review.
+No Phone a friend, assistance inbox or local-agent wake watcher is used. Preserve
+stable identity, contacts, credentials, manual overrides and history record IDs.
+Existing persona examples and generator outputs remain ingredients; supply the
+application brief and broad domain context rather than a thin random profile.
 
 Prepare a fresh, coherent persona with values usable in the actual form. A
 synthetic fixture that parses is not necessarily a usable registration identity:
@@ -79,15 +78,19 @@ where the application requires a fresh value. Format/checksum validity does not
 prove that an external registry will accept an identifier. Resolve a real missing
 prerequisite rather than making the human debug rejected placeholder data.
 
-Configure the selected profile's recorder with the agent API key and available
-Jev key. No extension host list is needed: the journey can discover supporting
-sites and identity providers. Check existing SafeYolo policy and capture retention
-without treating the application's host as the whole journey. Read credentials
-from existing private provisioning without exposing them in messages or captures.
-Jev classifies controls and selects supported categorical answers from rich
-persona context; it does not generate free text, provide email inboxes, allocate addresses or verify identity. Preserve the
-operator's chosen test-secret logging policy. Recorder API keys belong in local
-extension settings, not persona facts or the exported event journal.
+Configure optional Jev and direct structured inference from existing private
+provisioning. Use a reviewed model and strict schema mode; do not invent a key or
+substitute an unrelated credential. API keys belong in extension settings, never
+persona facts or capture files. Jev reasons over rich context and observed options;
+it does not generate free text, provide inboxes or verify identity.
+
+Standalone recording needs no SafeYolo key. In a SafeYolo sandbox, use the narrow
+native helper where available, installed for the exact extension ID following the
+README. It reads the current guest token per command without returning it to the
+extension. An explicit agent key supports managed browsers without that helper.
+Do not weaken proxy, CA, browser sandbox or policy. An installed helper failure is
+not permission to silently downgrade to standalone. No target-host list belongs
+in the extension; supporting/identity sites can be discovered during the journey.
 
 Prefer the recorder's Downloads mode when a native folder picker is unavailable.
 Configure a writable output directory the agent can read, save settings, validate
@@ -119,8 +122,7 @@ when recording starts before claiming to monitor activity. Other
 agents should read that file directly rather than asking the browser agent to
 inspect each event. Re-arm on expiry/failure; resume the same file only for its
 bound browser generation/extension. Preserve final Save and disclosed stream
-gaps. This observational exporter is separate from the assistance wake watcher
-and from Coord waiting.
+gaps. This observational exporter is separate from direct inference and from Coord waiting.
 
 Let the human choose navigation, submissions and consequential application
 choices unless they delegate them. Provide active assistance with field values,
@@ -134,7 +136,7 @@ password, and defaults Display Name to full name. Jev chooses the closest
 reasonable field type with a 0.51 Choice confidence floor and a separate
 0.80 semantic-fit probability gate. Classification receives descriptors/type
 names; semantic option decisions additionally receive non-secret categorical
-intent values and observed options. Version 0.1.8 can also send redacted
+intent values and observed options. The recorder can also send redacted
 description, relevant structured facts, histories, preferences and circumstances
 when a categorical fact is missing. An independent support gate rejects a best
 guess without evidence. Explicit facts and operator overrides win; accepted
@@ -146,7 +148,7 @@ password value. Classification is not proof of a correct or persisted value.
 
 Use the native semantic matching before rewriting a persona just to match UI
 wording. Supplied degree/grade/institution facts can match equivalent displayed
-options. The recorder batches independent decisions, waits for async suggestions,
+options. The recorder batches descriptor matching, resolves stateful options when reached, waits for async suggestions,
 and verifies a selected option against the shared Treadway widget binding.
 Prepare explicit radio/checkbox facts where known (string Yes/No values are
 supported), including relevant negative statements. Rich context may support
@@ -158,22 +160,17 @@ panel's active phase, final fill report and remaining gaps before claiming succe
 Fill all rereads saved personas, so agent fact updates require no timing-sensitive
 Reload personas click. Preserve the same identity and generated credential cache.
 
-For recorder versions with **Phone a friend**, arm `recorder/assist.mjs watch`
-against the profile's actual `Treadway/assistance` Downloads directory. Use the
-harness's task-completion wake mechanism (Claude Code background task), or a
-bounded foreground watch. A detached process is not a listener. This assistance
-inbox is separate from Coord waiting; consult the recorder README for commands
-and supported harnesses.
-
-Handle each request as one gap bundle in the existing agent turn. Prepare
-coherent missing facts, then use `assist.mjs complete` with the request, owned
-BrowserManager session and private facts JSON. That command updates the same
-persona and invokes the exact panel Fill all function. Do not type into the app
-through separate CDP/DOM filling, manually pick dropdowns, patch framework state
-or substitute another automation engine. Preserve email, credentials and human
-values/choices. If native filling cannot handle a control, report a recorder
-gap; do not mask it or count manual work as extension coverage. Report verified
-counts/remaining gaps and re-arm the watcher.
+One Fill all action uses local facts and Jev first, then direct LLM inference for
+required content gaps. The panel validates and compare-and-swap saves additions
+before the same filler uses explicit bindings. Existing values, contacts,
+credentials, operator corrections and consents stay authoritative. Mechanical
+failures are not a request to invent different persona values. Filling follows
+live visual/semantic order, observes dependencies and stops at required gaps,
+invalid prerequisites or uncertain outcomes. Use the remaining-fields list to
+locate gaps and explicitly select the intended stable record for repeated
+histories; do not assign records by ordinal guess. Do not type around a failing
+recorder with a separate automation engine and count that as extension coverage.
+Report and reproduce a mechanism gap with a focused local fixture.
 
 Coordinate with other agents before recording: SafeYolo's declared context is
 agent-wide, not profile-local. A testing agent must not overwrite the recorder's
@@ -181,11 +178,12 @@ declaration or mix independent target work into the demonstration. Maintain the
 hold until the operator finishes or explicitly changes the arrangement. A human
 recording a baseline is not authorisation to launch independent assessment tests.
 
-Where available, watch the context countdown and use Renew context before it
-expires. A renewal must preserve the exact declaration fields, persona and run;
-do not reconstruct it with guessed step or intent fields. Keep externally
-performed renewals and their granted expiry in the capture evidence. A proxy
-context lease and an application's authentication session are separate states.
+SafeYolo context renewal runs automatically during recording and stops on Stop &
+save. A failed or unconfirmed renewal remains visible and is not automatically
+retried after worker restart. An explicit Renew can reconcile it. Do not replay an
+application write to test renewal: preserve uncertain effects and let the operator
+choose another attempt after reconciliation. Context expiry is separate from the
+application's authentication session.
 
 Use meaningful step markers and expected outcomes without making the human
 annotate every click. Preserve their current tab, populated values and capture
@@ -195,7 +193,7 @@ intentional test inputs when demonstrating a negative case.
 
 ## Finish and hand off
 
-Stop and save when the operator finishes. Check the acknowledged output path,
+Stop and save when the operator finishes. Stop observers when an engagement ends; preserve artifacts and pending state, and do not resume old requests or perform target tidy-up after authorisation ends. Check the acknowledged output path,
 latest revision, pending requests and content-drain results. Retain explicit gaps
 and late responses; ensure the final revision is saved before closing. Do not
 discard an incomplete run to make the result look successful.
@@ -206,10 +204,10 @@ reopen target pages to tidy up after authorisation ends. Before starting a new
 engagement, reconcile retained requests with the operator's current intent;
 do not automatically resume an old request or carry forward target authorisation.
 
-Keep the journal, persona bindings, expected outcomes and exact SafeYolo captures
+Keep the journal, handoff manifest, persona revision bindings, expected outcomes and available exact SafeYolo captures
 together privately. Use each observed `safeyoloRequestId` to retrieve its FlowStore
 record; a Chrome request ID or nearby timestamp is not an exact join. Verify body
-retention rather than assuming an ID proves complete evidence.
+retention rather than assuming an ID proves complete evidence. Standalone journals have browser events and passive request metadata, but no SafeYolo FlowStore bodies; preserve that limitation explicitly.
 
 Hand the bundle to a flow-authoring agent with the intended actor, demonstrated
 result and unresolved steps. Prefer HTTP operations for repeatable application

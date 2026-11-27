@@ -8,6 +8,18 @@ of every click or a new flow language.
 
 ## Assemble the input bundle
 
+Recorder 0.2 includes a `treadway.handoff/1` manifest with stable run/title,
+version information, persona revision signatures, exact request references,
+expected outcomes and unresolved/blocked fill observations. Inspect the actual
+events and available bodies rather than treating this index as application proof.
+Standalone capture has no SafeYolo FlowStore; record missing bodies explicitly.
+
+Ordered multi-phase filling can carry earlier retained values into a later
+`fill` event with `carriedForward: true`. Those entries are fresh readbacks, not
+another input mutation or another inference result. Bind histories by record ID,
+preserve interrupted/uncertain outcomes and use the final live report to assess
+retention. Do not replay these observational carry-forward entries as new actions.
+
 Keep the event file, persona facts/generator seed and secret references, intended
 role/account, expected outcomes, and exact FlowStore captures together in private
 runtime storage. Retrieve captures using each `network_response.safeyoloRequestId`.

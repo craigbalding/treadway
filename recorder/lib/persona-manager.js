@@ -228,6 +228,13 @@
   function usableDeductions(persona) {
     return Object.fromEntries(Object.entries(persona.deductions || {}).filter(([, value]) => value.personaRevision === revisionOf(persona) && value.inputSignature === inputSignature(persona)));
   }
+  function dateField(key) {
+    const name = String(key).replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+    // A quantity or flag referring to a date is not itself a calendar date.
+    if (/^(?:age|years?|months?|weeks?|days?|hours?|duration|count|has|is|requires?)(?:_|$)/.test(name)) return false;
+    if (/_(?:known|verified|confirmed|provided|required|available)$/.test(name)) return false;
+    return /(?:^date$|_date$|^date_of_|^valid_until$|^valid_from$)/.test(name);
+  }
   function validDate(value) {
     return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
   }
@@ -246,9 +253,10 @@
     if (dob) add('identity.birthdate', validDate(dob) ? 'pass' : 'fail', '/facts/date_of_birth', validDate(dob) ? 'Birth date is a valid calendar date' : 'Birth date must be YYYY-MM-DD');
     if (validDate(dob) && validDate(ref)) {
       add('identity.birthdate_reference', dob <= ref ? 'pass' : 'fail', '/facts/date_of_birth', dob <= ref ? 'Birth precedes the reference date' : 'Birth date is after the reference date');
-      if (p.facts.age !== undefined) {
+      for (const [key, value] of Object.entries(p.facts).filter(([key]) => /^age(?:_(?:on|at|as_of)_reference_date)?$/.test(
+        key.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase()))) {
         const age = Number(ref.slice(0, 4)) - Number(dob.slice(0, 4)) - Number(ref.slice(5) < dob.slice(5));
-        add('identity.age', Number(p.facts.age) === age ? 'pass' : 'fail', '/facts/age', Number(p.facts.age) === age ? 'Age agrees with birth/reference dates' : 'Age contradicts birth/reference dates');
+        add(key === 'age' ? 'identity.age' : 'identity.age:' + key, Number(value) === age ? 'pass' : 'fail', '/facts/' + pointerPart(key), Number(value) === age ? 'Age agrees with birth/reference dates' : 'Age contradicts birth/reference dates');
       }
     } else add('profile.reference_date', ref ? 'uncertain' : 'uncertain', '/referenceDate', 'Set a reference date for age, current status and validity checks');
     if (p.facts.ppsn) add('identity.ppsn_checksum', Personas.ppsnValid(p.facts.ppsn) ? 'pass' : 'fail', '/facts/ppsn', 'PPSN local format/checksum check; this does not establish allocation');
@@ -264,7 +272,7 @@
         issue <= expiry ? 'Record dates are ordered' : 'Record expiry/end precedes issue/start');
       for (const [key, item] of Object.entries(value)) {
         const at = path + '/' + pointerPart(key);
-        if (/Date$|_date$|^date$|^validUntil$|^validFrom$/.test(key) && typeof item === 'string' && item) add('record.date:' + at, validDate(item) ? 'pass' : 'fail', at, 'Record date uses a valid YYYY-MM-DD value');
+        if (dateField(key) && typeof item === 'string' && item) add('record.date:' + at, validDate(item) ? 'pass' : 'fail', at, 'Record date uses a valid YYYY-MM-DD value');
         if (/^iban$/i.test(key) && item) add('bank.iban_checksum:' + at, ibanValid(item) ? 'pass' : 'fail', at, 'IBAN syntax/checksum check; bank and account acceptance remain separate');
         if (['height_cm', 'weight_kg'].includes(key) && item !== '') add('physical.positive:' + at, Number(item) > 0 ? 'pass' : 'fail', at, 'Physical measurement must be positive in the named unit');
         inspect(item, at);
@@ -275,7 +283,7 @@
       const record = records[index], path = '/histories/' + pointerPart(kind) + '/' + index;
       const start = record.startDate || record.start_date, end = record.endDate || record.end_date || record.awardDate || record.award_date;
       if (start && end && validDate(start) && validDate(end)) add('history.order:' + kind + ':' + record.id, start <= end ? 'pass' : 'fail', path, start <= end ? 'History dates are ordered' : 'History ends before it starts');
-      for (const [key, value] of Object.entries(record)) if (/Date$|_date$|^date$|^validUntil$|^validFrom$/.test(key) && typeof value === 'string' && value) {
+      for (const [key, value] of Object.entries(record)) if (dateField(key) && typeof value === 'string' && value) {
         add('history.date:' + kind + ':' + record.id + ':' + key, validDate(value) ? 'pass' : 'fail', path + '/' + key, 'History dates use valid YYYY-MM-DD values');
         if (validDate(value) && validDate(dob)) add('history.birth:' + kind + ':' + record.id + ':' + key, value >= dob ? 'pass' : 'fail', path + '/' + key, value >= dob ? 'History occurs after birth' : 'History date precedes birth');
       }

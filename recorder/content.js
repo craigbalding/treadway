@@ -1,8 +1,12 @@
 // Page observations, including a drainable journal and interruptible Fill all.
 (function () {
   'use strict';
+  const attachmentKey = '__treadwayRecorderAttachment';
+  if (globalThis[attachmentKey]?.alive?.()) return;
   const PageFill = globalThis.TreadwayPageFill;
   const Fields = globalThis.TreadwayFields;
+  const attachedRuntime = chrome.runtime, extensionId = attachedRuntime.id;
+  const contentVersion = attachedRuntime.getManifest().version;
   let recording = false;
   let recordSecrets = false;
   let activeFill = null;
@@ -23,7 +27,7 @@
     if (!recording && !force) return Promise.resolve();
     const operation = send({ kind: 'page-event', event: Object.assign({
       at: new Date().toISOString(), clientEventId: documentInstanceId + ':' + (++sequence),
-      documentInstanceId, url: location.href, frame: window === window.top ? 'top' : 'child',
+      documentInstanceId, contentVersion, url: location.href, frame: window === window.top ? 'top' : 'child',
     }, event) }).catch((error) => { failures.push(error.message); });
     pending.add(operation);
     operation.finally(() => pending.delete(operation));
@@ -82,17 +86,35 @@
   }, true);
   document.addEventListener('change', fieldChanged, true);
   chrome.runtime.onMessage.addListener((message, _sender, reply) => {
+    const formContext = () => JSON.stringify({ url: location.href, steps: globalThis.TreadwayFormRuntime('inspect').step.map(item => item.label) });
+    if (message.kind === 'journey-page-context') {
+      reply({ site: location.origin, path: location.pathname, title: document.title,
+        headings: [...document.querySelectorAll('h1,h2')].filter(element => element.getBoundingClientRect().width)
+          .slice(0, 6).map(element => element.textContent.trim().slice(0, 200)) }); return false;
+    }
+    if (message.kind === 'recorder-readiness') {
+      reply({ ready: true, version: contentVersion, documentInstanceId, url: location.href }); return false;
+    }
+    if (message.kind === 'highlight-field') {
+      const element = PageFill.resolveField(document, message.binding);
+      if (!element) { reply({ error: 'The field changed or its binding is ambiguous' }); return false; }
+      element.scrollIntoView({ behavior: 'instant', block: 'center' });
+      const previous = element.style.outline;
+      element.style.outline = '3px solid #c77b00';
+      setTimeout(() => { if (element.style.outline === 'rgb(199, 123, 0) solid 3px' || element.style.outline === '3px solid rgb(199, 123, 0)') element.style.outline = previous; }, 2000);
+      reply({ highlighted: true }); return false;
+    }
     if (message.kind === 'inspect-assistance' && window === window.top) {
-      reply({ url: location.href, documentInstanceId,
+      reply({ url: location.href, documentInstanceId, formContext: formContext(),
         fields: [...document.querySelectorAll('input,textarea,select,[role="combobox"],[role="radiogroup"]')]
           .filter(element => element.getBoundingClientRect().width && element.getBoundingClientRect().height &&
             element.getAttribute('aria-hidden') !== 'true' && element.type !== 'hidden')
           .map(element => {
             const field = PageFill.describeField(element);
             const secret = element.type === 'password' || Fields.SECRET_TYPES.has(Fields.ruleType(field)?.type);
-            return { field, selectors: PageFill.selectorsFor(element), role: element.getAttribute('role'),
-              required: element.required || element.getAttribute('aria-required') === 'true',
-              disabled: element.disabled || element.getAttribute('aria-disabled') === 'true',
+            return { field, binding: PageFill.bindingFor(element), selectors: PageFill.selectorsFor(element), role: element.getAttribute('role'),
+              required: field.required,
+              disabled: element.disabled || element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true',
               hasValue: !PageFill.isEmpty(element),
               ...(secret ? { secret: true } : { value: PageFill.fieldValue(element),
                 ...(['radio', 'checkbox'].includes(element.type) ? { checked: element.checked } : {}) }) };
@@ -108,20 +130,33 @@
       Promise.resolve(activeFill).then(() => Promise.all([...pending])).then(() => reply({ flushed: true, failures: failures.slice() }));
       return true;
     }
+    if (message.kind === 'cancel-fill') {
+      fillController?.abort(); reply({ cancelled: Boolean(fillController) }); return false;
+    }
     if (message.kind === 'fill' && window === window.top) {
       if (!recording) { reply({ error: 'Recording is not active' }); return false; }
       if (activeFill) { reply({ error: 'A fill is already running' }); return false; }
+      if (message.expectedDocumentInstanceId && (message.expectedDocumentInstanceId !== documentInstanceId || message.expectedUrl !== location.href ||
+          message.expectedFormContext && message.expectedFormContext !== formContext())) {
+        reply({ error: 'The form changed while preparing missing values' }); return false;
+      }
       fillController = new AbortController();
       const classify = (fields) => send({ kind: 'classify', fields, fillToken: message.fillToken }).then((answer) => answer.types || {});
       const decide = (jobs) => send({ kind: 'decide', jobs, fillToken: message.fillToken }).then((answer) => answer.decisions || {});
       const progress = (phase, count) => send({ kind: 'fill-progress', phase, count }).catch(() => undefined);
-      activeFill = PageFill.fillAll(document, { values: message.values, profile: message.profile, classify, decide, progress, signal: fillController.signal })
+      const awaitDependencies = () => send({ kind: 'fill-await-dependencies', fillToken: message.fillToken }).then(answer => {
+        if (!answer.ready) throw new Error('Dependent requests have not completed');
+      });
+      activeFill = PageFill.fillAll(document, { values: message.values, profile: message.profile,
+        boundValues: message.boundValues, historyBindings: message.historyBindings, previousReport: message.previousReport,
+        classify, decide, progress, awaitDependencies, signal: fillController.signal })
         .then(async (report) => {
           await record({ type: 'fill', filled: report.filled, manual: report.manual,
             decisions: report.decisions, batches: report.batches, skipped: report.skipped,
             deductions: report.deductions, personaRevision: message.profile?.revision,
+            blocked: report.blocked, execution: report.execution,
             interrupted: Boolean(report.interrupted), classifyError: report.classifyError, decisionError: report.decisionError }, true);
-          reply({ report, url: location.href });
+          reply({ report, url: location.href, documentInstanceId, formContext: formContext() });
         })
         .catch(async (error) => {
           await record({ type: 'fill_error', error: error.message }, true);
@@ -132,6 +167,10 @@
     }
     return false;
   });
+  globalThis[attachmentKey] = { documentInstanceId, version: contentVersion, alive() {
+    try { return attachedRuntime.id === extensionId && attachedRuntime.getManifest().version === contentVersion; }
+    catch (_) { return false; }
+  } };
   send({ kind: 'recording?' }).then((answer) => setRecording(answer.active, answer.recordSecrets))
     .catch((error) => failures.push(error.message));
 })();

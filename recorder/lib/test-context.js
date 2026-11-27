@@ -44,18 +44,21 @@
   }
 
   async function callSafeyolo(fetchFunction, apiKey, method, body) {
-    const options = { method, headers: { Authorization: 'Bearer ' + apiKey } };
+    const controller = new AbortController();
+    const options = { method, signal: controller.signal, headers: { Authorization: 'Bearer ' + apiKey } };
     if (body) {
       options.headers['Content-Type'] = 'application/json';
       options.body = JSON.stringify(body);
     }
-    let response;
+    let response, text, timer;
     try {
-      response = await fetchFunction(SAFEYOLO_CONTEXT_URL, options);
+      [response, text] = await Promise.race([
+        (async () => { const result = await fetchFunction(SAFEYOLO_CONTEXT_URL, options); return [result, await result.text()]; })(),
+        new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('SafeYolo response unconfirmed')); }, 20000); }),
+      ]);
     } catch (error) {
-      throw new Error('Cannot reach the SafeYOLO Agent API (is this browser using the SafeYOLO proxy?): ' + error.message);
-    }
-    const text = await response.text();
+      throw new Error('Cannot reach the SafeYolo Agent API; check the browser proxy and integration');
+    } finally { clearTimeout(timer); }
     let parsed = null;
     try {
       parsed = JSON.parse(text);
@@ -63,8 +66,7 @@
       parsed = null;
     }
     if (response.status !== 200 || !parsed) {
-      const detail = parsed ? [parsed.error, parsed.detail].filter(Boolean).join(': ') : text.slice(0, 200);
-      throw new Error('SafeYOLO ' + method + ' test context failed with HTTP ' + response.status + (detail ? ' (' + detail + ')' : ''));
+      throw new Error('SafeYolo ' + method + ' test context failed with HTTP ' + response.status);
     }
     return parsed;
   }
